@@ -258,6 +258,7 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
+					(successors done)
 					(on true
 						(send B ping)
 						(become done)))
@@ -266,6 +267,7 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor B
 				(state relay
+					(successors relay)
 					(on (mailbox ping)
 						(recv ping)
 						(send C ping))))
@@ -273,6 +275,7 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor C
 				(state sink
+					(successors sink)
 					(on (mailbox ping)
 						(recv ping)
 						(set received ping))))
@@ -332,6 +335,7 @@ func TestTickLogsSchedulerError(t *testing.T) {
 	runtime := NewRuntime(MustCompileActor(`
 		(actor A
 			(state start
+				(successors start)
 				(on true (send B ping))))
 	`))
 	runtime.ChooseActorFn = func(*Runtime) int { return 99 }
@@ -350,6 +354,7 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
+					(successors done)
 					(on true
 						(send B ping)
 						(become done)))
@@ -358,6 +363,7 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor B
 				(state relay
+					(successors relay)
 					(on (mailbox ping)
 						(recv ping)
 						(send C ping))))
@@ -365,6 +371,7 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor C
 				(state sink
+					(successors sink)
 					(on (mailbox ping)
 						(recv ping)
 						(set received ping))))
@@ -466,6 +473,24 @@ func TestCompileCTLRejectsUnknownOperator(t *testing.T) {
 	_, err := CompileCTL("(eventually (in-state A done))")
 	if err == nil {
 		t.Fatal("expected compile error, got nil")
+	}
+}
+
+func TestRuntimeErrorsOnUndeclaredSuccessor(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(successors start)
+					(on true
+						(become done)))
+				(state done))
+		`),
+	)
+
+	_, err := runtime.StepActor(runtime.Actors[0])
+	if err == nil {
+		t.Fatal("expected undeclared successor error, got nil")
 	}
 }
 

@@ -60,6 +60,8 @@ type Transition struct {
 type State struct {
 	Name        string
 	Guard       GuardFunc
+	Control     bool
+	Successors  []string
 	Transitions []Transition
 }
 
@@ -195,6 +197,15 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 		}
 		if transition.Action == nil {
 			rt.Tracef("step: actor=%s state=%s transition=%s", actor.Name, state.Name, transition.Name)
+			if err := rt.validateSuccessor(state, actor); err != nil {
+				rt.Tracef("step error: actor=%s state=%s transition=%s err=%v", actor.Name, state.Name, transition.Name, err)
+				return StepResult{
+					Applied:        true,
+					ActorName:      actor.Name,
+					StateName:      state.Name,
+					TransitionName: transition.Name,
+				}, err
+			}
 			return StepResult{
 				Applied:        true,
 				ActorName:      actor.Name,
@@ -204,6 +215,15 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 		}
 		rt.Tracef("step: actor=%s state=%s transition=%s", actor.Name, state.Name, transition.Name)
 		if err := transition.Action(rt, actor); err != nil {
+			rt.Tracef("step error: actor=%s state=%s transition=%s err=%v", actor.Name, state.Name, transition.Name, err)
+			return StepResult{
+				Applied:        true,
+				ActorName:      actor.Name,
+				StateName:      state.Name,
+				TransitionName: transition.Name,
+			}, err
+		}
+		if err := rt.validateSuccessor(state, actor); err != nil {
 			rt.Tracef("step error: actor=%s state=%s transition=%s err=%v", actor.Name, state.Name, transition.Name, err)
 			return StepResult{
 				Applied:        true,
@@ -227,11 +247,62 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 	}, nil
 }
 
+func (rt *Runtime) validateSuccessor(state *State, actor *Actor) error {
+	if len(state.Successors) == 0 {
+		return nil
+	}
+	nextName, ok := actorStateName(actor)
+	if ok {
+		for _, name := range state.Successors {
+			if name == nextName {
+				return nil
+			}
+		}
+		return fmt.Errorf("actor %s visited undeclared successor %s from %s", actor.Name, nextName, state.Name)
+	}
+
+	next := rt.CurrentState(actor)
+	if next == nil {
+		return fmt.Errorf("actor %s left state %s with no matching successor state", actor.Name, state.Name)
+	}
+	for _, name := range state.Successors {
+		if name == next.Name {
+			return nil
+		}
+	}
+	return fmt.Errorf("actor %s visited undeclared successor %s from %s", actor.Name, next.Name, state.Name)
+}
+
 func (rt *Runtime) CurrentState(actor *Actor) *State {
+	if stateName, ok := actorStateName(actor); ok {
+		if state := actorStateByName(actor, stateName); state != nil {
+			return state
+		}
+	}
 	for i := range actor.States {
 		state := &actor.States[i]
+		if state.Control {
+			continue
+		}
 		if guardHolds(state.Guard, rt, actor) {
 			return state
+		}
+	}
+	return nil
+}
+
+func actorStateName(actor *Actor) (string, bool) {
+	value, ok := actor.Data["state"]
+	if !ok || value.Kind != KindSymbol {
+		return "", false
+	}
+	return value.Text, true
+}
+
+func actorStateByName(actor *Actor, name string) *State {
+	for i := range actor.States {
+		if actor.States[i].Name == name {
+			return &actor.States[i]
 		}
 	}
 	return nil
@@ -924,12 +995,18 @@ func buildState(form Value) (State, error) {
 	}
 
 	state := State{
-		Name: name,
-		Guard: func(_ *Runtime, actor *Actor) bool {
-			return actor.Data["state"].Equal(Symbol(name))
-		},
+		Name:    name,
+		Control: true,
 	}
 	for _, item := range form.Items[2:] {
+		if isListHead(item, "successors") {
+			successors, err := buildSuccessors(item)
+			if err != nil {
+				return State{}, fmt.Errorf("state %s: %w", name, err)
+			}
+			state.Successors = successors
+			continue
+		}
 		transition, err := buildTransition(item)
 		if err != nil {
 			return State{}, fmt.Errorf("state %s: %w", name, err)
@@ -937,6 +1014,21 @@ func buildState(form Value) (State, error) {
 		state.Transitions = append(state.Transitions, transition)
 	}
 	return state, nil
+}
+
+func buildSuccessors(form Value) ([]string, error) {
+	if len(form.Items) < 2 {
+		return nil, fmt.Errorf("successors form must be (successors name...)")
+	}
+	successors := make([]string, 0, len(form.Items)-1)
+	for _, item := range form.Items[1:] {
+		name, err := expectSymbol(item, "successor name")
+		if err != nil {
+			return nil, err
+		}
+		successors = append(successors, name)
+	}
+	return successors, nil
 }
 
 func buildTransition(form Value) (Transition, error) {
