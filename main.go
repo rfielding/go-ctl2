@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -24,6 +26,11 @@ type Value struct {
 	Items []Value
 }
 
+type GuardFunc func(*Runtime, *Actor) bool
+type ActionFunc func(*Runtime, *Actor) error
+type MessageGuardFunc func(Value) bool
+type MessageHandlerFunc func(*Runtime, *Actor, Value) error
+
 func Symbol(text string) Value {
 	return Value{Kind: KindSymbol, Text: text}
 }
@@ -42,6 +49,1125 @@ func Bool(text string) Value {
 
 func List(items ...Value) Value {
 	return Value{Kind: KindList, Items: items}
+}
+
+type Transition struct {
+	Name   string
+	Guard  GuardFunc
+	Action ActionFunc
+}
+
+type State struct {
+	Name        string
+	Guard       GuardFunc
+	Transitions []Transition
+}
+
+type Actor struct {
+	Name   string
+	Data   map[string]Value
+	States []State
+}
+
+type Runtime struct {
+	Actors        []*Actor
+	Mailboxes     map[string][]Value
+	Trace         []string
+	ChooseActorFn func(*Runtime) int
+	Dice          func() bool
+}
+
+type StepResult struct {
+	Applied        bool
+	ActorName      string
+	StateName      string
+	TransitionName string
+}
+
+type StatePredicate func(*Runtime) bool
+
+type CTLOp uint8
+
+const (
+	CTLAtom CTLOp = iota
+	CTLNot
+	CTLAnd
+	CTLOr
+	CTLEX
+	CTLAX
+	CTLEF
+	CTLAF
+	CTLEG
+	CTLAG
+	CTLEU
+	CTLAU
+)
+
+type CTLFormula struct {
+	Op    CTLOp
+	Pred  StatePredicate
+	Left  *CTLFormula
+	Right *CTLFormula
+}
+
+type Model struct {
+	InitialID  string
+	States     map[string]*ExploredState
+	Successors map[string][]string
+	Edges      []ExploredEdge
+}
+
+type ExploredState struct {
+	ID      string
+	Runtime *Runtime
+}
+
+type ExploredEdge struct {
+	FromID         string
+	ToID           string
+	ActorName      string
+	StateName      string
+	TransitionName string
+}
+
+func NewRuntime(actors ...*Actor) *Runtime {
+	rt := &Runtime{
+		Actors:    actors,
+		Mailboxes: make(map[string][]Value, len(actors)),
+		Dice: func() bool {
+			return true
+		},
+	}
+	for _, actor := range actors {
+		rt.Mailboxes[actor.Name] = nil
+		if actor.Data == nil {
+			actor.Data = map[string]Value{}
+		}
+	}
+	return rt
+}
+
+func (rt *Runtime) Tick() error {
+	if len(rt.Actors) == 0 {
+		rt.Tracef("tick: no actors")
+		return nil
+	}
+
+	index := 0
+	if rt.ChooseActorFn != nil {
+		index = rt.ChooseActorFn(rt)
+	} else {
+		index = rand.Intn(len(rt.Actors))
+	}
+	if index < 0 || index >= len(rt.Actors) {
+		err := fmt.Errorf("actor index %d out of range", index)
+		rt.Tracef("tick error: %v", err)
+		return err
+	}
+
+	actor := rt.Actors[index]
+	result, err := rt.StepActorDetailed(actor)
+	if err != nil {
+		rt.Tracef("tick error: actor=%s err=%v", actor.Name, err)
+		return err
+	}
+	if !result.Applied {
+		rt.Tracef("tick: actor=%s no-op", actor.Name)
+	}
+	return err
+}
+
+func (rt *Runtime) StepActor(actor *Actor) (bool, error) {
+	result, err := rt.StepActorDetailed(actor)
+	return result.Applied, err
+}
+
+func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
+	state := rt.CurrentState(actor)
+	if state == nil {
+		rt.Tracef("step: actor=%s no-state", actor.Name)
+		return StepResult{ActorName: actor.Name}, nil
+	}
+
+	for _, transition := range state.Transitions {
+		if !guardHolds(transition.Guard, rt, actor) {
+			continue
+		}
+		if transition.Action == nil {
+			rt.Tracef("step: actor=%s state=%s transition=%s", actor.Name, state.Name, transition.Name)
+			return StepResult{
+				Applied:        true,
+				ActorName:      actor.Name,
+				StateName:      state.Name,
+				TransitionName: transition.Name,
+			}, nil
+		}
+		rt.Tracef("step: actor=%s state=%s transition=%s", actor.Name, state.Name, transition.Name)
+		if err := transition.Action(rt, actor); err != nil {
+			rt.Tracef("step error: actor=%s state=%s transition=%s err=%v", actor.Name, state.Name, transition.Name, err)
+			return StepResult{
+				Applied:        true,
+				ActorName:      actor.Name,
+				StateName:      state.Name,
+				TransitionName: transition.Name,
+			}, err
+		}
+		return StepResult{
+			Applied:        true,
+			ActorName:      actor.Name,
+			StateName:      state.Name,
+			TransitionName: transition.Name,
+		}, nil
+	}
+
+	rt.Tracef("step: actor=%s state=%s blocked", actor.Name, state.Name)
+	return StepResult{
+		ActorName: actor.Name,
+		StateName: state.Name,
+	}, nil
+}
+
+func (rt *Runtime) CurrentState(actor *Actor) *State {
+	for i := range actor.States {
+		state := &actor.States[i]
+		if guardHolds(state.Guard, rt, actor) {
+			return state
+		}
+	}
+	return nil
+}
+
+func (rt *Runtime) HasReadyStep() bool {
+	for _, actor := range rt.Actors {
+		state := rt.CurrentState(actor)
+		if state == nil {
+			continue
+		}
+		for _, transition := range state.Transitions {
+			if guardHolds(transition.Guard, rt, actor) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (rt *Runtime) Mailbox(name string) []Value {
+	return rt.Mailboxes[name]
+}
+
+func (rt *Runtime) Enqueue(name string, message Value) {
+	rt.Mailboxes[name] = append(rt.Mailboxes[name], message)
+}
+
+func (rt *Runtime) DequeueMatching(name string, guard MessageGuardFunc) (Value, bool) {
+	mailbox := rt.Mailboxes[name]
+	for i, message := range mailbox {
+		if guard != nil && !guard(message) {
+			continue
+		}
+		rt.Mailboxes[name] = append(mailbox[:i], mailbox[i+1:]...)
+		return message, true
+	}
+	return Value{}, false
+}
+
+func (rt *Runtime) Tracef(format string, args ...interface{}) {
+	rt.Trace = append(rt.Trace, fmt.Sprintf(format, args...))
+}
+
+func (rt *Runtime) Clone() *Runtime {
+	clone := &Runtime{
+		Actors:    make([]*Actor, len(rt.Actors)),
+		Mailboxes: make(map[string][]Value, len(rt.Mailboxes)),
+		Trace:     append([]string(nil), rt.Trace...),
+		Dice:      rt.Dice,
+	}
+	for i, actor := range rt.Actors {
+		cloneActor := &Actor{
+			Name:   actor.Name,
+			Data:   cloneValueMap(actor.Data),
+			States: actor.States,
+		}
+		clone.Actors[i] = cloneActor
+	}
+	for name, mailbox := range rt.Mailboxes {
+		clone.Mailboxes[name] = cloneValueSlice(mailbox)
+	}
+	return clone
+}
+
+func (rt *Runtime) StateKey() string {
+	var b strings.Builder
+	for _, actor := range rt.Actors {
+		b.WriteString("actor:")
+		b.WriteString(actor.Name)
+		b.WriteString("{")
+		keys := sortedValueKeys(actor.Data)
+		for i, key := range keys {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(key)
+			b.WriteString("=")
+			b.WriteString(actor.Data[key].String())
+		}
+		b.WriteString("}")
+		b.WriteString("|mailbox:")
+		for i, message := range rt.Mailboxes[actor.Name] {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(message.String())
+		}
+		b.WriteString(";")
+	}
+	return b.String()
+}
+
+func (rt *Runtime) SuccessorRuntimes() ([]*Runtime, []ExploredEdge, error) {
+	var out []*Runtime
+	var edges []ExploredEdge
+	for i := range rt.Actors {
+		next := rt.Clone()
+		result, err := next.StepActorDetailed(next.Actors[i])
+		if err != nil {
+			return nil, nil, err
+		}
+		if result.Applied {
+			out = append(out, next)
+			edges = append(edges, ExploredEdge{
+				ActorName:      result.ActorName,
+				StateName:      result.StateName,
+				TransitionName: result.TransitionName,
+			})
+		}
+	}
+	return out, edges, nil
+}
+
+func ExploreModel(initial *Runtime) (*Model, error) {
+	start := initial.Clone()
+	model := &Model{
+		InitialID:  start.StateKey(),
+		States:     map[string]*ExploredState{},
+		Successors: map[string][]string{},
+	}
+
+	queue := []*Runtime{start}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		id := current.StateKey()
+		if _, ok := model.States[id]; ok {
+			continue
+		}
+		model.States[id] = &ExploredState{
+			ID:      id,
+			Runtime: current,
+		}
+
+		successors, successorEdges, err := current.SuccessorRuntimes()
+		if err != nil {
+			return nil, err
+		}
+		if len(successors) == 0 {
+			model.Successors[id] = []string{id}
+			model.Edges = append(model.Edges, ExploredEdge{
+				FromID:         id,
+				ToID:           id,
+				TransitionName: "deadlock",
+			})
+			continue
+		}
+
+		seen := map[string]bool{}
+		for i, next := range successors {
+			nextID := next.StateKey()
+			if seen[nextID] {
+				continue
+			}
+			seen[nextID] = true
+			model.Successors[id] = append(model.Successors[id], nextID)
+			edge := successorEdges[i]
+			edge.FromID = id
+			edge.ToID = nextID
+			model.Edges = append(model.Edges, edge)
+			if _, ok := model.States[nextID]; !ok {
+				queue = append(queue, next)
+			}
+		}
+	}
+
+	return model, nil
+}
+
+func Atom(pred StatePredicate) CTLFormula {
+	return CTLFormula{Op: CTLAtom, Pred: pred}
+}
+
+func CompileCTL(src string) (CTLFormula, error) {
+	form, err := Read(src)
+	if err != nil {
+		return CTLFormula{}, err
+	}
+	return buildCTL(form)
+}
+
+func MustCompileCTL(src string) CTLFormula {
+	formula, err := CompileCTL(src)
+	if err != nil {
+		panic(err)
+	}
+	return formula
+}
+
+func Not(inner CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLNot, Left: &inner}
+}
+
+func And(left, right CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLAnd, Left: &left, Right: &right}
+}
+
+func Or(left, right CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLOr, Left: &left, Right: &right}
+}
+
+func EX(inner CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLEX, Left: &inner}
+}
+
+func AX(inner CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLAX, Left: &inner}
+}
+
+func EF(inner CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLEF, Left: &inner}
+}
+
+func AF(inner CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLAF, Left: &inner}
+}
+
+func EG(inner CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLEG, Left: &inner}
+}
+
+func AG(inner CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLAG, Left: &inner}
+}
+
+func EU(left, right CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLEU, Left: &left, Right: &right}
+}
+
+func AU(left, right CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLAU, Left: &left, Right: &right}
+}
+
+func buildCTL(form Value) (CTLFormula, error) {
+	if !isList(form) || len(form.Items) == 0 {
+		return CTLFormula{}, fmt.Errorf("ctl formula must be a non-empty list")
+	}
+
+	head, err := expectSymbol(form.Items[0], "ctl operator")
+	if err != nil {
+		return CTLFormula{}, err
+	}
+	switch head {
+	case "not":
+		if len(form.Items) != 2 {
+			return CTLFormula{}, fmt.Errorf("not expects one operand")
+		}
+		inner, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return Not(inner), nil
+	case "and":
+		if len(form.Items) != 3 {
+			return CTLFormula{}, fmt.Errorf("and expects two operands")
+		}
+		left, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		right, err := buildCTL(form.Items[2])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return And(left, right), nil
+	case "or":
+		if len(form.Items) != 3 {
+			return CTLFormula{}, fmt.Errorf("or expects two operands")
+		}
+		left, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		right, err := buildCTL(form.Items[2])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return Or(left, right), nil
+	case "ex":
+		if len(form.Items) != 2 {
+			return CTLFormula{}, fmt.Errorf("ex expects one operand")
+		}
+		inner, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return EX(inner), nil
+	case "ax":
+		if len(form.Items) != 2 {
+			return CTLFormula{}, fmt.Errorf("ax expects one operand")
+		}
+		inner, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return AX(inner), nil
+	case "ef":
+		if len(form.Items) != 2 {
+			return CTLFormula{}, fmt.Errorf("ef expects one operand")
+		}
+		inner, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return EF(inner), nil
+	case "af":
+		if len(form.Items) != 2 {
+			return CTLFormula{}, fmt.Errorf("af expects one operand")
+		}
+		inner, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return AF(inner), nil
+	case "eg":
+		if len(form.Items) != 2 {
+			return CTLFormula{}, fmt.Errorf("eg expects one operand")
+		}
+		inner, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return EG(inner), nil
+	case "ag":
+		if len(form.Items) != 2 {
+			return CTLFormula{}, fmt.Errorf("ag expects one operand")
+		}
+		inner, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return AG(inner), nil
+	case "eu":
+		if len(form.Items) != 3 {
+			return CTLFormula{}, fmt.Errorf("eu expects two operands")
+		}
+		left, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		right, err := buildCTL(form.Items[2])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return EU(left, right), nil
+	case "au":
+		if len(form.Items) != 3 {
+			return CTLFormula{}, fmt.Errorf("au expects two operands")
+		}
+		left, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		right, err := buildCTL(form.Items[2])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return AU(left, right), nil
+	case "in-state":
+		if len(form.Items) != 3 {
+			return CTLFormula{}, fmt.Errorf("in-state expects actor and state")
+		}
+		actor, err := expectSymbol(form.Items[1], "actor name")
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		state, err := expectSymbol(form.Items[2], "state name")
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return Atom(ActorInState(actor, state)), nil
+	case "data=":
+		if len(form.Items) != 4 {
+			return CTLFormula{}, fmt.Errorf("data= expects actor, key, value")
+		}
+		actor, err := expectSymbol(form.Items[1], "actor name")
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		key, err := expectSymbol(form.Items[2], "data key")
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return Atom(ActorDataEquals(actor, key, form.Items[3])), nil
+	case "mailbox-has":
+		if len(form.Items) != 3 {
+			return CTLFormula{}, fmt.Errorf("mailbox-has expects actor and message")
+		}
+		actor, err := expectSymbol(form.Items[1], "actor name")
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return Atom(MailboxHas(actor, form.Items[2])), nil
+	default:
+		return CTLFormula{}, fmt.Errorf("unsupported ctl operator %q", head)
+	}
+}
+
+func (m *Model) HoldsAtInitial(formula CTLFormula) bool {
+	return m.Holds(m.InitialID, formula)
+}
+
+func (m *Model) Holds(stateID string, formula CTLFormula) bool {
+	set := m.SatisfyingStates(formula)
+	return set[stateID]
+}
+
+func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
+	switch formula.Op {
+	case CTLAtom:
+		out := map[string]bool{}
+		for id, state := range m.States {
+			if formula.Pred != nil && formula.Pred(state.Runtime) {
+				out[id] = true
+			}
+		}
+		return out
+	case CTLNot:
+		inner := m.SatisfyingStates(*formula.Left)
+		out := map[string]bool{}
+		for id := range m.States {
+			if !inner[id] {
+				out[id] = true
+			}
+		}
+		return out
+	case CTLAnd:
+		left := m.SatisfyingStates(*formula.Left)
+		right := m.SatisfyingStates(*formula.Right)
+		out := map[string]bool{}
+		for id := range m.States {
+			if left[id] && right[id] {
+				out[id] = true
+			}
+		}
+		return out
+	case CTLOr:
+		left := m.SatisfyingStates(*formula.Left)
+		right := m.SatisfyingStates(*formula.Right)
+		out := map[string]bool{}
+		for id := range m.States {
+			if left[id] || right[id] {
+				out[id] = true
+			}
+		}
+		return out
+	case CTLEX:
+		inner := m.SatisfyingStates(*formula.Left)
+		out := map[string]bool{}
+		for id, succs := range m.Successors {
+			for _, succ := range succs {
+				if inner[succ] {
+					out[id] = true
+					break
+				}
+			}
+		}
+		return out
+	case CTLAX:
+		inner := m.SatisfyingStates(*formula.Left)
+		out := map[string]bool{}
+		for id, succs := range m.Successors {
+			all := true
+			for _, succ := range succs {
+				if !inner[succ] {
+					all = false
+					break
+				}
+			}
+			if all {
+				out[id] = true
+			}
+		}
+		return out
+	case CTLEF:
+		return m.SatisfyingStates(EU(Atom(func(*Runtime) bool { return true }), *formula.Left))
+	case CTLAF:
+		return m.SatisfyingStates(AU(Atom(func(*Runtime) bool { return true }), *formula.Left))
+	case CTLEG:
+		inner := m.SatisfyingStates(*formula.Left)
+		out := copyStateSet(inner)
+		changed := true
+		for changed {
+			changed = false
+			for id := range out {
+				if !inner[id] {
+					delete(out, id)
+					changed = true
+					continue
+				}
+				ok := false
+				for _, succ := range m.Successors[id] {
+					if out[succ] {
+						ok = true
+						break
+					}
+				}
+				if !ok {
+					delete(out, id)
+					changed = true
+				}
+			}
+		}
+		return out
+	case CTLAG:
+		return m.SatisfyingStates(Not(EF(Not(*formula.Left))))
+	case CTLEU:
+		left := m.SatisfyingStates(*formula.Left)
+		right := m.SatisfyingStates(*formula.Right)
+		out := copyStateSet(right)
+		changed := true
+		for changed {
+			changed = false
+			for id := range m.States {
+				if out[id] || !left[id] {
+					continue
+				}
+				for _, succ := range m.Successors[id] {
+					if out[succ] {
+						out[id] = true
+						changed = true
+						break
+					}
+				}
+			}
+		}
+		return out
+	case CTLAU:
+		left := m.SatisfyingStates(*formula.Left)
+		right := m.SatisfyingStates(*formula.Right)
+		out := copyStateSet(right)
+		changed := true
+		for changed {
+			changed = false
+			for id := range m.States {
+				if out[id] || !left[id] {
+					continue
+				}
+				all := true
+				for _, succ := range m.Successors[id] {
+					if !out[succ] {
+						all = false
+						break
+					}
+				}
+				if all {
+					out[id] = true
+					changed = true
+				}
+			}
+		}
+		return out
+	default:
+		return map[string]bool{}
+	}
+}
+
+func ActorInState(actorName, stateName string) StatePredicate {
+	return func(rt *Runtime) bool {
+		for _, actor := range rt.Actors {
+			if actor.Name == actorName {
+				return actor.Data["state"].Equal(Symbol(stateName))
+			}
+		}
+		return false
+	}
+}
+
+func ActorDataEquals(actorName, key string, want Value) StatePredicate {
+	return func(rt *Runtime) bool {
+		for _, actor := range rt.Actors {
+			if actor.Name == actorName {
+				return actor.Data[key].Equal(want)
+			}
+		}
+		return false
+	}
+}
+
+func MailboxHas(actorName string, want Value) StatePredicate {
+	return func(rt *Runtime) bool {
+		for _, message := range rt.Mailbox(actorName) {
+			if message.Equal(want) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func Send(to string, message Value) ActionFunc {
+	return func(rt *Runtime, actor *Actor) error {
+		rt.Enqueue(to, message)
+		rt.Tracef("%s -> %s %s", actor.Name, to, message.String())
+		return nil
+	}
+}
+
+func Receive(match MessageGuardFunc, handler MessageHandlerFunc) ActionFunc {
+	return func(rt *Runtime, actor *Actor) error {
+		message, ok := rt.DequeueMatching(actor.Name, match)
+		if !ok {
+			return nil
+		}
+		rt.Tracef("%s <= %s", actor.Name, message.String())
+		if handler == nil {
+			return nil
+		}
+		return handler(rt, actor, message)
+	}
+}
+
+func MatchMessage(want Value) MessageGuardFunc {
+	return func(got Value) bool {
+		return got.Equal(want)
+	}
+}
+
+func guardHolds(guard GuardFunc, rt *Runtime, actor *Actor) bool {
+	if guard == nil {
+		return true
+	}
+	return guard(rt, actor)
+}
+
+func (v Value) Equal(other Value) bool {
+	if v.Kind != other.Kind || v.Text != other.Text || len(v.Items) != len(other.Items) {
+		return false
+	}
+	for i := range v.Items {
+		if !v.Items[i].Equal(other.Items[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func CompileActor(src string) (*Actor, error) {
+	form, err := Read(src)
+	if err != nil {
+		return nil, err
+	}
+	return buildActor(form)
+}
+
+func MustCompileActor(src string) *Actor {
+	actor, err := CompileActor(src)
+	if err != nil {
+		panic(err)
+	}
+	return actor
+}
+
+func buildActor(form Value) (*Actor, error) {
+	if !isListHead(form, "actor") || len(form.Items) < 3 {
+		return nil, fmt.Errorf("actor form must be (actor name state...)")
+	}
+	name, err := expectSymbol(form.Items[1], "actor name")
+	if err != nil {
+		return nil, err
+	}
+
+	actor := &Actor{
+		Name: name,
+		Data: map[string]Value{},
+	}
+	for _, item := range form.Items[2:] {
+		state, err := buildState(item)
+		if err != nil {
+			return nil, fmt.Errorf("actor %s: %w", name, err)
+		}
+		actor.States = append(actor.States, state)
+	}
+	if len(actor.States) == 0 {
+		return nil, fmt.Errorf("actor %s: no states", name)
+	}
+	actor.Data["state"] = Symbol(actor.States[0].Name)
+	return actor, nil
+}
+
+func buildState(form Value) (State, error) {
+	if !isListHead(form, "state") || len(form.Items) < 2 {
+		return State{}, fmt.Errorf("state form must be (state name ...)")
+	}
+	name, err := expectSymbol(form.Items[1], "state name")
+	if err != nil {
+		return State{}, err
+	}
+
+	state := State{
+		Name: name,
+		Guard: func(_ *Runtime, actor *Actor) bool {
+			return actor.Data["state"].Equal(Symbol(name))
+		},
+	}
+	for _, item := range form.Items[2:] {
+		transition, err := buildTransition(item)
+		if err != nil {
+			return State{}, fmt.Errorf("state %s: %w", name, err)
+		}
+		state.Transitions = append(state.Transitions, transition)
+	}
+	return state, nil
+}
+
+func buildTransition(form Value) (Transition, error) {
+	if !isListHead(form, "on") || len(form.Items) < 3 {
+		return Transition{}, fmt.Errorf("transition form must be (on guard action...)")
+	}
+	guard, err := compileGuard(form.Items[1])
+	if err != nil {
+		return Transition{}, err
+	}
+	action, err := compileAction(seqForm(form.Items[2:]))
+	if err != nil {
+		return Transition{}, err
+	}
+	return Transition{
+		Name:   form.Items[1].String(),
+		Guard:  guard,
+		Action: action,
+	}, nil
+}
+
+func compileGuard(form Value) (GuardFunc, error) {
+	if form.Kind == KindBool {
+		return func(*Runtime, *Actor) bool {
+			return form.Text == "true"
+		}, nil
+	}
+	if form.Kind == KindSymbol {
+		switch form.Text {
+		case "true":
+			return func(*Runtime, *Actor) bool { return true }, nil
+		case "dice":
+			return func(rt *Runtime, _ *Actor) bool {
+				if rt.Dice == nil {
+					return true
+				}
+				return rt.Dice()
+			}, nil
+		default:
+			return nil, fmt.Errorf("unsupported guard symbol %q", form.Text)
+		}
+	}
+
+	if !isList(form) || len(form.Items) == 0 {
+		return nil, fmt.Errorf("unsupported guard %s", form.String())
+	}
+
+	head, err := expectSymbol(form.Items[0], "guard operator")
+	if err != nil {
+		return nil, err
+	}
+	switch head {
+	case "mailbox":
+		if len(form.Items) != 2 {
+			return nil, fmt.Errorf("mailbox guard must be (mailbox message)")
+		}
+		want := form.Items[1]
+		return func(rt *Runtime, actor *Actor) bool {
+			for _, message := range rt.Mailbox(actor.Name) {
+				if message.Equal(want) {
+					return true
+				}
+			}
+			return false
+		}, nil
+	case "and":
+		if len(form.Items) < 3 {
+			return nil, fmt.Errorf("and guard needs at least two operands")
+		}
+		var guards []GuardFunc
+		for _, item := range form.Items[1:] {
+			guard, err := compileGuard(item)
+			if err != nil {
+				return nil, err
+			}
+			guards = append(guards, guard)
+		}
+		return func(rt *Runtime, actor *Actor) bool {
+			for _, guard := range guards {
+				if !guard(rt, actor) {
+					return false
+				}
+			}
+			return true
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported guard form %q", head)
+	}
+}
+
+func compileAction(form Value) (ActionFunc, error) {
+	if !isList(form) || len(form.Items) == 0 {
+		return nil, fmt.Errorf("unsupported action %s", form.String())
+	}
+
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return nil, err
+	}
+	switch head {
+	case "do":
+		if len(form.Items) < 2 {
+			return nil, fmt.Errorf("do needs at least one action")
+		}
+		var actions []ActionFunc
+		for _, item := range form.Items[1:] {
+			action, err := compileAction(item)
+			if err != nil {
+				return nil, err
+			}
+			actions = append(actions, action)
+		}
+		return func(rt *Runtime, actor *Actor) error {
+			for _, action := range actions {
+				if err := action(rt, actor); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, nil
+	case "send":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("send must be (send actor message)")
+		}
+		to, err := expectSymbol(form.Items[1], "send target")
+		if err != nil {
+			return nil, err
+		}
+		return Send(to, form.Items[2]), nil
+	case "recv":
+		if len(form.Items) != 2 {
+			return nil, fmt.Errorf("recv must be (recv message)")
+		}
+		return Receive(MatchMessage(form.Items[1]), nil), nil
+	case "become":
+		if len(form.Items) != 2 {
+			return nil, fmt.Errorf("become must be (become state)")
+		}
+		name, err := expectSymbol(form.Items[1], "state name")
+		if err != nil {
+			return nil, err
+		}
+		return func(_ *Runtime, actor *Actor) error {
+			actor.Data["state"] = Symbol(name)
+			return nil
+		}, nil
+	case "set":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("set must be (set key value)")
+		}
+		key, err := expectSymbol(form.Items[1], "set key")
+		if err != nil {
+			return nil, err
+		}
+		value := form.Items[2]
+		return func(_ *Runtime, actor *Actor) error {
+			actor.Data[key] = value
+			return nil
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported action form %q", head)
+	}
+}
+
+func seqForm(forms []Value) Value {
+	if len(forms) == 1 {
+		return forms[0]
+	}
+	items := make([]Value, 0, len(forms)+1)
+	items = append(items, Symbol("do"))
+	items = append(items, forms...)
+	return List(items...)
+}
+
+func isList(v Value) bool {
+	return v.Kind == KindList
+}
+
+func copyStateSet(in map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneValueSlice(in []Value) []Value {
+	out := make([]Value, len(in))
+	for i, value := range in {
+		out[i] = cloneValue(value)
+	}
+	return out
+}
+
+func cloneValueMap(in map[string]Value) map[string]Value {
+	out := make(map[string]Value, len(in))
+	for key, value := range in {
+		out[key] = cloneValue(value)
+	}
+	return out
+}
+
+func cloneValue(in Value) Value {
+	out := Value{
+		Kind: in.Kind,
+		Text: in.Text,
+	}
+	if len(in.Items) > 0 {
+		out.Items = cloneValueSlice(in.Items)
+	}
+	return out
+}
+
+func sortedValueKeys(in map[string]Value) []string {
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func isListHead(v Value, want string) bool {
+	return v.Kind == KindList && len(v.Items) > 0 && v.Items[0].Kind == KindSymbol && v.Items[0].Text == want
+}
+
+func expectSymbol(v Value, context string) (string, error) {
+	if v.Kind != KindSymbol {
+		return "", fmt.Errorf("%s must be a symbol", context)
+	}
+	return v.Text, nil
 }
 
 func Read(input string) (Value, error) {
@@ -107,6 +1233,8 @@ func (p *parser) parseValue() (Value, error) {
 	}
 
 	switch p.peek().kind {
+	case "quote":
+		return p.parseQuote()
 	case "lparen":
 		return p.parseSExpr()
 	case "symbol", "number", "string", "bool":
@@ -117,6 +1245,17 @@ func (p *parser) parseValue() (Value, error) {
 	default:
 		return Value{}, fmt.Errorf("unexpected token %q", p.peek().text)
 	}
+}
+
+func (p *parser) parseQuote() (Value, error) {
+	if !p.match("quote") {
+		return Value{}, fmt.Errorf("expected quote")
+	}
+	quoted, err := p.parseValue()
+	if err != nil {
+		return Value{}, err
+	}
+	return List(Symbol("quote"), quoted), nil
 }
 
 func (p *parser) parseSExpr() (Value, error) {
@@ -252,6 +1391,15 @@ func tokenize(input string) ([]token, error) {
 		}
 
 		switch ch {
+		case '\'':
+			out = append(out, token{
+				kind:      "quote",
+				text:      "'",
+				tightLeft: i == lastEnd,
+			})
+			i++
+			lastEnd = i
+			continue
 		case '(':
 			out = append(out, token{
 				kind:      "lparen",
