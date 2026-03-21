@@ -258,8 +258,8 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(successors done)
 					(on true
+						(next done)
 						(send B ping)
 						(become done)))
 				(state done))
@@ -267,16 +267,16 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor B
 				(state relay
-					(successors relay)
 					(on (mailbox ping)
+						(next relay)
 						(recv ping)
 						(send C ping))))
 		`),
 		MustCompileActor(`
 			(actor C
 				(state sink
-					(successors sink)
 					(on (mailbox ping)
+						(next sink)
 						(recv ping)
 						(set received ping))))
 		`),
@@ -324,6 +324,7 @@ func TestCompileActorRejectsUnknownAction(t *testing.T) {
 		(actor A
 			(state start
 				(on true
+					(next start)
 					(explode now))))
 	`)
 	if err == nil {
@@ -335,8 +336,7 @@ func TestTickLogsSchedulerError(t *testing.T) {
 	runtime := NewRuntime(MustCompileActor(`
 		(actor A
 			(state start
-				(successors start)
-				(on true (send B ping))))
+				(on true (next start) (send B ping))))
 	`))
 	runtime.ChooseActorFn = func(*Runtime) int { return 99 }
 
@@ -354,8 +354,8 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(successors done)
 					(on true
+						(next done)
 						(send B ping)
 						(become done)))
 				(state done))
@@ -363,16 +363,16 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor B
 				(state relay
-					(successors relay)
 					(on (mailbox ping)
+						(next relay)
 						(recv ping)
 						(send C ping))))
 		`),
 		MustCompileActor(`
 			(actor C
 				(state sink
-					(successors sink)
 					(on (mailbox ping)
+						(next sink)
 						(recv ping)
 						(set received ping))))
 		`),
@@ -481,8 +481,8 @@ func TestRuntimeErrorsOnUndeclaredSuccessor(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(successors start)
 					(on true
+						(next start)
 						(become done)))
 				(state done))
 		`),
@@ -491,6 +491,54 @@ func TestRuntimeErrorsOnUndeclaredSuccessor(t *testing.T) {
 	_, err := runtime.StepActor(runtime.Actors[0])
 	if err == nil {
 		t.Fatal("expected undeclared successor error, got nil")
+	}
+}
+
+func TestRuntimeLispSerializationForCompiledModel(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on true
+						(next done)
+						(send B ping)
+						(become done)))
+				(state done))
+		`),
+		MustCompileActor(`
+			(actor B
+				(state relay
+					(on (mailbox ping)
+						(next relay)
+						(recv ping)
+						(send C ping))))
+		`),
+	)
+
+	got := runtime.Lisp().String()
+	want := `(runtime (actor A (state start (on true (next done) (send B ping) (become done))) (state done)) (current-state A start) (data A (state start)) (mailbox A) (actor B (state relay (on (mailbox ping) (next relay) (recv ping) (send C ping)))) (current-state B relay) (data B (state relay)) (mailbox B))`
+	if got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestActorLispFallbackSerialization(t *testing.T) {
+	actor := Actor{
+		Name: "A",
+		States: []State{
+			{
+				Name: "idle",
+				Transitions: []Transition{
+					{Name: "noop", NextStates: []string{"idle"}},
+				},
+			},
+		},
+	}
+
+	got := actor.Lisp().String()
+	want := "(actor A (state idle (on noop (next idle))))"
+	if got != want {
+		t.Fatalf("got %s, want %s", got, want)
 	}
 }
 

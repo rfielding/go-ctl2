@@ -52,23 +52,28 @@ func List(items ...Value) Value {
 }
 
 type Transition struct {
-	Name   string
-	Guard  GuardFunc
-	Action ActionFunc
+	Name       string
+	Guard      GuardFunc
+	Action     ActionFunc
+	NextStates []string
+	GuardSpec  Value
+	NextSpec   Value
+	ActionSpec Value
 }
 
 type State struct {
 	Name        string
 	Guard       GuardFunc
 	Control     bool
-	Successors  []string
 	Transitions []Transition
+	Spec        Value
 }
 
 type Actor struct {
 	Name   string
 	Data   map[string]Value
 	States []State
+	Spec   Value
 }
 
 type Runtime struct {
@@ -197,7 +202,7 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 		}
 		if transition.Action == nil {
 			rt.Tracef("step: actor=%s state=%s transition=%s", actor.Name, state.Name, transition.Name)
-			if err := rt.validateSuccessor(state, actor); err != nil {
+			if err := rt.validateTransitionNext(transition, actor); err != nil {
 				rt.Tracef("step error: actor=%s state=%s transition=%s err=%v", actor.Name, state.Name, transition.Name, err)
 				return StepResult{
 					Applied:        true,
@@ -223,7 +228,7 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 				TransitionName: transition.Name,
 			}, err
 		}
-		if err := rt.validateSuccessor(state, actor); err != nil {
+		if err := rt.validateTransitionNext(transition, actor); err != nil {
 			rt.Tracef("step error: actor=%s state=%s transition=%s err=%v", actor.Name, state.Name, transition.Name, err)
 			return StepResult{
 				Applied:        true,
@@ -247,30 +252,33 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 	}, nil
 }
 
-func (rt *Runtime) validateSuccessor(state *State, actor *Actor) error {
-	if len(state.Successors) == 0 {
+func (rt *Runtime) validateTransitionNext(transition Transition, actor *Actor) error {
+	if len(transition.NextStates) == 0 {
 		return nil
 	}
 	nextName, ok := actorStateName(actor)
 	if ok {
-		for _, name := range state.Successors {
+		if actorStateByName(actor, nextName) == nil {
+			return fmt.Errorf("actor %s entered undeclared state %s", actor.Name, nextName)
+		}
+		for _, name := range transition.NextStates {
 			if name == nextName {
 				return nil
 			}
 		}
-		return fmt.Errorf("actor %s visited undeclared successor %s from %s", actor.Name, nextName, state.Name)
+		return fmt.Errorf("actor %s visited undeclared successor %s from transition %s", actor.Name, nextName, transition.Name)
 	}
 
 	next := rt.CurrentState(actor)
 	if next == nil {
-		return fmt.Errorf("actor %s left state %s with no matching successor state", actor.Name, state.Name)
+		return fmt.Errorf("actor %s fell out of known states after transition %s", actor.Name, transition.Name)
 	}
-	for _, name := range state.Successors {
+	for _, name := range transition.NextStates {
 		if name == next.Name {
 			return nil
 		}
 	}
-	return fmt.Errorf("actor %s visited undeclared successor %s from %s", actor.Name, next.Name, state.Name)
+	return fmt.Errorf("actor %s visited undeclared successor %s from transition %s", actor.Name, next.Name, transition.Name)
 }
 
 func (rt *Runtime) CurrentState(actor *Actor) *State {
@@ -970,6 +978,7 @@ func buildActor(form Value) (*Actor, error) {
 	actor := &Actor{
 		Name: name,
 		Data: map[string]Value{},
+		Spec: form,
 	}
 	for _, item := range form.Items[2:] {
 		state, err := buildState(item)
@@ -997,16 +1006,9 @@ func buildState(form Value) (State, error) {
 	state := State{
 		Name:    name,
 		Control: true,
+		Spec:    form,
 	}
 	for _, item := range form.Items[2:] {
-		if isListHead(item, "successors") {
-			successors, err := buildSuccessors(item)
-			if err != nil {
-				return State{}, fmt.Errorf("state %s: %w", name, err)
-			}
-			state.Successors = successors
-			continue
-		}
 		transition, err := buildTransition(item)
 		if err != nil {
 			return State{}, fmt.Errorf("state %s: %w", name, err)
@@ -1016,37 +1018,48 @@ func buildState(form Value) (State, error) {
 	return state, nil
 }
 
-func buildSuccessors(form Value) ([]string, error) {
+func buildStateNames(form Value, head string) ([]string, error) {
 	if len(form.Items) < 2 {
-		return nil, fmt.Errorf("successors form must be (successors name...)")
+		return nil, fmt.Errorf("%s form must be (%s name...)", head, head)
 	}
-	successors := make([]string, 0, len(form.Items)-1)
+	names := make([]string, 0, len(form.Items)-1)
 	for _, item := range form.Items[1:] {
 		name, err := expectSymbol(item, "successor name")
 		if err != nil {
 			return nil, err
 		}
-		successors = append(successors, name)
+		names = append(names, name)
 	}
-	return successors, nil
+	return names, nil
 }
 
 func buildTransition(form Value) (Transition, error) {
-	if !isListHead(form, "on") || len(form.Items) < 3 {
-		return Transition{}, fmt.Errorf("transition form must be (on guard action...)")
+	if !isListHead(form, "on") || len(form.Items) < 4 {
+		return Transition{}, fmt.Errorf("transition form must be (on guard (next state...) action...)")
+	}
+	if !isListHead(form.Items[2], "next") {
+		return Transition{}, fmt.Errorf("transition form must declare (next state...)")
+	}
+	nextStates, err := buildStateNames(form.Items[2], "next")
+	if err != nil {
+		return Transition{}, err
 	}
 	guard, err := compileGuard(form.Items[1])
 	if err != nil {
 		return Transition{}, err
 	}
-	action, err := compileAction(seqForm(form.Items[2:]))
+	action, err := compileAction(seqForm(form.Items[3:]))
 	if err != nil {
 		return Transition{}, err
 	}
 	return Transition{
-		Name:   form.Items[1].String(),
-		Guard:  guard,
-		Action: action,
+		Name:       form.Items[1].String(),
+		Guard:      guard,
+		Action:     action,
+		NextStates: nextStates,
+		GuardSpec:  form.Items[1],
+		NextSpec:   form.Items[2],
+		ActionSpec: seqForm(form.Items[3:]),
 	}, nil
 }
 
@@ -1306,6 +1319,85 @@ func (v Value) String() string {
 	default:
 		return "<invalid>"
 	}
+}
+
+func (t Transition) Lisp() Value {
+	if t.GuardSpec.Kind != KindInvalid && t.NextSpec.Kind != KindInvalid && t.ActionSpec.Kind != KindInvalid {
+		items := []Value{Symbol("on"), t.GuardSpec, t.NextSpec}
+		if isListHead(t.ActionSpec, "do") {
+			items = append(items, t.ActionSpec.Items[1:]...)
+		} else {
+			items = append(items, t.ActionSpec)
+		}
+		return List(items...)
+	}
+	items := []Value{Symbol("on"), Symbol(t.Name)}
+	if len(t.NextStates) > 0 {
+		next := []Value{Symbol("next")}
+		for _, name := range t.NextStates {
+			next = append(next, Symbol(name))
+		}
+		items = append(items, List(next...))
+	}
+	if t.ActionSpec.Kind != KindInvalid {
+		items = append(items, t.ActionSpec)
+	}
+	return List(items...)
+}
+
+func (s State) Lisp() Value {
+	if s.Spec.Kind != KindInvalid {
+		return s.Spec
+	}
+	items := []Value{Symbol("state"), Symbol(s.Name)}
+	for _, transition := range s.Transitions {
+		items = append(items, transition.Lisp())
+	}
+	return List(items...)
+}
+
+func (a Actor) Lisp() Value {
+	if a.Spec.Kind != KindInvalid {
+		return a.Spec
+	}
+	items := []Value{Symbol("actor"), Symbol(a.Name)}
+	for _, state := range a.States {
+		items = append(items, state.Lisp())
+	}
+	return List(items...)
+}
+
+func (rt *Runtime) Lisp() Value {
+	items := []Value{Symbol("runtime")}
+	for _, actor := range rt.Actors {
+		items = append(items, actor.Lisp())
+		items = append(items, runtimeActorState(actor))
+		items = append(items, runtimeActorData(actor))
+		items = append(items, runtimeMailbox(actor.Name, rt.Mailbox(actor.Name)))
+	}
+	return List(items...)
+}
+
+func runtimeActorState(actor *Actor) Value {
+	if stateName, ok := actorStateName(actor); ok {
+		return List(Symbol("current-state"), Symbol(actor.Name), Symbol(stateName))
+	}
+	return List(Symbol("current-state"), Symbol(actor.Name), Symbol("<unknown>"))
+}
+
+func runtimeActorData(actor *Actor) Value {
+	items := []Value{Symbol("data"), Symbol(actor.Name)}
+	keys := sortedValueKeys(actor.Data)
+	for _, key := range keys {
+		items = append(items, List(Symbol(key), actor.Data[key]))
+	}
+	return List(items...)
+}
+
+func runtimeMailbox(name string, messages []Value) Value {
+	items := []Value{Symbol("mailbox"), Symbol(name)}
+	items = append(items, messages...)
+	return List(items...)
 }
 
 type token struct {
