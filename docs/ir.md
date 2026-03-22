@@ -17,7 +17,7 @@ The central idea is:
   - SVG diagrams
   - event logs and plots
 
-The design goal is not to infer hidden control flow from simulation alone. Instead, transitions declare their possible next control states explicitly, and runtime execution validates that the declared next-state set is not wrong.
+The design goal is not to infer hidden control flow from simulation alone. Instead, transitions expose control flow through explicit `become` calls, and the compiler walks those action trees to recover possible successor control states.
 
 # Audience
 
@@ -49,7 +49,7 @@ The document uses the following terms consistently:
 - state
   a named control location inside an actor
 - transition
-  a guarded atomic step with an explicit `(next ...)` control contract
+  a guarded atomic step whose successor states are derived from `become`
 - mailbox
   the actor-local queue or rendezvous endpoint through which messages arrive
 - runtime
@@ -87,32 +87,30 @@ A state contains transitions. A transition is selectable only if:
 A transition contains:
 
 - a guard
-- an explicit `(next ...)` declaration
 - an atomic action block
 
 Example:
 
 ```lisp
-(on (mailbox ping)
-  (next relay)
-  (recv ping)
-  (send C ping))
+(edge true
+  (recv msg)
+  (become got-ping))
 ```
 
-The `(next ...)` declaration is the control-flow contract used for graph construction and CTL. Runtime execution validates that the post-step control state is one of the declared next states.
+The compiler walks the action block, collects reachable `become` targets, and uses that successor set for graph construction and CTL. Runtime execution validates that the post-step control state is one of those derived successor states.
 
-## Why Explicit Next States Matter
+## Why Derived Next States Matter
 
-The central compromise in this repository is that transitions declare the set of possible successor control states directly.
+The central compromise in this repository is that transitions still expose successor control states structurally through `become`, rather than leaving control flow hidden in simulation traces.
 
 That buys several things immediately:
 
 - CTL has a clear successor relation
 - control-state diagrams can be rendered without simulation
 - sequence and communication diagrams can be generated from the same declared model
-- runtime execution can detect mismatches when an actual step lands outside the declared set
+- runtime execution can detect mismatches when an actual step lands outside the derived set
 
-It does not remove the need for correct modeling. A wrong `(next ...)` declaration can still make the proof layer wrong. The point is that the correctness obligation becomes visible and reviewable.
+It does not remove the need for correct modeling. A wrong `become` structure can still make the proof layer wrong. The point is that the control-flow obligation remains visible and reviewable.
 
 # Scheduling Semantics
 
@@ -152,12 +150,10 @@ Before attempting a step, the runtime samples a floating-point value called `Dic
 That value can be used in guards to express random branching, for example:
 
 ```lisp
-(on (dice-range 0.0 0.5 "route to branch a")
-  (next a)
+(edge (dice-range 0.0 0.5 "route to branch a")
   (become a))
 
-(on (dice-range 0.5 1.0 "route to branch b")
-  (next b)
+(edge (dice-range 0.5 1.0 "route to branch b")
   (become b))
 ```
 
@@ -204,11 +200,11 @@ This makes an atomic transition a real scheduler unit.
 The intended normalized form is:
 
 - boolean guard
-- optional communication readiness
+- optional leading `send` or `recv`
 - local atomic work
 - `become` / next-state update
 
-Because communication readiness is checked before execution, a `send` may appear textually in the middle of an action block without creating partial updates.
+`send` or `recv` must be the first action after the guard. Compilation fails if either appears later in the transition body or inside nested action forms.
 
 ## What Counts As A State Change
 
@@ -218,7 +214,7 @@ This repository treats a transition firing as a state change even when the actor
 - consuming or sending a message is a state change
 - staying in the same named state after the step does not mean “nothing happened”
 
-The graph used by execution and model checking is therefore over full runtime states, while the declared control graph remains the human-facing skeleton.
+The graph used by execution and model checking is therefore over full runtime states, while the derived control graph remains the human-facing skeleton.
 
 # Control Flow
 
@@ -232,11 +228,11 @@ This is closer to a small structured machine IR than to an arbitrary scripting l
 
 # CTL Strategy
 
-CTL needs an exact successor relation. In this design, the declared `(next ...)` relation is the control successor relation used by the proof layer.
+CTL needs an exact successor relation. In this design, the successor relation is derived from `become` calls in each transition body.
 
 Runtime execution exists to validate that:
 
-- transitions only land in declared next states
+- transitions only land in derived successor states
 - control state updates are not inconsistent with the model
 
 This means CTL does not need to wait for simulation to discover the control graph.
@@ -245,7 +241,7 @@ This means CTL does not need to wait for simulation to discover the control grap
 
 The implementation currently supports:
 
-- `¬`, `∧`, `∨`, `→`
+- `not`, `and`, `or`, `implies`, `->`
 - `not`, `and`, `or`, `implies`
 - `ex`, `ax`
 - `ef`, `af`
@@ -268,7 +264,7 @@ That means:
 
 - if the reachable state space is finite and fully explored, the model-checking result is exact for that model
 - if the model is bounded or abstracted, the result applies to that abstraction
-- if the declared `(next ...)` relation is wrong, the result is only as good as that declaration
+- if the derived `become` successor relation is wrong, the result is only as good as that model
 
 This is still useful. The tool is intended to make control flow, messaging, and temporal requirements inspectable enough that a human can review the generated model rather than trusting a hidden formalization.
 
@@ -306,6 +302,17 @@ Current built-ins:
   - samples from an exponential distribution with the given positive rate
   - stores the sampled floating-point value in `out`
 
+Pure value-level helpers:
+
+- `(cons a b)`
+  - builds a simple list by prepending `a` to `b`
+- `(car xs)`
+  - returns the first element of a list
+- `(cdr xs)`
+  - returns the tail of a list
+- `(def name (params...) body)`
+  - defines an actor-local pure helper function whose body can be used inside value positions such as `set` and `send`
+
 These are intentionally low-level. They are not safe protocol APIs. They are protocol-modeling primitives.
 
 Planned built-ins:
@@ -335,7 +342,7 @@ The IR is sensible if the following remain true:
 - one mailbox per actor
 - explicit named control states
 - explicit transition names
-- explicit declared next states
+- successor states derived from `become`
 - actor-local state is only mutated by the actor itself
 - communication readiness gates transition selection
 - CTL consumes the same declared control graph that diagrams do
@@ -405,46 +412,40 @@ The tests are not secondary. They are the clearest executable specification curr
 
 # Example Model
 
-The document example should not be a single actor in isolation. The intended workflow is to describe a set of interacting actors, generate diagrams from that same input, and check temporal requirements over the same declared control graph.
+The document example should not be a single actor in isolation. The intended workflow is to describe a set of interacting actors, generate diagrams from that same input, and check temporal requirements over the same derived control graph.
 
 This small message-chain example is intentionally simple, but it already exercises:
 
 - multiple actors
 - message passing
 - explicit control states
-- declared next states
+- successor states derived from `become`
 - CTL predicates over the resulting model
 
 ```lisp
 (actor Client
   (state start
-    (on true
-      (next done)
+    (edge true
       (send Relay '(message (type ping)))
       (become done)))
   (state done))
 
 (actor Relay
   (state wait
-    (on (mailbox '(message (type ping)))
-      (next forwarded)
-      (recv '(message (type ping)))
-      (send Server '(message (type ping)))
-      (become forwarded))
-    (on true
-      (next wait)
-      (become wait)))
-  (state forwarded))
+    (edge true
+      (recv msg)
+      (become forwarded)))
+  (state forwarded
+    (edge true
+      (send Server msg)
+      (become wait))))
 
 (actor Server
   (state idle
-    (on (mailbox '(message (type ping)))
-      (next accepted)
-      (recv '(message (type ping)))
-      (set received '(message (type ping)))
+    (edge true
+      (recv received)
       (become accepted))
-    (on true
-      (next idle)
+    (edge true
       (become idle)))
   (state accepted))
 ```
@@ -490,7 +491,7 @@ The example should be read as three small control machines composed by message p
 This example is deliberately small, but it is enough to show:
 
 - explicit control states
-- explicit next-state declarations
+- successor extraction from `become`
 - queued communication
 - CTL requirements over the same model
 - generated state and sequence diagrams

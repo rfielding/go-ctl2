@@ -36,6 +36,11 @@ type ActionFunc func(*Runtime, *Actor) error
 type MessageGuardFunc func(Value) bool
 type MessageHandlerFunc func(*Runtime, *Actor, Value) error
 
+type FunctionDef struct {
+	Params []string
+	Body   Value
+}
+
 func Symbol(text string) Value {
 	return Value{Kind: KindSymbol, Text: text}
 }
@@ -62,7 +67,6 @@ type Transition struct {
 	Action     ActionFunc
 	NextStates []string
 	GuardSpec  Value
-	NextSpec   Value
 	ActionSpec Value
 }
 
@@ -77,6 +81,7 @@ type State struct {
 type Actor struct {
 	Name   string
 	Data   map[string]Value
+	Defs   map[string]FunctionDef
 	States []State
 	Spec   Value
 }
@@ -495,6 +500,7 @@ func (rt *Runtime) Clone() *Runtime {
 		cloneActor := &Actor{
 			Name:   actor.Name,
 			Data:   cloneValueMap(actor.Data),
+			Defs:   cloneFunctionDefs(actor.Defs),
 			States: actor.States,
 		}
 		clone.Actors[i] = cloneActor
@@ -699,7 +705,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 		return CTLFormula{}, err
 	}
 	switch head {
-	case "not", "¬":
+	case "not":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("%s expects one operand", head)
@@ -709,7 +715,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 			return CTLFormula{}, err
 		}
 		return Not(inner), nil
-	case "and", "∧":
+	case "and":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
@@ -723,7 +729,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 			return CTLFormula{}, err
 		}
 		return And(left, right), nil
-	case "or", "∨":
+	case "or":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
@@ -737,7 +743,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 			return CTLFormula{}, err
 		}
 		return Or(left, right), nil
-	case "implies", "->", "→":
+	case "implies", "->":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
@@ -1086,8 +1092,9 @@ func MailboxHas(actorName string, want Value) StatePredicate {
 
 func Send(to string, message Value) ActionFunc {
 	return func(rt *Runtime, actor *Actor) error {
+		resolved := evalValue(actor, message)
 		if rt.mailboxCap(to) == 0 {
-			if err := rt.rendezvous(to, message); err != nil {
+			if err := rt.rendezvous(to, resolved); err != nil {
 				return err
 			}
 			rt.logEvent(Event{
@@ -1095,23 +1102,23 @@ func Send(to string, message Value) ActionFunc {
 				Kind:      EventSend,
 				ActorName: actor.Name,
 				PeerName:  to,
-				Message:   cloneValue(message),
+				Message:   cloneValue(resolved),
 			})
-			rt.Tracef("%s -> %s %s", actor.Name, to, message.String())
+			rt.Tracef("%s -> %s %s", actor.Name, to, resolved.String())
 			return nil
 		}
 		if cap := rt.mailboxCap(to); cap >= 0 && len(rt.Mailbox(to)) >= cap {
 			return fmt.Errorf("mailbox %s is full", to)
 		}
-		rt.Enqueue(to, message)
+		rt.Enqueue(to, resolved)
 		rt.logEvent(Event{
 			Step:      rt.Step,
 			Kind:      EventSend,
 			ActorName: actor.Name,
 			PeerName:  to,
-			Message:   cloneValue(message),
+			Message:   cloneValue(resolved),
 		})
-		rt.Tracef("%s -> %s %s", actor.Name, to, message.String())
+		rt.Tracef("%s -> %s %s", actor.Name, to, resolved.String())
 		return nil
 	}
 }
@@ -1150,6 +1157,13 @@ func Receive(match MessageGuardFunc, handler MessageHandlerFunc) ActionFunc {
 		}
 		return handler(rt, actor, message)
 	}
+}
+
+func ReceiveInto(name string) ActionFunc {
+	return Receive(nil, func(_ *Runtime, actor *Actor, message Value) error {
+		actor.Data[name] = cloneValue(message)
+		return nil
+	})
 }
 
 func MatchMessage(want Value) MessageGuardFunc {
@@ -1221,16 +1235,10 @@ func (rt *Runtime) actionReady(form Value, actor *Actor, offered *Value) bool {
 		if len(form.Items) != 2 {
 			return false
 		}
-		want := form.Items[1]
-		if offered != nil && offered.Equal(want) {
+		if offered != nil {
 			return true
 		}
-		for _, message := range rt.Mailbox(actor.Name) {
-			if message.Equal(want) {
-				return true
-			}
-		}
-		return false
+		return len(rt.Mailbox(actor.Name)) > 0
 	case "become", "set":
 		return true
 	default:
@@ -1351,7 +1359,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			}
 		}
 		return false, nil
-	case "and", "∧":
+	case "and":
 		items := stripOptionalDescription(form.Items, 3)
 		for _, item := range items[1:] {
 			ok, err := rt.evalGuardSpec(item, actor, offered)
@@ -1360,7 +1368,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			}
 		}
 		return true, nil
-	case "or", "∨":
+	case "or":
 		items := stripOptionalDescription(form.Items, 3)
 		for _, item := range items[1:] {
 			ok, err := rt.evalGuardSpec(item, actor, offered)
@@ -1372,7 +1380,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			}
 		}
 		return false, nil
-	case "not", "¬":
+	case "not":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
 			return false, fmt.Errorf("%s guard needs one operand", head)
@@ -1382,7 +1390,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			return false, err
 		}
 		return !ok, nil
-	case "implies", "->", "→":
+	case "implies", "->":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
 			return false, fmt.Errorf("%s guard needs two operands", head)
@@ -1520,6 +1528,7 @@ func buildActor(form Value) (*Actor, error) {
 	actor := &Actor{
 		Name: name,
 		Data: map[string]Value{},
+		Defs: map[string]FunctionDef{},
 		Spec: form,
 	}
 	for _, item := range form.Items[2:] {
@@ -1560,37 +1569,23 @@ func buildState(form Value) (State, error) {
 	return state, nil
 }
 
-func buildStateNames(form Value, head string) ([]string, error) {
-	if len(form.Items) < 2 {
-		return nil, fmt.Errorf("%s form must be (%s name...)", head, head)
-	}
-	names := make([]string, 0, len(form.Items)-1)
-	for _, item := range form.Items[1:] {
-		name, err := expectSymbol(item, "successor name")
-		if err != nil {
-			return nil, err
-		}
-		names = append(names, name)
-	}
-	return names, nil
-}
-
 func buildTransition(form Value) (Transition, error) {
-	if !isListHead(form, "on") || len(form.Items) < 4 {
-		return Transition{}, fmt.Errorf("transition form must be (on guard (next state...) action...)")
-	}
-	if !isListHead(form.Items[2], "next") {
-		return Transition{}, fmt.Errorf("transition form must declare (next state...)")
-	}
-	nextStates, err := buildStateNames(form.Items[2], "next")
-	if err != nil {
-		return Transition{}, err
+	if !isListHead(form, "edge") || len(form.Items) < 3 {
+		return Transition{}, fmt.Errorf("transition form must be (edge guard action...)")
 	}
 	guard, err := compileGuard(form.Items[1])
 	if err != nil {
 		return Transition{}, err
 	}
-	action, err := compileAction(seqForm(form.Items[3:]))
+	actionSpec := seqForm(form.Items[2:])
+	if err := validateTransitionActionSpec(actionSpec); err != nil {
+		return Transition{}, err
+	}
+	nextStates, err := collectBecomeStates(actionSpec)
+	if err != nil {
+		return Transition{}, err
+	}
+	action, err := compileAction(actionSpec)
 	if err != nil {
 		return Transition{}, err
 	}
@@ -1600,9 +1595,123 @@ func buildTransition(form Value) (Transition, error) {
 		Action:     action,
 		NextStates: nextStates,
 		GuardSpec:  form.Items[1],
-		NextSpec:   form.Items[2],
-		ActionSpec: seqForm(form.Items[3:]),
+		ActionSpec: actionSpec,
 	}, nil
+}
+
+func collectBecomeStates(form Value) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	if err := walkBecomeStates(form, &out, seen); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func walkBecomeStates(form Value, out *[]string, seen map[string]bool) error {
+	if !isList(form) || len(form.Items) == 0 {
+		return nil
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return err
+	}
+	switch head {
+	case "do":
+		for _, item := range form.Items[1:] {
+			if err := walkBecomeStates(item, out, seen); err != nil {
+				return err
+			}
+		}
+	case "if":
+		for _, item := range form.Items[2:] {
+			if err := walkBecomeStates(item, out, seen); err != nil {
+				return err
+			}
+		}
+	case "become":
+		if len(form.Items) != 2 {
+			return fmt.Errorf("become must be (become state)")
+		}
+		name, err := expectSymbol(form.Items[1], "state name")
+		if err != nil {
+			return err
+		}
+		if !seen[name] {
+			*out = append(*out, name)
+			seen[name] = true
+		}
+	}
+	return nil
+}
+
+func validateTransitionActionSpec(form Value) error {
+	items := actionItems(form)
+	if len(items) == 0 {
+		return nil
+	}
+	if isSendOrRecvForm(items[0]) {
+		for _, item := range items[1:] {
+			if err := validateNoNestedSendRecv(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, item := range items {
+		if err := validateNoNestedSendRecv(item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func actionItems(form Value) []Value {
+	if isListHead(form, "do") {
+		return form.Items[1:]
+	}
+	if !isList(form) || len(form.Items) == 0 {
+		return nil
+	}
+	return []Value{form}
+}
+
+func validateNoNestedSendRecv(form Value) error {
+	if !isList(form) || len(form.Items) == 0 {
+		return nil
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return err
+	}
+	switch head {
+	case "send", "recv":
+		return fmt.Errorf("%s must be the first action after the edge condition", head)
+	case "do":
+		for _, item := range form.Items[1:] {
+			if err := validateNoNestedSendRecv(item); err != nil {
+				return err
+			}
+		}
+	case "if":
+		for _, item := range form.Items[2:] {
+			if err := validateNoNestedSendRecv(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func isSendOrRecvForm(form Value) bool {
+	if !isList(form) || len(form.Items) == 0 {
+		return false
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return false
+	}
+	return head == "send" || head == "recv"
 }
 
 func compileGuard(form Value) (GuardFunc, error) {
@@ -1650,7 +1759,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 			}
 			return false
 		}, nil
-	case "and", "∧":
+	case "and":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) < 3 {
 			return nil, fmt.Errorf("%s guard needs at least two operands", head)
@@ -1671,7 +1780,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 			}
 			return true
 		}, nil
-	case "or", "∨":
+	case "or":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) < 3 {
 			return nil, fmt.Errorf("%s guard needs at least two operands", head)
@@ -1692,7 +1801,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 			}
 			return false
 		}, nil
-	case "not", "¬":
+	case "not":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
 			return nil, fmt.Errorf("%s guard needs one operand", head)
@@ -1704,7 +1813,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 		return func(rt *Runtime, actor *Actor) bool {
 			return !inner(rt, actor)
 		}, nil
-	case "implies", "->", "→":
+	case "implies", "->":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
 			return nil, fmt.Errorf("%s guard needs two operands", head)
@@ -1845,9 +1954,13 @@ func compileAction(form Value) (ActionFunc, error) {
 		return Send(to, form.Items[2]), nil
 	case "recv":
 		if len(form.Items) != 2 {
-			return nil, fmt.Errorf("recv must be (recv message)")
+			return nil, fmt.Errorf("recv must be (recv variable)")
 		}
-		return Receive(MatchMessage(form.Items[1]), nil), nil
+		name, err := expectSymbol(form.Items[1], "recv variable")
+		if err != nil {
+			return nil, err
+		}
+		return ReceiveInto(name), nil
 	case "become":
 		if len(form.Items) != 2 {
 			return nil, fmt.Errorf("become must be (become state)")
@@ -1870,7 +1983,38 @@ func compileAction(form Value) (ActionFunc, error) {
 		}
 		value := form.Items[2]
 		return func(_ *Runtime, actor *Actor) error {
-			actor.Data[key] = value
+			actor.Data[key] = evalValue(actor, value)
+			return nil
+		}, nil
+	case "def":
+		if len(form.Items) != 4 {
+			return nil, fmt.Errorf("def must be (def name (params...) body)")
+		}
+		name, err := expectSymbol(form.Items[1], "function name")
+		if err != nil {
+			return nil, err
+		}
+		paramsForm := form.Items[2]
+		if !isList(paramsForm) {
+			return nil, fmt.Errorf("def params must be a list")
+		}
+		params := make([]string, 0, len(paramsForm.Items))
+		for _, item := range paramsForm.Items {
+			param, err := expectSymbol(item, "parameter name")
+			if err != nil {
+				return nil, err
+			}
+			params = append(params, param)
+		}
+		body := cloneValue(form.Items[3])
+		return func(_ *Runtime, actor *Actor) error {
+			if actor.Defs == nil {
+				actor.Defs = map[string]FunctionDef{}
+			}
+			actor.Defs[name] = FunctionDef{
+				Params: append([]string(nil), params...),
+				Body:   cloneValue(body),
+			}
 			return nil
 		}, nil
 	case "if":
@@ -1909,12 +2053,13 @@ func compileAction(form Value) (ActionFunc, error) {
 		if err != nil {
 			return nil, err
 		}
-		delta, err := valueInt(form.Items[2])
-		if err != nil {
-			return nil, err
-		}
+		deltaForm := form.Items[2]
 		return func(_ *Runtime, actor *Actor) error {
 			current, err := valueInt(actor.Data[key])
+			if err != nil {
+				return err
+			}
+			delta, err := valueInt(evalValue(actor, deltaForm))
 			if err != nil {
 				return err
 			}
@@ -1929,12 +2074,13 @@ func compileAction(form Value) (ActionFunc, error) {
 		if err != nil {
 			return nil, err
 		}
-		delta, err := valueInt(form.Items[2])
-		if err != nil {
-			return nil, err
-		}
+		deltaForm := form.Items[2]
 		return func(_ *Runtime, actor *Actor) error {
 			current, err := valueInt(actor.Data[key])
+			if err != nil {
+				return err
+			}
+			delta, err := valueInt(evalValue(actor, deltaForm))
 			if err != nil {
 				return err
 			}
@@ -1951,7 +2097,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}
 		source := form.Items[2]
 		return func(_ *Runtime, actor *Actor) error {
-			value := resolveOperand(actor, source)
+			value := evalValue(actor, source)
 			sum := md5.Sum([]byte(valueText(value)))
 			actor.Data[out] = String(hex.EncodeToString(sum[:]))
 			return nil
@@ -1968,15 +2114,15 @@ func compileAction(form Value) (ActionFunc, error) {
 		exponent := form.Items[3]
 		message := form.Items[4]
 		return func(_ *Runtime, actor *Actor) error {
-			n, err := valueBigInt(resolveOperand(actor, modulus))
+			n, err := valueBigInt(evalValue(actor, modulus))
 			if err != nil {
 				return err
 			}
-			e, err := valueBigInt(resolveOperand(actor, exponent))
+			e, err := valueBigInt(evalValue(actor, exponent))
 			if err != nil {
 				return err
 			}
-			m, err := valueBigInt(resolveOperand(actor, message))
+			m, err := valueBigInt(evalValue(actor, message))
 			if err != nil {
 				return err
 			}
@@ -2077,6 +2223,20 @@ func cloneValueMap(in map[string]Value) map[string]Value {
 	return out
 }
 
+func cloneFunctionDefs(in map[string]FunctionDef) map[string]FunctionDef {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]FunctionDef, len(in))
+	for key, def := range in {
+		out[key] = FunctionDef{
+			Params: append([]string(nil), def.Params...),
+			Body:   cloneValue(def.Body),
+		}
+	}
+	return out
+}
+
 func cloneValue(in Value) Value {
 	out := Value{
 		Kind: in.Kind,
@@ -2130,13 +2290,88 @@ func valueBigInt(v Value) (*big.Int, error) {
 	}
 }
 
-func resolveOperand(actor *Actor, operand Value) Value {
-	if operand.Kind == KindSymbol {
-		if value, ok := actor.Data[operand.Text]; ok {
-			return value
+func evalValue(actor *Actor, operand Value) Value {
+	return evalValueWithEnv(actor, operand, nil)
+}
+
+func evalValueWithEnv(actor *Actor, operand Value, env map[string]Value) Value {
+	switch operand.Kind {
+	case KindSymbol:
+		if env != nil {
+			if value, ok := env[operand.Text]; ok {
+				return cloneValue(value)
+			}
 		}
+		if value, ok := actor.Data[operand.Text]; ok {
+			return cloneValue(value)
+		}
+		return cloneValue(operand)
+	case KindList:
+		if len(operand.Items) == 0 {
+			return List()
+		}
+		head := operand.Items[0]
+		if head.Kind == KindSymbol {
+			switch head.Text {
+			case "quote":
+				if len(operand.Items) == 2 {
+					return cloneValue(operand.Items[1])
+				}
+				return cloneValue(operand)
+			case "cons":
+				if len(operand.Items) != 3 {
+					return cloneValue(operand)
+				}
+				first := evalValueWithEnv(actor, operand.Items[1], env)
+				rest := evalValueWithEnv(actor, operand.Items[2], env)
+				if rest.Kind == KindList {
+					items := make([]Value, 0, len(rest.Items)+1)
+					items = append(items, first)
+					items = append(items, cloneValueSlice(rest.Items)...)
+					return List(items...)
+				}
+				return List(first, rest)
+			case "car":
+				if len(operand.Items) != 2 {
+					return cloneValue(operand)
+				}
+				value := evalValueWithEnv(actor, operand.Items[1], env)
+				if value.Kind == KindList && len(value.Items) > 0 {
+					return cloneValue(value.Items[0])
+				}
+				return Value{}
+			case "cdr":
+				if len(operand.Items) != 2 {
+					return cloneValue(operand)
+				}
+				value := evalValueWithEnv(actor, operand.Items[1], env)
+				if value.Kind == KindList && len(value.Items) > 0 {
+					return List(cloneValueSlice(value.Items[1:])...)
+				}
+				return List()
+			default:
+				if actor.Defs != nil {
+					if def, ok := actor.Defs[head.Text]; ok {
+						if len(operand.Items)-1 != len(def.Params) {
+							return cloneValue(operand)
+						}
+						callEnv := make(map[string]Value, len(def.Params))
+						for i, param := range def.Params {
+							callEnv[param] = evalValueWithEnv(actor, operand.Items[i+1], env)
+						}
+						return evalValueWithEnv(actor, def.Body, callEnv)
+					}
+				}
+			}
+		}
+		items := make([]Value, len(operand.Items))
+		for i, item := range operand.Items {
+			items[i] = evalValueWithEnv(actor, item, env)
+		}
+		return List(items...)
+	default:
+		return cloneValue(operand)
 	}
-	return operand
 }
 
 func valueText(v Value) string {
@@ -2189,13 +2424,13 @@ func (f CTLFormula) String() string {
 	case CTLAtom:
 		return "atom"
 	case CTLNot:
-		return fmt.Sprintf("(¬ %s)", f.Left.String())
+		return fmt.Sprintf("(not %s)", f.Left.String())
 	case CTLAnd:
-		return fmt.Sprintf("(∧ %s %s)", f.Left.String(), f.Right.String())
+		return fmt.Sprintf("(and %s %s)", f.Left.String(), f.Right.String())
 	case CTLOr:
-		return fmt.Sprintf("(∨ %s %s)", f.Left.String(), f.Right.String())
+		return fmt.Sprintf("(or %s %s)", f.Left.String(), f.Right.String())
 	case CTLImplies:
-		return fmt.Sprintf("(→ %s %s)", f.Left.String(), f.Right.String())
+		return fmt.Sprintf("(implies %s %s)", f.Left.String(), f.Right.String())
 	case CTLEX:
 		return fmt.Sprintf("(EX %s)", f.Left.String())
 	case CTLAX:
@@ -2239,8 +2474,8 @@ func (v Value) String() string {
 }
 
 func (t Transition) Lisp() Value {
-	if t.GuardSpec.Kind != KindInvalid && t.NextSpec.Kind != KindInvalid && t.ActionSpec.Kind != KindInvalid {
-		items := []Value{Symbol("on"), t.GuardSpec, t.NextSpec}
+	if t.GuardSpec.Kind != KindInvalid && t.ActionSpec.Kind != KindInvalid {
+		items := []Value{Symbol("edge"), t.GuardSpec}
 		if isListHead(t.ActionSpec, "do") {
 			items = append(items, t.ActionSpec.Items[1:]...)
 		} else {
@@ -2248,14 +2483,7 @@ func (t Transition) Lisp() Value {
 		}
 		return List(items...)
 	}
-	items := []Value{Symbol("on"), Symbol(t.Name)}
-	if len(t.NextStates) > 0 {
-		next := []Value{Symbol("next")}
-		for _, name := range t.NextStates {
-			next = append(next, Symbol(name))
-		}
-		items = append(items, List(next...))
-	}
+	items := []Value{Symbol("edge"), Symbol(t.Name)}
 	if t.ActionSpec.Kind != KindInvalid {
 		items = append(items, t.ActionSpec)
 	}
@@ -2339,9 +2567,6 @@ func (p *parser) parseValue() (Value, error) {
 	case "lparen":
 		return p.parseSExpr()
 	case "symbol", "number", "string", "bool":
-		if p.canStartMExpr() {
-			return p.parseMExpr()
-		}
 		return p.parseAtom()
 	default:
 		return Value{}, fmt.Errorf("unexpected token %q", p.peek().text)
@@ -2402,39 +2627,6 @@ func (p *parser) parseHeadValue() (Value, error) {
 	}
 }
 
-func (p *parser) parseMExpr() (Value, error) {
-	head, err := p.parseAtom()
-	if err != nil {
-		return Value{}, err
-	}
-	if !p.match("lparen") {
-		return Value{}, fmt.Errorf("expected '(' after %q", head.Text)
-	}
-
-	items := []Value{head}
-	for {
-		if !p.hasNext() {
-			return Value{}, fmt.Errorf("unterminated m-expression")
-		}
-		if p.match("rparen") {
-			return List(items...), nil
-		}
-
-		item, err := p.parseValue()
-		if err != nil {
-			return Value{}, err
-		}
-		items = append(items, item)
-
-		if p.match("comma") {
-			continue
-		}
-		if p.peek().kind == "rparen" {
-			continue
-		}
-	}
-}
-
 func (p *parser) parseAtom() (Value, error) {
 	if !p.hasNext() {
 		return Value{}, fmt.Errorf("unexpected end of input")
@@ -2455,12 +2647,6 @@ func (p *parser) parseAtom() (Value, error) {
 	default:
 		return Value{}, fmt.Errorf("unexpected atom %q", tok.text)
 	}
-}
-
-func (p *parser) canStartMExpr() bool {
-	return p.pos+1 < len(p.tokens) &&
-		p.tokens[p.pos+1].kind == "lparen" &&
-		p.tokens[p.pos+1].tightLeft
 }
 
 func (p *parser) hasNext() bool {
@@ -2601,11 +2787,11 @@ func tokenize(input string) ([]token, error) {
 }
 
 func isSymbolStart(ch rune) bool {
-	return unicode.IsLetter(ch) || strings.ContainsRune("+-*/<>=!?_¬∧∨→", ch)
+	return unicode.IsLetter(ch) || strings.ContainsRune("+-*/<>=!?_", ch)
 }
 
 func isSymbolPart(ch rune) bool {
-	return unicode.IsLetter(ch) || unicode.IsDigit(ch) || strings.ContainsRune("+-*/<>=!?_¬∧∨→", ch)
+	return unicode.IsLetter(ch) || unicode.IsDigit(ch) || strings.ContainsRune("+-*/<>=!?_", ch)
 }
 
 func main() {}

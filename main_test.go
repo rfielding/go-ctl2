@@ -23,29 +23,13 @@ func TestReadAcceptsManyExpressions(t *testing.T) {
 		{name: "operator head", input: "(= kind \"tick\")", want: "(= kind \"tick\")"},
 		{name: "math symbols", input: "(+ 1 2)", want: "(+ 1 2)"},
 		{name: "comparison symbols", input: "(<= retries 3)", want: "(<= retries 3)"},
-		{name: "unicode not symbol", input: "¬", want: "¬"},
-		{name: "unicode and symbol", input: "∧", want: "∧"},
-		{name: "unicode or symbol", input: "∨", want: "∨"},
-		{name: "unicode implies symbol", input: "→", want: "→"},
-		{name: "m expr simple", input: "send(actor, message)", want: "(send actor message)"},
-		{name: "m expr no spaces", input: "send(actor,message)", want: "(send actor message)"},
-		{name: "m expr with empty args", input: "now()", want: "(now)"},
-		{name: "m expr nested", input: "when(=(kind, \"tick\"))", want: "(when (= kind \"tick\"))"},
-		{name: "mixed syntax list body", input: "(receive mailbox when(=(kind, \"tick\")))", want: "(receive mailbox (when (= kind \"tick\")))"},
-		{name: "mixed syntax m expr args", input: "send(actor, (payload kind value))", want: "(send actor (payload kind value))"},
-		{name: "list as first m expr arg", input: "emit((quote hello), actor)", want: "(emit (quote hello) actor)"},
-		{name: "deep nesting", input: "(begin (receive mailbox when(=(kind, \"tick\"))) (send worker (payload \"ok\")))", want: "(begin (receive mailbox (when (= kind \"tick\"))) (send worker (payload \"ok\")))"},
-		{name: "symbol punctuation", input: "guard_ok?", want: "guard_ok?"},
-		{name: "operator m expr head", input: "=(kind, \"tick\")", want: "(= kind \"tick\")"},
-		{name: "nested operator m expr", input: "and(=(kind, \"tick\"), >(retries, 0))", want: "(and (= kind \"tick\") (> retries 0))"},
-		{name: "unicode operator list", input: "(→ (∧ a b) (∨ c (¬ d)))", want: "(→ (∧ a b) (∨ c (¬ d)))"},
-		{name: "whitespace before paren stays list", input: "(receive mailbox when (= kind \"tick\"))", want: "(receive mailbox when (= kind \"tick\"))"},
+										{name: "symbol punctuation", input: "guard_ok?", want: "guard_ok?"},
+				{name: "whitespace before paren stays list", input: "(receive mailbox when (= kind \"tick\"))", want: "(receive mailbox when (= kind \"tick\"))"},
 		{name: "quoted symbol", input: "'actor", want: "(quote actor)"},
 		{name: "quoted number", input: "'42", want: "(quote 42)"},
 		{name: "quoted string", input: "'\"hello\"", want: "(quote \"hello\")"},
 		{name: "quoted empty list", input: "'()", want: "(quote ())"},
 		{name: "quoted s expr", input: "'(send actor message)", want: "(quote (send actor message))"},
-		{name: "quoted m expr", input: "'send(actor, message)", want: "(quote (send actor message))"},
 		{name: "quote inside list", input: "(begin 'actor '(send actor message))", want: "(begin (quote actor) (quote (send actor message)))"},
 	}
 
@@ -80,37 +64,8 @@ func TestReadSExprSymbolList(t *testing.T) {
 	}
 }
 
-func TestReadMExprNormalizesToList(t *testing.T) {
-	got, err := Read("send(actor, message)")
-	if err != nil {
-		t.Fatalf("Read returned error: %v", err)
-	}
-
-	want := List(
-		Symbol("send"),
-		Symbol("actor"),
-		Symbol("message"),
-	)
-
-	if got.String() != want.String() {
-		t.Fatalf("got %s, want %s", got.String(), want.String())
-	}
-}
-
 func TestReadNestedMixedSyntax(t *testing.T) {
 	got, err := Read("(receive mailbox (when (= kind \"tick\")))")
-	if err != nil {
-		t.Fatalf("Read returned error: %v", err)
-	}
-
-	want := "(receive mailbox (when (= kind \"tick\")))"
-	if got.String() != want {
-		t.Fatalf("got %s, want %s", got.String(), want)
-	}
-}
-
-func TestReadNestedMExprInsideSExpr(t *testing.T) {
-	got, err := Read("(receive mailbox when(=(kind, \"tick\")))")
 	if err != nil {
 		t.Fatalf("Read returned error: %v", err)
 	}
@@ -130,6 +85,13 @@ func TestReadRejectsUnterminatedInput(t *testing.T) {
 
 func TestReadRejectsBareQuote(t *testing.T) {
 	_, err := Read("'")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestReadRejectsMExpr(t *testing.T) {
+	_, err := Read("send(actor, message)")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -265,27 +227,27 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(send B ping)
 						(become done)))
 				(state done))
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay
-					(on (mailbox ping)
-						(next relay)
-						(recv ping)
-						(send C ping))))
+				(state relay-recv
+					(edge true
+						(recv msg)
+						(become relay-send)))
+				(state relay-send
+					(edge true
+						(send C msg)
+						(become relay-recv))))
 		`),
 		MustCompileActor(`
 			(actor C
 				(state sink
-					(on (mailbox ping)
-						(next sink)
-						(recv ping)
-						(set received ping))))
+					(edge true
+						(recv received))))
 		`),
 	)
 
@@ -310,8 +272,16 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 	if got := len(runtime.Mailbox("B")); got != 0 {
 		t.Fatalf("expected B mailbox length 0, got %d", got)
 	}
+
+	applied, err = runtime.StepActor(runtime.Actors[1])
+	if err != nil {
+		t.Fatalf("step B send returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected B send step to apply")
+	}
 	if got := len(runtime.Mailbox("C")); got != 1 {
-		t.Fatalf("expected C mailbox length 1, got %d", got)
+		t.Fatalf("expected C mailbox length 1 after B send, got %d", got)
 	}
 
 	applied, err = runtime.StepActor(runtime.Actors[2])
@@ -330,8 +300,7 @@ func TestCompileActorRejectsUnknownAction(t *testing.T) {
 	_, err := CompileActor(`
 		(actor A
 			(state start
-				(on true
-					(next start)
+				(edge true
 					(explode now))))
 	`)
 	if err == nil {
@@ -343,7 +312,7 @@ func TestTickLogsSchedulerError(t *testing.T) {
 	runtime := NewRuntime(MustCompileActor(`
 		(actor A
 			(state start
-				(on true (next start) (send B ping))))
+				(edge true (send B ping))))
 	`))
 	runtime.ChooseActorFn = func(*Runtime) int { return 99 }
 
@@ -361,27 +330,27 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(send B ping)
 						(become done)))
 				(state done))
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay
-					(on (mailbox ping)
-						(next relay)
-						(recv ping)
-						(send C ping))))
+				(state relay-recv
+					(edge true
+						(recv msg)
+						(become relay-send)))
+				(state relay-send
+					(edge true
+						(send C msg)
+						(become relay-recv))))
 		`),
 		MustCompileActor(`
 			(actor C
 				(state sink
-					(on (mailbox ping)
-						(next sink)
-						(recv ping)
-						(set received ping))))
+					(edge true
+						(recv received))))
 		`),
 	)
 
@@ -398,15 +367,15 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		{name: "ex mailbox b ping", formula: "(ex (mailbox-has B ping))", want: true},
 		{name: "ef c received ping", formula: "(ef (data= C received ping))", want: true},
 		{name: "af c received ping", formula: "(af (data= C received ping))", want: true},
-		{name: "ag unicode not mailbox b ping", formula: "(ag (¬ (mailbox-has B ping)))", want: false},
-		{name: "eu unicode not received until received", formula: "(eu (¬ (data= C received ping)) (data= C received ping))", want: true},
+		{name: "ag not mailbox b ping", formula: "(ag (not (mailbox-has B ping)))", want: false},
+		{name: "eu not received until received", formula: "(eu (not (data= C received ping)) (data= C received ping))", want: true},
 		{name: "au not received until received", formula: "(au (not (data= C received ping)) (data= C received ping))", want: true},
 		{name: "ax a done", formula: "(ax (in-state A done))", want: true},
 		{name: "ef a done", formula: "(ef (in-state A done))", want: true},
 		{name: "eg a done", formula: "(eg (in-state A done))", want: false},
 		{name: "ag c sink", formula: "(ag (in-state C sink))", want: true},
-		{name: "unicode implication", formula: "(→ (in-state A start) (ef (in-state C sink)))", want: true},
-		{name: "unicode and or", formula: "(∧ (in-state A start) (∨ (ef (in-state A done)) (ef (in-state C sink))))", want: true},
+		{name: "implies", formula: "(implies (in-state A start) (ef (in-state C sink)))", want: true},
+		{name: "and or", formula: "(and (in-state A start) (or (ef (in-state A done)) (ef (in-state C sink))))", want: true},
 	}
 
 	for _, tc := range cases {
@@ -427,9 +396,10 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		t.Fatal("expected explored edges to be recorded")
 	}
 	want := map[string]bool{
-		"A|start|true":           false,
-		"B|relay|(mailbox ping)": false,
-		"C|sink|(mailbox ping)":  false,
+		"A|start|true":      false,
+		"B|relay-recv|true": false,
+		"B|relay-send|true": false,
+		"C|sink|true":       false,
 	}
 	for _, edge := range model.Edges {
 		key := edge.ActorName + "|" + edge.StateName + "|" + edge.TransitionName
@@ -490,9 +460,8 @@ func TestRuntimeErrorsOnUndeclaredSuccessor(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next start)
-						(become done)))
+					(edge true
+						(become missing)))
 				(state done))
 		`),
 	)
@@ -508,8 +477,7 @@ func TestZeroCapacityMailboxRendezvous(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(send B ping)
 						(become done)))
 				(state done))
@@ -517,10 +485,8 @@ func TestZeroCapacityMailboxRendezvous(t *testing.T) {
 		MustCompileActor(`
 			(actor B
 				(state relay
-					(on (mailbox ping)
-						(next got)
-						(recv ping)
-						(set received ping)
+					(edge true
+						(recv received)
 						(become got)))
 				(state got))
 		`),
@@ -557,8 +523,7 @@ func TestZeroCapacityMailboxDeadlocksWithoutReceiver(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(send B ping)
 						(become done)))
 				(state done))
@@ -583,41 +548,51 @@ func TestZeroCapacityMailboxDeadlocksWithoutReceiver(t *testing.T) {
 	}
 }
 
-func TestBlockedMidBlockSendPreventsPartialUpdates(t *testing.T) {
-	runtime := NewRuntime(
-		MustCompileActor(`
-			(actor A
-				(state start
-					(on true
-						(next done)
-						(set before 1)
-						(send B ping)
-						(set after 1)
-						(become done)))
-				(state done))
-		`),
-		MustCompileActor(`
-			(actor B
-				(state idle))
-		`),
-	)
-	runtime.MailboxCaps["B"] = 0
+func TestCompileActorRejectsSendAfterLeadingAction(t *testing.T) {
+	_, err := CompileActor(`
+		(actor A
+			(state start
+				(edge true
+					(set before 1)
+					(send B ping)
+					(become done)))
+			(state done))
+	`)
+	if err == nil {
+		t.Fatal("expected compile error, got nil")
+	}
+}
 
-	applied, err := runtime.StepActor(runtime.Actors[0])
+func TestCompileActorRejectsNestedRecvAfterGuard(t *testing.T) {
+	_, err := CompileActor(`
+		(actor A
+			(state start
+				(edge true
+					(if true
+						(recv msg)
+						(become done))))
+			(state done))
+	`)
+	if err == nil {
+		t.Fatal("expected compile error, got nil")
+	}
+}
+
+func TestCompileActorAllowsLeadingSendFollowedByLocalActions(t *testing.T) {
+	actor, err := CompileActor(`
+		(actor A
+			(state start
+				(edge true
+					(send B ping)
+					(set after 1)
+					(become done)))
+			(state done))
+	`)
 	if err != nil {
-		t.Fatalf("step A returned error: %v", err)
+		t.Fatalf("CompileActor returned error: %v", err)
 	}
-	if applied {
-		t.Fatal("expected blocked mid-block send to make the whole transition not ready")
-	}
-	if _, ok := runtime.Actors[0].Data["before"]; ok {
-		t.Fatal("expected no partial updates before blocked send")
-	}
-	if _, ok := runtime.Actors[0].Data["after"]; ok {
-		t.Fatal("expected no partial updates after blocked send")
-	}
-	if got := runtime.Actors[0].Data["state"].String(); got != "start" {
-		t.Fatalf("expected actor to remain in start, got %s", got)
+	if actor == nil {
+		t.Fatal("expected actor, got nil")
 	}
 }
 
@@ -626,8 +601,7 @@ func TestActionIfControlFlow(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(if (data= flag yes)
 							(set branch then)
 							(set branch else))
@@ -654,8 +628,7 @@ func TestUnicodeGuardOperators(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on (→ (∧ (data= flag yes) true) (∨ (data= flag yes) false))
-						(next done)
+					(edge (implies (and (data= flag yes) true) (or (data= flag yes) false))
 						(set branch taken)
 						(become done)))
 				(state done))
@@ -668,10 +641,10 @@ func TestUnicodeGuardOperators(t *testing.T) {
 		t.Fatalf("step A returned error: %v", err)
 	}
 	if !applied {
-		t.Fatal("expected unicode guard transition to apply")
+		t.Fatal("expected guard transition to apply")
 	}
 	if got := runtime.Actors[0].Data["branch"].String(); got != "taken" {
-		t.Fatalf("expected unicode guard branch, got %s", got)
+		t.Fatalf("expected guard branch, got %s", got)
 	}
 }
 
@@ -680,8 +653,7 @@ func TestBuiltinMD5AndRawRSA(t *testing.T) {
 		MustCompileActor(`
 			(actor Crypto
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(md5 digest payload)
 						(rsa-raw cipher modulus exponent message)
 						(become done)))
@@ -713,8 +685,7 @@ func TestBuiltinCryptoRandom(t *testing.T) {
 		MustCompileActor(`
 			(actor Crypto
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(cryptorandom nonce 8)
 						(become done)))
 				(state done))
@@ -742,12 +713,10 @@ func TestDiceRangeGuards(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on (dice-range 0.0 0.5)
-						(next done)
+					(edge (dice-range 0.0 0.5)
 						(set branch low)
 						(become done))
-					(on (dice-range 0.5 1.0)
-						(next done)
+					(edge (dice-range 0.5 1.0)
 						(set branch high)
 						(become done)))
 				(state done))
@@ -772,8 +741,7 @@ func TestDiceGuardsDefaultTrueWhenDiceUnset(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on (dice-range 0.0 0.5)
-						(next done)
+					(edge (dice-range 0.0 0.5)
 						(set branch passthrough)
 						(become done)))
 				(state done))
@@ -798,8 +766,7 @@ func TestDiceSymbolDefaultTrueWhenDiceUnset(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on dice
-						(next done)
+					(edge dice
 						(set branch passthrough)
 						(become done)))
 				(state done))
@@ -824,8 +791,7 @@ func TestPredicateDescriptionOnGuard(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on (data= flag yes "flag is set")
-						(next done)
+					(edge (data= flag yes "flag is set")
 						(set branch taken)
 						(become done)))
 				(state done))
@@ -850,8 +816,7 @@ func TestSampleExponentialBuiltin(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(sample-exponential wait 2.0)
 						(become done)))
 				(state done))
@@ -875,29 +840,60 @@ func TestSampleExponentialBuiltin(t *testing.T) {
 	}
 }
 
+func TestPureLispBuiltinsAndDef(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(edge true
+						(def tail (xs) (cdr xs))
+						(set xs '(a b c))
+						(set ys (cons z xs))
+						(set head (car ys))
+						(set rest (tail ys))
+						(become done)))
+				(state done))
+		`),
+	)
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected pure lisp transition to apply")
+	}
+	if got := runtime.Actors[0].Data["head"].String(); got != "z" {
+		t.Fatalf("expected head=z, got %s", got)
+	}
+	if got := runtime.Actors[0].Data["rest"].String(); got != "(a b c)" {
+		t.Fatalf("expected rest=(a b c), got %s", got)
+	}
+	if got := runtime.Actors[0].Data["ys"].String(); got != "(z a b c)" {
+		t.Fatalf("expected ys=(z a b c), got %s", got)
+	}
+}
+
 func TestDecisionProcessMixedDeterminismAndRandomness(t *testing.T) {
 	makeRuntime := func(dice float64) *Runtime {
 		runtime := NewRuntime(
 			MustCompileActor(`
 				(actor Client
 					(state start
-						(on true
-							(next done)
+						(edge true
 							(send Server req)
 							(become done)))
 					(state done))
 			`),
 			MustCompileActor(`
 				(actor Server
-					(state wait
-						(on (∧ (mailbox req) (dice-range 0.0 0.5))
-							(next accepted)
-							(recv req)
+				(state wait
+						(edge (dice-range 0.0 0.5)
+							(recv msg)
 							(set outcome accepted)
 							(become accepted))
-						(on (∧ (mailbox req) (dice-range 0.5 1.0))
-							(next rejected)
-							(recv req)
+						(edge (dice-range 0.5 1.0)
+							(recv msg)
 							(set outcome rejected)
 							(become rejected)))
 					(state accepted)
@@ -979,32 +975,33 @@ func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(send B ping)
 						(become done)))
 				(state done))
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay
-					(on (mailbox ping)
-						(next relay)
-						(recv ping)
-						(send C ping))))
+				(state relay-recv
+					(edge true
+						(recv msg)
+						(become relay-send)))
+				(state relay-send
+					(edge true
+						(send C msg)
+						(become relay-recv))))
 		`),
 		MustCompileActor(`
 			(actor C
 				(state sink
-					(on (mailbox ping)
-						(next sink)
-						(recv ping)
-						(set received ping))))
+					(edge true
+						(recv received))))
 		`),
 	)
 
-	for i := 0; i < 3; i++ {
-		applied, err := runtime.StepActor(runtime.Actors[i])
+	steps := []*Actor{runtime.Actors[0], runtime.Actors[1], runtime.Actors[1], runtime.Actors[2]}
+	for i, actor := range steps {
+		applied, err := runtime.StepActor(actor)
 		if err != nil {
 			t.Fatalf("step %d returned error: %v", i+1, err)
 		}
@@ -1013,11 +1010,11 @@ func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 		}
 	}
 
-	if got := runtime.Step; got != 3 {
-		t.Fatalf("expected step counter 3, got %d", got)
+	if got := runtime.Step; got != 4 {
+		t.Fatalf("expected step counter 4, got %d", got)
 	}
-	if got := len(runtime.Events); got != 7 {
-		t.Fatalf("expected 7 events, got %d", got)
+	if got := len(runtime.Events); got != 8 {
+		t.Fatalf("expected 8 events, got %d", got)
 	}
 
 	wantKinds := []EventKind{
@@ -1025,6 +1022,7 @@ func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 		EventSend,
 		EventTransition,
 		EventReceive,
+		EventTransition,
 		EventSend,
 		EventTransition,
 		EventReceive,
@@ -1042,15 +1040,16 @@ func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 	if sendCounts[0] != (MetricPoint{Step: 1, Value: 1}) {
 		t.Fatalf("unexpected first send count point: %+v", sendCounts[0])
 	}
-	if sendCounts[1] != (MetricPoint{Step: 2, Value: 2}) {
+	if sendCounts[1] != (MetricPoint{Step: 3, Value: 2}) {
 		t.Fatalf("unexpected second send count point: %+v", sendCounts[1])
 	}
 
 	sendRates := runtime.EventRateSeries(EventSend, nil, 2)
 	wantRates := []MetricPoint{
 		{Step: 1, Value: 1},
-		{Step: 2, Value: 1},
+		{Step: 2, Value: 0.5},
 		{Step: 3, Value: 0.5},
+		{Step: 4, Value: 0.5},
 	}
 	if len(sendRates) != len(wantRates) {
 		t.Fatalf("expected %d send rate points, got %d", len(wantRates), len(sendRates))
@@ -1064,7 +1063,7 @@ func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 	toCCounts := runtime.EventCountSeries(EventSend, func(event Event) bool {
 		return event.PeerName == "C"
 	})
-	if len(toCCounts) != 1 || toCCounts[0] != (MetricPoint{Step: 2, Value: 1}) {
+	if len(toCCounts) != 1 || toCCounts[0] != (MetricPoint{Step: 3, Value: 1}) {
 		t.Fatalf("unexpected filtered send counts: %+v", toCCounts)
 	}
 }
@@ -1074,40 +1073,33 @@ func TestMM1QueueBranching(t *testing.T) {
 		MustCompileActor(`
 			(actor Client
 				(state loop
-					(on dice
-						(next loop)
+					(edge dice
 						(set last "sleep"))
-					(on true
-						(next loop)
+					(edge true
 						(send Server req)
 						(set last "send"))))
 		`),
 		MustCompileActor(`
 			(actor Server
 				(state wait
-					(on (mailbox req)
-						(next wait)
-						(recv req)
+					(edge (mailbox req)
+						(recv msg)
 						(add count 1)
 						(set elapsed 0))
-					(on (and (mailbox tick) (data> count 0) (data= elapsed 1))
-						(next wait)
-						(recv tick)
+					(edge (and (mailbox tick) (data> count 0) (data= elapsed 1))
+						(recv msg)
 						(sub count 1)
 						(set elapsed 0))
-					(on (and (mailbox tick) (data> count 0))
-						(next wait)
-						(recv tick)
+					(edge (and (mailbox tick) (data> count 0))
+						(recv msg)
 						(add elapsed 1))
-					(on (mailbox tick)
-						(next wait)
-						(recv tick))))
+					(edge (mailbox tick)
+						(recv msg))))
 		`),
 		MustCompileActor(`
 			(actor Ticker
 				(state loop
-					(on true
-						(next loop)
+					(edge true
 						(send Server tick))))
 		`),
 	)
@@ -1211,24 +1203,26 @@ func TestRuntimeLispSerializationForCompiledModel(t *testing.T) {
 		MustCompileActor(`
 			(actor A
 				(state start
-					(on true
-						(next done)
+					(edge true
 						(send B ping)
 						(become done)))
 				(state done))
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay
-					(on (mailbox ping)
-						(next relay)
-						(recv ping)
-						(send C ping))))
+				(state relay-recv
+					(edge true
+						(recv msg)
+						(become relay-send)))
+				(state relay-send
+					(edge true
+						(send C msg)
+						(become relay-recv))))
 		`),
 	)
 
 	got := runtime.Lisp().String()
-	want := `(runtime (actor A (state start (on true (next done) (send B ping) (become done))) (state done)) (current-state A start) (data A (state start)) (mailbox A) (actor B (state relay (on (mailbox ping) (next relay) (recv ping) (send C ping)))) (current-state B relay) (data B (state relay)) (mailbox B))`
+	want := `(runtime (actor A (state start (edge true (send B ping) (become done))) (state done)) (current-state A start) (data A (state start)) (mailbox A) (actor B (state relay-recv (edge true (recv msg) (become relay-send))) (state relay-send (edge true (send C msg) (become relay-recv)))) (current-state B relay-recv) (data B (state relay-recv)) (mailbox B))`
 	if got != want {
 		t.Fatalf("got %s, want %s", got, want)
 	}
@@ -1248,7 +1242,7 @@ func TestActorLispFallbackSerialization(t *testing.T) {
 	}
 
 	got := actor.Lisp().String()
-	want := "(actor A (state idle (on noop (next idle))))"
+	want := "(actor A (state idle (edge noop)))"
 	if got != want {
 		t.Fatalf("got %s, want %s", got, want)
 	}

@@ -25,23 +25,28 @@ The current repository models:
 - explicit named control states
 - guarded transitions
 - one floating-point `Dice` sample in `[0,1]` per attempted step
-- explicit `(next ...)` successor declarations on transitions
+- successor sets derived from `become` calls in transition bodies
 - buffered or zero-capacity rendezvous mailbox semantics
 - atomic transitions whose communication readiness is checked before execution
 - boolean control flow with `if`
 - tail-recursive control flow with `become`
 
-The explicit `(next ...)` declaration is a deliberate compromise. It gives CTL and diagrams a clear successor relation, and runtime execution checks that actual steps do not land outside the declared set.
+CTL and diagrams use successor sets derived from `become` calls, and runtime execution still checks that an actor does not jump into an undeclared state.
 
 ## Current Features
 
-- Lisp reader with s-expr and m-expr support
+- Lisp reader with s-expr support
 - quote shorthand
-- Unicode logical operators:
-  - `¬`
-  - `∧`
-  - `∨`
-  - `→`
+- pure Lisp helpers:
+  - `cons`
+  - `car`
+  - `cdr`
+  - `def`
+- logical operators:
+  - `not`
+  - `and`
+  - `or`
+  - `implies`/`->`
 - CTL operators:
   - `ex`, `ax`
   - `ef`, `af`
