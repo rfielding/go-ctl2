@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"sort"
 	"strconv"
@@ -1584,6 +1587,49 @@ func compileAction(form Value) (ActionFunc, error) {
 			actor.Data[key] = Number(strconv.Itoa(current - delta))
 			return nil
 		}, nil
+	case "md5":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("md5 must be (md5 out source)")
+		}
+		out, err := expectSymbol(form.Items[1], "md5 out key")
+		if err != nil {
+			return nil, err
+		}
+		source := form.Items[2]
+		return func(_ *Runtime, actor *Actor) error {
+			value := resolveOperand(actor, source)
+			sum := md5.Sum([]byte(valueText(value)))
+			actor.Data[out] = String(hex.EncodeToString(sum[:]))
+			return nil
+		}, nil
+	case "rsa-raw":
+		if len(form.Items) != 5 {
+			return nil, fmt.Errorf("rsa-raw must be (rsa-raw out modulus exponent message)")
+		}
+		out, err := expectSymbol(form.Items[1], "rsa out key")
+		if err != nil {
+			return nil, err
+		}
+		modulus := form.Items[2]
+		exponent := form.Items[3]
+		message := form.Items[4]
+		return func(_ *Runtime, actor *Actor) error {
+			n, err := valueBigInt(resolveOperand(actor, modulus))
+			if err != nil {
+				return err
+			}
+			e, err := valueBigInt(resolveOperand(actor, exponent))
+			if err != nil {
+				return err
+			}
+			m, err := valueBigInt(resolveOperand(actor, message))
+			if err != nil {
+				return err
+			}
+			result := new(big.Int).Exp(m, e, n)
+			actor.Data[out] = Number(result.String())
+			return nil
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported action form %q", head)
 	}
@@ -1652,6 +1698,43 @@ func valueInt(v Value) (int, error) {
 		return 0, fmt.Errorf("value %s is not a number", v.String())
 	}
 	return strconv.Atoi(v.Text)
+}
+
+func valueBigInt(v Value) (*big.Int, error) {
+	switch v.Kind {
+	case KindNumber:
+		out, ok := new(big.Int).SetString(v.Text, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid integer %s", v.Text)
+		}
+		return out, nil
+	case KindString:
+		out, ok := new(big.Int).SetString(v.Text, 10)
+		if !ok {
+			return nil, fmt.Errorf("invalid integer string %s", v.Text)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("value %s is not an integer", v.String())
+	}
+}
+
+func resolveOperand(actor *Actor, operand Value) Value {
+	if operand.Kind == KindSymbol {
+		if value, ok := actor.Data[operand.Text]; ok {
+			return value
+		}
+	}
+	return operand
+}
+
+func valueText(v Value) string {
+	switch v.Kind {
+	case KindString, KindSymbol, KindNumber, KindBool:
+		return v.Text
+	default:
+		return v.String()
+	}
 }
 
 func isListHead(v Value, want string) bool {

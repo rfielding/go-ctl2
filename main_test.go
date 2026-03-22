@@ -640,6 +640,39 @@ func TestActionIfControlFlow(t *testing.T) {
 	}
 }
 
+func TestBuiltinMD5AndRawRSA(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor Crypto
+				(state start
+					(on true
+						(next done)
+						(md5 digest payload)
+						(rsa-raw cipher modulus exponent message)
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Actors[0].Data["payload"] = String("abc")
+	runtime.Actors[0].Data["modulus"] = Number("33")
+	runtime.Actors[0].Data["exponent"] = Number("3")
+	runtime.Actors[0].Data["message"] = Number("4")
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected builtin transition to apply")
+	}
+	if got := runtime.Actors[0].Data["digest"].String(); got != `"900150983cd24fb0d6963f7d28e17f72"` {
+		t.Fatalf("unexpected md5 digest: %s", got)
+	}
+	if got := runtime.Actors[0].Data["cipher"].String(); got != "31" {
+		t.Fatalf("unexpected rsa-raw result: %s", got)
+	}
+}
+
 func TestMM1QueueBranching(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`
