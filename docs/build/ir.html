@@ -513,9 +513,9 @@
 <span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>  (state accepted))</span></code></pre></div>
 <p>Representative CTL requirements:</p>
 <ul>
-<li><code>(ef (in-state Server accepted "server eventually accepts") "server acceptance is reachable")</code></li>
-<li><code>(af (data= Server received '(message (type ping)) "server records the ping message") "server eventually records the ping message")</code></li>
-<li><code>(ag (¬ (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "relay mailbox is always empty of ping")</code></li>
+<li><code>(ef (in-state Server accepted "server eventually accepts"))</code></li>
+<li><code>(af (data= Server received '(message (type ping)) "server records the ping message"))</code></li>
+<li><code>(ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")))</code></li>
 </ul>
 <p>The first two are intended to hold for the example model.</p>
 <p>The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where <code>Relay</code> is holding a <code>ping</code> message before it forwards it.</p>
