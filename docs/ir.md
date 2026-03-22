@@ -152,11 +152,11 @@ Before attempting a step, the runtime samples a floating-point value called `Dic
 That value can be used in guards to express random branching, for example:
 
 ```lisp
-(on (dice-range 0.0 0.5)
+(on (dice-range 0.0 0.5 "route to branch a")
   (next a)
   (become a))
 
-(on (dice-range 0.5 1.0)
+(on (dice-range 0.5 1.0 "route to branch b")
   (next b)
   (become b))
 ```
@@ -254,9 +254,11 @@ The implementation currently supports:
 
 Atomic predicates currently include:
 
-- `(in-state A done)`
-- `(data= A key value)`
-- `(mailbox-has A msg)`
+- `(in-state A done "actor A is in done")`
+- `(data= A key value "actor A has the expected value")`
+- `(mailbox-has A msg "actor A currently holds the message")`
+
+Predicate forms may carry a final string argument used only as human-readable documentation. The evaluator ignores that trailing string semantically.
 
 ## What CTL Is Proving Here
 
@@ -449,9 +451,9 @@ This small message-chain example is intentionally simple, but it already exercis
 
 Representative CTL requirements:
 
-- `(ef (in-state Server accepted))`
-- `(af (data= Server received '(message (type ping))))`
-- `(ag (¬ (mailbox-has Relay '(message (type ping)))))`
+- `(ef (in-state Server accepted "server eventually accepts") "server acceptance is reachable")`
+- `(af (data= Server received '(message (type ping)) "server records the ping message") "server eventually records the ping message")`
+- `(ag (¬ (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "relay mailbox is always empty of ping")`
 
 The first two are intended to hold for the example model.
 

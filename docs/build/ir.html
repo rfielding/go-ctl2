@@ -261,11 +261,11 @@
 <h2 id="random-guards">Random Guards</h2>
 <p>Before attempting a step, the runtime samples a floating-point value called <code>Dice</code> in <code>[0,1]</code>.</p>
 <p>That value can be used in guards to express random branching, for example:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>)</span>
+<div class="sourceCode" id="cb2"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span> <span class="st">&quot;route to branch a&quot;</span>)</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  (next a)</span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  (become a))</span>
 <span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>)</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span> <span class="st">&quot;route to branch b&quot;</span>)</span>
 <span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  (next b)</span>
 <span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  (become b))</span></code></pre></div>
 <p>This is enough to express:</p>
@@ -346,10 +346,11 @@
 </ul>
 <p>Atomic predicates currently include:</p>
 <ul>
-<li><code>(in-state A done)</code></li>
-<li><code>(data= A key value)</code></li>
-<li><code>(mailbox-has A msg)</code></li>
+<li><code>(in-state A done "actor A is in done")</code></li>
+<li><code>(data= A key value "actor A has the expected value")</code></li>
+<li><code>(mailbox-has A msg "actor A currently holds the message")</code></li>
 </ul>
+<p>Predicate forms may carry a final string argument used only as human-readable documentation. The evaluator ignores that trailing string semantically.</p>
 <h2 id="what-ctl-is-proving-here">What CTL Is Proving Here</h2>
 <p>At the current stage, CTL is proving properties over the repository’s induced model, not solving theorem-proving problems over arbitrary infinite mathematics.</p>
 <p>That means:</p>
@@ -512,9 +513,9 @@
 <span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>  (state accepted))</span></code></pre></div>
 <p>Representative CTL requirements:</p>
 <ul>
-<li><code>(ef (in-state Server accepted))</code></li>
-<li><code>(af (data= Server received '(message (type ping))))</code></li>
-<li><code>(ag (¬ (mailbox-has Relay '(message (type ping)))))</code></li>
+<li><code>(ef (in-state Server accepted "server eventually accepts") "server acceptance is reachable")</code></li>
+<li><code>(af (data= Server received '(message (type ping)) "server records the ping message") "server eventually records the ping message")</code></li>
+<li><code>(ag (¬ (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "relay mailbox is always empty of ping")</code></li>
 </ul>
 <p>The first two are intended to hold for the example model.</p>
 <p>The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where <code>Relay</code> is holding a <code>ping</code> message before it forwards it.</p>
