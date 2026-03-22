@@ -494,6 +494,289 @@ func TestRuntimeErrorsOnUndeclaredSuccessor(t *testing.T) {
 	}
 }
 
+func TestZeroCapacityMailboxRendezvous(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on true
+						(next done)
+						(send B ping)
+						(become done)))
+				(state done))
+		`),
+		MustCompileActor(`
+			(actor B
+				(state relay
+					(on (mailbox ping)
+						(next got)
+						(recv ping)
+						(set received ping)
+						(become got)))
+				(state got))
+		`),
+	)
+	runtime.MailboxCaps["B"] = 0
+
+	if !runtime.HasReadyStep() {
+		t.Fatal("expected rendezvous send to be ready")
+	}
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step A returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected A step to apply through rendezvous")
+	}
+	if got := runtime.Actors[0].Data["state"].String(); got != "done" {
+		t.Fatalf("expected A to move to done, got %s", got)
+	}
+	if got := runtime.Actors[1].Data["state"].String(); got != "got" {
+		t.Fatalf("expected B to move to got, got %s", got)
+	}
+	if got := runtime.Actors[1].Data["received"].String(); got != "ping" {
+		t.Fatalf("expected B to receive ping, got %s", got)
+	}
+	if got := len(runtime.Mailbox("B")); got != 0 {
+		t.Fatalf("expected zero-capacity mailbox to remain empty, got %d", got)
+	}
+}
+
+func TestZeroCapacityMailboxDeadlocksWithoutReceiver(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on true
+						(next done)
+						(send B ping)
+						(become done)))
+				(state done))
+		`),
+		MustCompileActor(`
+			(actor B
+				(state idle))
+		`),
+	)
+	runtime.MailboxCaps["B"] = 0
+
+	if runtime.HasReadyStep() {
+		t.Fatal("did not expect any ready step without a rendezvous receiver")
+	}
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step A returned error: %v", err)
+	}
+	if applied {
+		t.Fatal("expected A to yield when no zero-capacity receiver is ready")
+	}
+}
+
+func TestBlockedMidBlockSendPreventsPartialUpdates(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on true
+						(next done)
+						(set before 1)
+						(send B ping)
+						(set after 1)
+						(become done)))
+				(state done))
+		`),
+		MustCompileActor(`
+			(actor B
+				(state idle))
+		`),
+	)
+	runtime.MailboxCaps["B"] = 0
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step A returned error: %v", err)
+	}
+	if applied {
+		t.Fatal("expected blocked mid-block send to make the whole transition not ready")
+	}
+	if _, ok := runtime.Actors[0].Data["before"]; ok {
+		t.Fatal("expected no partial updates before blocked send")
+	}
+	if _, ok := runtime.Actors[0].Data["after"]; ok {
+		t.Fatal("expected no partial updates after blocked send")
+	}
+	if got := runtime.Actors[0].Data["state"].String(); got != "start" {
+		t.Fatalf("expected actor to remain in start, got %s", got)
+	}
+}
+
+func TestActionIfControlFlow(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on true
+						(next done)
+						(if (data= flag yes)
+							(set branch then)
+							(set branch else))
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Actors[0].Data["flag"] = Symbol("yes")
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step A returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected conditional transition to apply")
+	}
+	if got := runtime.Actors[0].Data["branch"].String(); got != "then" {
+		t.Fatalf("expected then branch, got %s", got)
+	}
+}
+
+func TestMM1QueueBranching(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor Client
+				(state loop
+					(on dice
+						(next loop)
+						(set last "sleep"))
+					(on true
+						(next loop)
+						(send Server req)
+						(set last "send"))))
+		`),
+		MustCompileActor(`
+			(actor Server
+				(state wait
+					(on (mailbox req)
+						(next wait)
+						(recv req)
+						(add count 1)
+						(set elapsed 0))
+					(on (and (mailbox tick) (data> count 0) (data= elapsed 1))
+						(next wait)
+						(recv tick)
+						(sub count 1)
+						(set elapsed 0))
+					(on (and (mailbox tick) (data> count 0))
+						(next wait)
+						(recv tick)
+						(add elapsed 1))
+					(on (mailbox tick)
+						(next wait)
+						(recv tick))))
+		`),
+		MustCompileActor(`
+			(actor Ticker
+				(state loop
+					(on true
+						(next loop)
+						(send Server tick))))
+		`),
+	)
+	runtime.Actors[1].Data["count"] = Number("0")
+	runtime.Actors[1].Data["elapsed"] = Number("0")
+
+	dice := []bool{false, true}
+	runtime.Dice = func() bool {
+		if len(dice) == 0 {
+			return false
+		}
+		next := dice[0]
+		dice = dice[1:]
+		return next
+	}
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("client send branch returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected client send branch to apply")
+	}
+	if got := runtime.Actors[0].Data["last"].String(); got != `"send"` {
+		t.Fatalf("expected client last=send, got %s", got)
+	}
+	if got := len(runtime.Mailbox("Server")); got != 1 {
+		t.Fatalf("expected server mailbox length 1 after send, got %d", got)
+	}
+
+	applied, err = runtime.StepActor(runtime.Actors[1])
+	if err != nil {
+		t.Fatalf("server receive req returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected server req receive to apply")
+	}
+	if got := runtime.Actors[1].Data["count"].String(); got != "1" {
+		t.Fatalf("expected server count=1 after req, got %s", got)
+	}
+
+	applied, err = runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("client sleep branch returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected client sleep branch to apply")
+	}
+	if got := runtime.Actors[0].Data["last"].String(); got != `"sleep"` {
+		t.Fatalf("expected client last=sleep, got %s", got)
+	}
+	if got := len(runtime.Mailbox("Server")); got != 0 {
+		t.Fatalf("expected no new req while client slept, got mailbox length %d", got)
+	}
+
+	applied, err = runtime.StepActor(runtime.Actors[2])
+	if err != nil {
+		t.Fatalf("ticker first tick returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected ticker first tick to apply")
+	}
+	applied, err = runtime.StepActor(runtime.Actors[1])
+	if err != nil {
+		t.Fatalf("server first tick handling returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected server first tick handling to apply")
+	}
+	if got := runtime.Actors[1].Data["count"].String(); got != "1" {
+		t.Fatalf("expected server count to remain 1 after first tick, got %s", got)
+	}
+	if got := runtime.Actors[1].Data["elapsed"].String(); got != "1" {
+		t.Fatalf("expected server elapsed=1 after first tick, got %s", got)
+	}
+
+	applied, err = runtime.StepActor(runtime.Actors[2])
+	if err != nil {
+		t.Fatalf("ticker second tick returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected ticker second tick to apply")
+	}
+	applied, err = runtime.StepActor(runtime.Actors[1])
+	if err != nil {
+		t.Fatalf("server second tick handling returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected server second tick handling to apply")
+	}
+	if got := runtime.Actors[1].Data["count"].String(); got != "0" {
+		t.Fatalf("expected server count=0 after service completion, got %s", got)
+	}
+	if got := runtime.Actors[1].Data["elapsed"].String(); got != "0" {
+		t.Fatalf("expected server elapsed reset to 0, got %s", got)
+	}
+}
+
 func TestRuntimeLispSerializationForCompiledModel(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`

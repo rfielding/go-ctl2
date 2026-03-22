@@ -79,6 +79,8 @@ type Actor struct {
 type Runtime struct {
 	Actors        []*Actor
 	Mailboxes     map[string][]Value
+	MailboxCaps   map[string]int
+	SyncInbox     map[string]Value
 	Trace         []string
 	ChooseActorFn func(*Runtime) int
 	Dice          func() bool
@@ -139,14 +141,17 @@ type ExploredEdge struct {
 
 func NewRuntime(actors ...*Actor) *Runtime {
 	rt := &Runtime{
-		Actors:    actors,
-		Mailboxes: make(map[string][]Value, len(actors)),
+		Actors:      actors,
+		Mailboxes:   make(map[string][]Value, len(actors)),
+		MailboxCaps: make(map[string]int, len(actors)),
+		SyncInbox:   make(map[string]Value, len(actors)),
 		Dice: func() bool {
 			return true
 		},
 	}
 	for _, actor := range actors {
 		rt.Mailboxes[actor.Name] = nil
+		rt.MailboxCaps[actor.Name] = -1
 		if actor.Data == nil {
 			actor.Data = map[string]Value{}
 		}
@@ -198,6 +203,9 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 
 	for _, transition := range state.Transitions {
 		if !guardHolds(transition.Guard, rt, actor) {
+			continue
+		}
+		if !rt.transitionReady(transition, actor, nil) {
 			continue
 		}
 		if transition.Action == nil {
@@ -323,7 +331,7 @@ func (rt *Runtime) HasReadyStep() bool {
 			continue
 		}
 		for _, transition := range state.Transitions {
-			if guardHolds(transition.Guard, rt, actor) {
+			if guardHolds(transition.Guard, rt, actor) && rt.transitionReady(transition, actor, nil) {
 				return true
 			}
 		}
@@ -333,6 +341,14 @@ func (rt *Runtime) HasReadyStep() bool {
 
 func (rt *Runtime) Mailbox(name string) []Value {
 	return rt.Mailboxes[name]
+}
+
+func (rt *Runtime) mailboxCap(name string) int {
+	cap, ok := rt.MailboxCaps[name]
+	if !ok {
+		return -1
+	}
+	return cap
 }
 
 func (rt *Runtime) Enqueue(name string, message Value) {
@@ -357,10 +373,12 @@ func (rt *Runtime) Tracef(format string, args ...interface{}) {
 
 func (rt *Runtime) Clone() *Runtime {
 	clone := &Runtime{
-		Actors:    make([]*Actor, len(rt.Actors)),
-		Mailboxes: make(map[string][]Value, len(rt.Mailboxes)),
-		Trace:     append([]string(nil), rt.Trace...),
-		Dice:      rt.Dice,
+		Actors:      make([]*Actor, len(rt.Actors)),
+		Mailboxes:   make(map[string][]Value, len(rt.Mailboxes)),
+		MailboxCaps: make(map[string]int, len(rt.MailboxCaps)),
+		SyncInbox:   cloneValueMap(rt.SyncInbox),
+		Trace:       append([]string(nil), rt.Trace...),
+		Dice:        rt.Dice,
 	}
 	for i, actor := range rt.Actors {
 		cloneActor := &Actor{
@@ -372,6 +390,9 @@ func (rt *Runtime) Clone() *Runtime {
 	}
 	for name, mailbox := range rt.Mailboxes {
 		clone.Mailboxes[name] = cloneValueSlice(mailbox)
+	}
+	for name, cap := range rt.MailboxCaps {
+		clone.MailboxCaps[name] = cap
 	}
 	return clone
 }
@@ -905,6 +926,16 @@ func MailboxHas(actorName string, want Value) StatePredicate {
 
 func Send(to string, message Value) ActionFunc {
 	return func(rt *Runtime, actor *Actor) error {
+		if rt.mailboxCap(to) == 0 {
+			if err := rt.rendezvous(to, message); err != nil {
+				return err
+			}
+			rt.Tracef("%s -> %s %s", actor.Name, to, message.String())
+			return nil
+		}
+		if cap := rt.mailboxCap(to); cap >= 0 && len(rt.Mailbox(to)) >= cap {
+			return fmt.Errorf("mailbox %s is full", to)
+		}
 		rt.Enqueue(to, message)
 		rt.Tracef("%s -> %s %s", actor.Name, to, message.String())
 		return nil
@@ -913,6 +944,16 @@ func Send(to string, message Value) ActionFunc {
 
 func Receive(match MessageGuardFunc, handler MessageHandlerFunc) ActionFunc {
 	return func(rt *Runtime, actor *Actor) error {
+		if offered, ok := rt.SyncInbox[actor.Name]; ok {
+			if match == nil || match(offered) {
+				delete(rt.SyncInbox, actor.Name)
+				rt.Tracef("%s <= %s", actor.Name, offered.String())
+				if handler == nil {
+					return nil
+				}
+				return handler(rt, actor, offered)
+			}
+		}
 		message, ok := rt.DequeueMatching(actor.Name, match)
 		if !ok {
 			return nil
@@ -936,6 +977,241 @@ func guardHolds(guard GuardFunc, rt *Runtime, actor *Actor) bool {
 		return true
 	}
 	return guard(rt, actor)
+}
+
+func (rt *Runtime) transitionReady(transition Transition, actor *Actor, offered *Value) bool {
+	if transition.ActionSpec.Kind == KindInvalid {
+		return true
+	}
+	return rt.actionReady(transition.ActionSpec, actor, offered)
+}
+
+func (rt *Runtime) actionReady(form Value, actor *Actor, offered *Value) bool {
+	if !isList(form) || len(form.Items) == 0 {
+		return false
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return false
+	}
+	switch head {
+	case "do":
+		for _, item := range form.Items[1:] {
+			if !rt.actionReady(item, actor, offered) {
+				return false
+			}
+		}
+		return true
+	case "if":
+		if len(form.Items) != 3 && len(form.Items) != 4 {
+			return false
+		}
+		ok, err := rt.evalGuardSpec(form.Items[1], actor, offered)
+		if err != nil {
+			return false
+		}
+		if ok {
+			return rt.actionReady(form.Items[2], actor, offered)
+		}
+		if len(form.Items) == 4 {
+			return rt.actionReady(form.Items[3], actor, offered)
+		}
+		return true
+	case "send":
+		if len(form.Items) != 3 {
+			return false
+		}
+		target, err := expectSymbol(form.Items[1], "send target")
+		if err != nil {
+			return false
+		}
+		message := form.Items[2]
+		cap := rt.mailboxCap(target)
+		if cap == 0 {
+			return rt.canRendezvous(target, message)
+		}
+		return cap < 0 || len(rt.Mailbox(target)) < cap
+	case "recv":
+		if len(form.Items) != 2 {
+			return false
+		}
+		want := form.Items[1]
+		if offered != nil && offered.Equal(want) {
+			return true
+		}
+		for _, message := range rt.Mailbox(actor.Name) {
+			if message.Equal(want) {
+				return true
+			}
+		}
+		return false
+	case "become", "set":
+		return true
+	default:
+		return true
+	}
+}
+
+func (rt *Runtime) canRendezvous(target string, message Value) bool {
+	targetActor := rt.actorByName(target)
+	if targetActor == nil {
+		return false
+	}
+	state := rt.CurrentState(targetActor)
+	if state == nil {
+		return false
+	}
+	offered := message
+	for _, transition := range state.Transitions {
+		if !rt.guardHoldsSpec(transition, targetActor, &offered) {
+			continue
+		}
+		if !rt.transitionReady(transition, targetActor, &offered) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (rt *Runtime) rendezvous(target string, message Value) error {
+	targetActor := rt.actorByName(target)
+	if targetActor == nil {
+		return fmt.Errorf("unknown actor %s", target)
+	}
+	state := rt.CurrentState(targetActor)
+	if state == nil {
+		return fmt.Errorf("actor %s has no current state", target)
+	}
+	offered := message
+	for _, transition := range state.Transitions {
+		if !rt.guardHoldsSpec(transition, targetActor, &offered) {
+			continue
+		}
+		if !rt.transitionReady(transition, targetActor, &offered) {
+			continue
+		}
+		rt.SyncInbox[target] = message
+		rt.Tracef("step: actor=%s state=%s transition=%s", targetActor.Name, state.Name, transition.Name)
+		if transition.Action != nil {
+			if err := transition.Action(rt, targetActor); err != nil {
+				delete(rt.SyncInbox, target)
+				return err
+			}
+		}
+		if err := rt.validateTransitionNext(transition, targetActor); err != nil {
+			delete(rt.SyncInbox, target)
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("no rendezvous receiver ready on %s for %s", target, message.String())
+}
+
+func (rt *Runtime) guardHoldsSpec(transition Transition, actor *Actor, offered *Value) bool {
+	if transition.GuardSpec.Kind != KindInvalid {
+		ok, err := rt.evalGuardSpec(transition.GuardSpec, actor, offered)
+		if err == nil {
+			return ok
+		}
+	}
+	return guardHolds(transition.Guard, rt, actor)
+}
+
+func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool, error) {
+	if form.Kind == KindBool {
+		return form.Text == "true", nil
+	}
+	if form.Kind == KindSymbol {
+		switch form.Text {
+		case "true":
+			return true, nil
+		case "dice":
+			if rt.Dice == nil {
+				return true, nil
+			}
+			return rt.Dice(), nil
+		default:
+			return false, fmt.Errorf("unsupported guard symbol %q", form.Text)
+		}
+	}
+	if !isList(form) || len(form.Items) == 0 {
+		return false, fmt.Errorf("unsupported guard %s", form.String())
+	}
+	head, err := expectSymbol(form.Items[0], "guard operator")
+	if err != nil {
+		return false, err
+	}
+	switch head {
+	case "mailbox":
+		if len(form.Items) != 2 {
+			return false, fmt.Errorf("mailbox guard must be (mailbox message)")
+		}
+		want := form.Items[1]
+		if offered != nil && offered.Equal(want) {
+			return true, nil
+		}
+		for _, message := range rt.Mailbox(actor.Name) {
+			if message.Equal(want) {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "and":
+		for _, item := range form.Items[1:] {
+			ok, err := rt.evalGuardSpec(item, actor, offered)
+			if err != nil || !ok {
+				return false, err
+			}
+		}
+		return true, nil
+	case "not":
+		if len(form.Items) != 2 {
+			return false, fmt.Errorf("not guard needs one operand")
+		}
+		ok, err := rt.evalGuardSpec(form.Items[1], actor, offered)
+		if err != nil {
+			return false, err
+		}
+		return !ok, nil
+	case "data=":
+		if len(form.Items) != 3 {
+			return false, fmt.Errorf("data= guard must be (data= key value)")
+		}
+		key, err := expectSymbol(form.Items[1], "data key")
+		if err != nil {
+			return false, err
+		}
+		return actor.Data[key].Equal(form.Items[2]), nil
+	case "data>":
+		if len(form.Items) != 3 {
+			return false, fmt.Errorf("data> guard must be (data> key value)")
+		}
+		key, err := expectSymbol(form.Items[1], "data key")
+		if err != nil {
+			return false, err
+		}
+		got, err := valueInt(actor.Data[key])
+		if err != nil {
+			return false, err
+		}
+		want, err := valueInt(form.Items[2])
+		if err != nil {
+			return false, err
+		}
+		return got > want, nil
+	default:
+		return false, fmt.Errorf("unsupported guard form %q", head)
+	}
+}
+
+func (rt *Runtime) actorByName(name string) *Actor {
+	for _, actor := range rt.Actors {
+		if actor.Name == name {
+			return actor
+		}
+	}
+	return nil
 }
 
 func (v Value) Equal(other Value) bool {
@@ -1127,6 +1403,45 @@ func compileGuard(form Value) (GuardFunc, error) {
 			}
 			return true
 		}, nil
+	case "not":
+		if len(form.Items) != 2 {
+			return nil, fmt.Errorf("not guard needs one operand")
+		}
+		inner, err := compileGuard(form.Items[1])
+		if err != nil {
+			return nil, err
+		}
+		return func(rt *Runtime, actor *Actor) bool {
+			return !inner(rt, actor)
+		}, nil
+	case "data=":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("data= guard must be (data= key value)")
+		}
+		key, err := expectSymbol(form.Items[1], "data key")
+		if err != nil {
+			return nil, err
+		}
+		want := form.Items[2]
+		return func(_ *Runtime, actor *Actor) bool {
+			return actor.Data[key].Equal(want)
+		}, nil
+	case "data>":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("data> guard must be (data> key value)")
+		}
+		key, err := expectSymbol(form.Items[1], "data key")
+		if err != nil {
+			return nil, err
+		}
+		want, err := valueInt(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		return func(_ *Runtime, actor *Actor) bool {
+			got, err := valueInt(actor.Data[key])
+			return err == nil && got > want
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported guard form %q", head)
 	}
@@ -1201,6 +1516,74 @@ func compileAction(form Value) (ActionFunc, error) {
 			actor.Data[key] = value
 			return nil
 		}, nil
+	case "if":
+		if len(form.Items) != 3 && len(form.Items) != 4 {
+			return nil, fmt.Errorf("if must be (if guard then [else])")
+		}
+		cond, err := compileGuard(form.Items[1])
+		if err != nil {
+			return nil, err
+		}
+		thenAction, err := compileAction(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		var elseAction ActionFunc
+		if len(form.Items) == 4 {
+			elseAction, err = compileAction(form.Items[3])
+			if err != nil {
+				return nil, err
+			}
+		}
+		return func(rt *Runtime, actor *Actor) error {
+			if cond(rt, actor) {
+				return thenAction(rt, actor)
+			}
+			if elseAction != nil {
+				return elseAction(rt, actor)
+			}
+			return nil
+		}, nil
+	case "add":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("add must be (add key value)")
+		}
+		key, err := expectSymbol(form.Items[1], "add key")
+		if err != nil {
+			return nil, err
+		}
+		delta, err := valueInt(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		return func(_ *Runtime, actor *Actor) error {
+			current, err := valueInt(actor.Data[key])
+			if err != nil {
+				return err
+			}
+			actor.Data[key] = Number(strconv.Itoa(current + delta))
+			return nil
+		}, nil
+	case "sub":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("sub must be (sub key value)")
+		}
+		key, err := expectSymbol(form.Items[1], "sub key")
+		if err != nil {
+			return nil, err
+		}
+		delta, err := valueInt(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		return func(_ *Runtime, actor *Actor) error {
+			current, err := valueInt(actor.Data[key])
+			if err != nil {
+				return err
+			}
+			actor.Data[key] = Number(strconv.Itoa(current - delta))
+			return nil
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported action form %q", head)
 	}
@@ -1262,6 +1645,13 @@ func sortedValueKeys(in map[string]Value) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func valueInt(v Value) (int, error) {
+	if v.Kind != KindNumber {
+		return 0, fmt.Errorf("value %s is not a number", v.String())
+	}
+	return strconv.Atoi(v.Text)
 }
 
 func isListHead(v Value, want string) bool {
