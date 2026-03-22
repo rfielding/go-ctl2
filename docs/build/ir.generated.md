@@ -152,10 +152,10 @@ Before attempting a step, the runtime samples a floating-point value called `Dic
 That value can be used in guards to express random branching, for example:
 
 ```lisp
-(edge (dice-range 0.0 0.5)
+(edge (dice-range 0.0 0.5 "route to branch a")
   (become a))
 
-(edge (dice-range 0.5 1.0)
+(edge (dice-range 0.5 1.0 "route to branch b")
   (become b))
 ```
 
@@ -231,6 +231,18 @@ That is usually enough for inspectable CTL properties such as:
 - the queue can reach saturation
 - some executions accumulate drops
 - if arrivals stop, the system can drain
+
+Representative predicates for this queue model:
+
+- `(ef (data> Queue count 0) "eventually the queue can become non-empty")`
+- `(ef (data= Queue count 5) "the finite-capacity queue can saturate")`
+- `(ef (data> Queue dropped_count 0) "some execution can observe blocked arrivals")`
+- `(ag (implies (data= Queue count 0) (not (data> Queue dropped_count 0))) "drops only occur after the system has filled at some earlier point")`
+
+The Mermaid artifacts below are a useful companion view for this example:
+
+- a queue state rendition showing explicit self-loops
+- a queue message/service rendition showing arrival and service-completion flows
 
 ## Decision Processes
 
@@ -632,6 +644,64 @@ flowchart TD
 
     C_done -. send ping .-&gt; R_wait
     R_forwarded -. send ping .-&gt; S_idle
+</code></pre>
+</details>
+
+### Mm1 5 Queue Flow
+
+![Mm1 5 Queue Flow](../generated/mm1_5_queue_flow.svg)
+
+<details>
+<summary>Mermaid Source: <code>mm1_5_queue_flow.mmd</code></summary>
+<pre><code class="language-mermaid">
+sequenceDiagram
+    participant Client
+    participant Queue
+    Note over Client: dice branch
+    alt arrival
+        Client--&gt;&gt;Queue: req
+        alt count &lt; 5
+            Queue-&gt;&gt;Queue: count += 1
+        else count = 5
+            Queue-&gt;&gt;Queue: dropped_count += 1
+        end
+    else sleep
+        Client-&gt;&gt;Client: last = sleep
+    end
+    Note over Queue: service branch when count &gt; 0
+    alt service-complete
+        Queue-&gt;&gt;Queue: count -= 1
+        Queue-&gt;&gt;Queue: last_departure = service-complete
+    else busy
+        Queue-&gt;&gt;Queue: last_departure = busy
+    end
+</code></pre>
+</details>
+
+### Mm1 5 Queue State
+
+![Mm1 5 Queue State](../generated/mm1_5_queue_state.svg)
+
+<details>
+<summary>Mermaid Source: <code>mm1_5_queue_state.mmd</code></summary>
+<pre><code class="language-mermaid">
+flowchart TD
+    subgraph Client
+        direction TB
+        C_loop([loop]) --&gt;|&quot;dice&amp;lt;0.5&lt;br/&gt;last = sleep&lt;br/&gt;become loop&quot;| C_loop
+        C_loop --&gt;|&quot;dice&amp;gt;=0.5&lt;br/&gt;send req&lt;br/&gt;last = arrival&lt;br/&gt;become loop&quot;| C_loop
+    end
+
+    subgraph Queue
+        direction TB
+        Q_wait([wait]) --&gt;|&quot;req and count = 0&lt;br/&gt;count += 1&lt;br/&gt;elapsed = 0&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;req and 0 &amp;lt; count &amp;lt; 5&lt;br/&gt;count += 1&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;req and count = 5&lt;br/&gt;dropped_count += 1&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;lt;0.5&lt;br/&gt;count -= 1&lt;br/&gt;last_departure = service-complete&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;gt;=0.5&lt;br/&gt;last_departure = busy&lt;br/&gt;become wait&quot;| Q_wait
+    end
+
+    C_loop -. arrival req .-&gt; Q_wait
 </code></pre>
 </details>
 

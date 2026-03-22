@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant Client
+    participant Queue
+    Note over Client: dice branch
+    alt arrival
+        Client-->>Queue: req
+        alt count < 5
+            Queue->>Queue: count += 1
+        else count = 5
+            Queue->>Queue: dropped_count += 1
+        end
+    else sleep
+        Client->>Client: last = sleep
+    end
+    Note over Queue: service branch when count > 0
+    alt service-complete
+        Queue->>Queue: count -= 1
+        Queue->>Queue: last_departure = service-complete
+    else busy
+        Queue->>Queue: last_departure = busy
+    end

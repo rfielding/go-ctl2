@@ -232,6 +232,18 @@ That is usually enough for inspectable CTL properties such as:
 - some executions accumulate drops
 - if arrivals stop, the system can drain
 
+Representative predicates for this queue model:
+
+- `(ef (data> Queue count 0) "eventually the queue can become non-empty")`
+- `(ef (data= Queue count 5) "the finite-capacity queue can saturate")`
+- `(ef (data> Queue dropped_count 0) "some execution can observe blocked arrivals")`
+- `(ag (implies (data= Queue count 0) (not (data> Queue dropped_count 0))) "drops only occur after the system has filled at some earlier point")`
+
+The Mermaid artifacts below are a useful companion view for this example:
+
+- a queue state rendition showing explicit self-loops
+- a queue message/service rendition showing arrival and service-completion flows
+
 ## Decision Processes
 
 When the only source of branching is `Dice`, the operational picture is close to a Markov-chain style model.
