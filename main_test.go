@@ -247,7 +247,8 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 			(actor C
 				(state sink
 					(edge true
-						(recv received))))
+						(recv received)
+						(become sink))))
 		`),
 	)
 
@@ -308,11 +309,23 @@ func TestCompileActorRejectsUnknownAction(t *testing.T) {
 	}
 }
 
+func TestCompileActorRejectsEdgeWithoutBecome(t *testing.T) {
+	_, err := CompileActor(`
+		(actor A
+			(state start
+				(edge true
+					(set x 1))))
+	`)
+	if err == nil {
+		t.Fatal("expected compile error, got nil")
+	}
+}
+
 func TestTickLogsSchedulerError(t *testing.T) {
 	runtime := NewRuntime(MustCompileActor(`
 		(actor A
 			(state start
-				(edge true (send B ping))))
+				(edge true (send B ping) (become start))))
 	`))
 	runtime.ChooseActorFn = func(*Runtime) int { return 99 }
 
@@ -350,7 +363,8 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 			(actor C
 				(state sink
 					(edge true
-						(recv received))))
+						(recv received)
+						(become sink))))
 		`),
 	)
 
@@ -995,7 +1009,8 @@ func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 			(actor C
 				(state sink
 					(edge true
-						(recv received))))
+						(recv received)
+						(become sink))))
 		`),
 	)
 
@@ -1074,10 +1089,12 @@ func TestMM1QueueBranching(t *testing.T) {
 			(actor Client
 				(state loop
 					(edge dice
-						(set last "sleep"))
+						(set last "sleep")
+						(become loop))
 					(edge true
 						(send Server req)
-						(set last "send"))))
+						(set last "send")
+						(become loop))))
 		`),
 		MustCompileActor(`
 			(actor Server
@@ -1085,22 +1102,27 @@ func TestMM1QueueBranching(t *testing.T) {
 					(edge (mailbox req)
 						(recv msg)
 						(add count 1)
-						(set elapsed 0))
+						(set elapsed 0)
+						(become wait))
 					(edge (and (mailbox tick) (data> count 0) (data= elapsed 1))
 						(recv msg)
 						(sub count 1)
-						(set elapsed 0))
+						(set elapsed 0)
+						(become wait))
 					(edge (and (mailbox tick) (data> count 0))
 						(recv msg)
-						(add elapsed 1))
+						(add elapsed 1)
+						(become wait))
 					(edge (mailbox tick)
-						(recv msg))))
+						(recv msg)
+						(become wait))))
 		`),
 		MustCompileActor(`
 			(actor Ticker
 				(state loop
 					(edge true
-						(send Server tick))))
+						(send Server tick)
+						(become loop))))
 		`),
 	)
 	runtime.Actors[1].Data["count"] = Number("0")

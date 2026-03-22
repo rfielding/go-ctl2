@@ -99,6 +99,8 @@ Example:
 
 The compiler walks the action block, collects reachable `become` targets, and uses that successor set for graph construction and CTL. Runtime execution validates that the post-step control state is one of those derived successor states.
 
+An `edge` must contain at least one `become`. Omitting `become` is a compile error; the language does not use implicit self-loops.
+
 ## Why Derived Next States Matter
 
 The central compromise in this repository is that transitions still expose successor control states structurally through `become`, rather than leaving control flow hidden in simulation traces.
@@ -162,6 +164,73 @@ This is enough to express:
 - purely random branching
 - Markov-chain style behavior
 - mixed control + random behavior where some decisions are scheduled and others are probabilistic
+
+Full M/M/1/5-style example:
+
+```lisp
+(actor Client
+  (state loop
+    (edge dice
+      (set last "sleep")
+      (become loop))
+    (edge true
+      (send Queue req)
+      (set last "arrival")
+      (become loop))))
+
+(actor Queue
+  (state wait
+    (edge (and (mailbox req) (data= count 0))
+      (recv msg)
+      (add count 1)
+      (set elapsed 0)
+      (become wait))
+    (edge (and (mailbox req) (data> count 0) (not (data= count 5)))
+      (recv msg)
+      (add count 1)
+      (become wait))
+    (edge (and (mailbox req) (data= count 5))
+      (recv dropped)
+      (add dropped_count 1)
+      (become wait))
+    (edge (and (data> count 0) (dice-range 0.0 0.5))
+      (sub count 1)
+      (set last_departure "service-complete")
+      (become wait))
+    (edge (and (data> count 0) (dice-range 0.5 1.0))
+      (set last_departure "busy")
+      (become wait))))
+```
+
+Interpretation:
+
+- `Client` models arrivals
+  each step either sleeps or emits one arrival, depending on `dice`
+- `Queue` models a single-server queue with capacity `5`
+  `count` is the current system size and `dropped_count` records blocked arrivals
+- departures are the random side
+  when `count > 0`, `dice-range` decides whether service completes on that step
+- arrivals are client-driven and probabilistic
+  scheduler choice still decides when the client gets to act
+- the `count = 5` branch is the finite-capacity part
+  arrivals are consumed and recorded as drops instead of increasing the queue
+- the self-loops are written explicitly with `become`
+  the example does not rely on implicit stay-in-place behavior
+
+This is not a continuous-time simulator. It is a small executable control model that captures the same queueing shape:
+
+- probabilistic client arrivals
+- one server
+- finite capacity `5`
+- blocked arrivals counted as losses
+- random service completions
+
+That is usually enough for inspectable CTL properties such as:
+
+- eventually the queue becomes non-empty
+- the queue can reach saturation
+- some executions accumulate drops
+- if arrivals stop, the system can drain
 
 ## Decision Processes
 

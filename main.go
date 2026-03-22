@@ -1605,6 +1605,9 @@ func collectBecomeStates(form Value) ([]string, error) {
 	if err := walkBecomeStates(form, &out, seen); err != nil {
 		return nil, err
 	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("edge must contain at least one become")
+	}
 	return out, nil
 }
 
