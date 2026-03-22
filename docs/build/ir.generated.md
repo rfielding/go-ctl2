@@ -119,10 +119,11 @@ It does not remove the need for correct modeling. A wrong `(next ...)` declarati
 The scheduler is single-threaded but concurrent in effect. At each step:
 
 1. choose an actor
-2. find the current control state
-3. consider transitions in order
-4. select the first transition that is fully ready
-5. execute it atomically
+2. roll a floating-point `Dice` value in `[0,1]`
+3. find the current control state
+4. consider transitions in order
+5. select the first transition that is fully ready
+6. execute it atomically
 
 If the chosen actor has no ready transition, it yields. This is not deadlock. Deadlock means no actor in the whole runtime has any ready transition.
 
@@ -143,6 +144,50 @@ A mailbox capacity of `0` means synchronous rendezvous semantics.
 - `recv` is ready only if a sender is ready to rendezvous
 
 The runtime currently models this by checking receiver readiness before a zero-capacity send is allowed to execute.
+
+## Random Guards
+
+Before attempting a step, the runtime samples a floating-point value called `Dice` in `[0,1]`.
+
+That value can be used in guards to express random branching, for example:
+
+```lisp
+(on (dice-range 0.0 0.5)
+  (next a)
+  (become a))
+
+(on (dice-range 0.5 1.0)
+  (next b)
+  (become b))
+```
+
+This is enough to express:
+
+- purely random branching
+- Markov-chain style behavior
+- mixed control + random behavior where some decisions are scheduled and others are probabilistic
+
+## Decision Processes
+
+When the only source of branching is `Dice`, the operational picture is close to a Markov-chain style model.
+
+When both of these are present:
+
+- scheduler choice over which actor gets the next turn
+- `Dice`-driven branching inside actor guards
+
+the operational picture is closer to a decision process: some choices are external or controlled, and some are probabilistic.
+
+That is the important mixed case for systems such as:
+
+- clients competing for service while service outcomes are random
+- retry logic with random backoff
+- deterministic protocol logic interacting with lossy or probabilistic environments
+
+The current unit tests include both:
+
+- pure random branching through `dice-range`
+- a mixed deterministic/probabilistic scenario where a client deterministically sends a request and the server randomly accepts or rejects after receipt
 
 # Atomic Blocks
 
@@ -254,6 +299,10 @@ Current built-ins:
 - `(cryptorandom out bytes)`
   - generates cryptographic randomness
   - stores a hex string in `out`
+
+- `(sample-exponential out rate)`
+  - samples from an exponential distribution with the given positive rate
+  - stores the sampled floating-point value in `out`
 
 These are intentionally low-level. They are not safe protocol APIs. They are protocol-modeling primitives.
 

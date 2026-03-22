@@ -10,7 +10,9 @@ func TestReadAcceptsManyExpressions(t *testing.T) {
 	}{
 		{name: "symbol", input: "actor", want: "actor"},
 		{name: "number", input: "42", want: "42"},
+		{name: "decimal number", input: "0.5", want: "0.5"},
 		{name: "negative number", input: "-7", want: "-7"},
+		{name: "negative decimal", input: "-0.25", want: "-0.25"},
 		{name: "string", input: `"hello"`, want: `"hello"`},
 		{name: "bool true", input: "true", want: "true"},
 		{name: "bool false", input: "false", want: "false"},
@@ -735,6 +737,196 @@ func TestBuiltinCryptoRandom(t *testing.T) {
 	}
 }
 
+func TestDiceRangeGuards(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on (dice-range 0.0 0.5)
+						(next done)
+						(set branch low)
+						(become done))
+					(on (dice-range 0.5 1.0)
+						(next done)
+						(set branch high)
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Dice = func() float64 { return 0.75 }
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected dice-range transition to apply")
+	}
+	if got := runtime.Actors[0].Data["branch"].String(); got != "high" {
+		t.Fatalf("expected high branch, got %s", got)
+	}
+}
+
+func TestDiceGuardsDefaultTrueWhenDiceUnset(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on (dice-range 0.0 0.5)
+						(next done)
+						(set branch passthrough)
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Dice = nil
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected dice-range guard to pass when Dice is unset")
+	}
+	if got := runtime.Actors[0].Data["branch"].String(); got != "passthrough" {
+		t.Fatalf("expected passthrough branch, got %s", got)
+	}
+}
+
+func TestDiceSymbolDefaultTrueWhenDiceUnset(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on dice
+						(next done)
+						(set branch passthrough)
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Dice = nil
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected dice guard to pass when Dice is unset")
+	}
+	if got := runtime.Actors[0].Data["branch"].String(); got != "passthrough" {
+		t.Fatalf("expected passthrough branch, got %s", got)
+	}
+}
+
+func TestSampleExponentialBuiltin(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on true
+						(next done)
+						(sample-exponential wait 2.0)
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Dice = func() float64 { return 0.5 }
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected sample-exponential transition to apply")
+	}
+	got, err := valueFloat(runtime.Actors[0].Data["wait"])
+	if err != nil {
+		t.Fatalf("wait is not a float-valued number: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("expected positive exponential sample, got %v", got)
+	}
+}
+
+func TestDecisionProcessMixedDeterminismAndRandomness(t *testing.T) {
+	makeRuntime := func(dice float64) *Runtime {
+		runtime := NewRuntime(
+			MustCompileActor(`
+				(actor Client
+					(state start
+						(on true
+							(next done)
+							(send Server req)
+							(become done)))
+					(state done))
+			`),
+			MustCompileActor(`
+				(actor Server
+					(state wait
+						(on (∧ (mailbox req) (dice-range 0.0 0.5))
+							(next accepted)
+							(recv req)
+							(set outcome accepted)
+							(become accepted))
+						(on (∧ (mailbox req) (dice-range 0.5 1.0))
+							(next rejected)
+							(recv req)
+							(set outcome rejected)
+							(become rejected)))
+					(state accepted)
+					(state rejected))
+			`),
+		)
+		runtime.Dice = func() float64 { return dice }
+		return runtime
+	}
+
+	accepted := makeRuntime(0.25)
+	applied, err := accepted.StepActor(accepted.Actors[0])
+	if err != nil {
+		t.Fatalf("accepted client step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected accepted client step to apply")
+	}
+	applied, err = accepted.StepActor(accepted.Actors[1])
+	if err != nil {
+		t.Fatalf("accepted server step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected accepted server step to apply")
+	}
+	if got := accepted.Actors[1].Data["state"].String(); got != "accepted" {
+		t.Fatalf("expected accepted branch, got %s", got)
+	}
+	if got := accepted.Actors[1].Data["outcome"].String(); got != "accepted" {
+		t.Fatalf("expected accepted outcome, got %s", got)
+	}
+
+	rejected := makeRuntime(0.75)
+	applied, err = rejected.StepActor(rejected.Actors[0])
+	if err != nil {
+		t.Fatalf("rejected client step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected rejected client step to apply")
+	}
+	applied, err = rejected.StepActor(rejected.Actors[1])
+	if err != nil {
+		t.Fatalf("rejected server step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected rejected server step to apply")
+	}
+	if got := rejected.Actors[1].Data["state"].String(); got != "rejected" {
+		t.Fatalf("expected rejected branch, got %s", got)
+	}
+	if got := rejected.Actors[1].Data["outcome"].String(); got != "rejected" {
+		t.Fatalf("expected rejected outcome, got %s", got)
+	}
+}
+
 func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`
@@ -875,10 +1067,10 @@ func TestMM1QueueBranching(t *testing.T) {
 	runtime.Actors[1].Data["count"] = Number("0")
 	runtime.Actors[1].Data["elapsed"] = Number("0")
 
-	dice := []bool{false, true}
-	runtime.Dice = func() bool {
+	dice := []float64{0.75, 0.75, 0.25}
+	runtime.Dice = func() float64 {
 		if len(dice) == 0 {
-			return false
+			return 0.75
 		}
 		next := dice[0]
 		dice = dice[1:]

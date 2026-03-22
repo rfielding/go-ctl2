@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"math/rand"
 	"sort"
@@ -88,8 +89,9 @@ type Runtime struct {
 	Trace         []string
 	Events        []Event
 	Step          int
+	DiceValue     float64
 	ChooseActorFn func(*Runtime) int
-	Dice          func() bool
+	Dice          func() float64
 }
 
 type StepResult struct {
@@ -175,8 +177,8 @@ func NewRuntime(actors ...*Actor) *Runtime {
 		Mailboxes:   make(map[string][]Value, len(actors)),
 		MailboxCaps: make(map[string]int, len(actors)),
 		SyncInbox:   make(map[string]Value, len(actors)),
-		Dice: func() bool {
-			return true
+		Dice: func() float64 {
+			return rand.Float64()
 		},
 	}
 	for _, actor := range actors {
@@ -225,6 +227,7 @@ func (rt *Runtime) StepActor(actor *Actor) (bool, error) {
 }
 
 func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
+	rt.rollDice()
 	state := rt.CurrentState(actor)
 	if state == nil {
 		rt.Tracef("step: actor=%s no-state", actor.Name)
@@ -409,6 +412,22 @@ func (rt *Runtime) Tracef(format string, args ...interface{}) {
 	rt.Trace = append(rt.Trace, fmt.Sprintf(format, args...))
 }
 
+func (rt *Runtime) rollDice() {
+	if rt.Dice == nil {
+		rt.DiceValue = 0
+		return
+	}
+	value := rt.Dice()
+	switch {
+	case value < 0:
+		rt.DiceValue = 0
+	case value > 1:
+		rt.DiceValue = 1
+	default:
+		rt.DiceValue = value
+	}
+}
+
 func (rt *Runtime) logEvent(event Event) {
 	rt.Events = append(rt.Events, event)
 }
@@ -469,6 +488,7 @@ func (rt *Runtime) Clone() *Runtime {
 		Trace:       append([]string(nil), rt.Trace...),
 		Events:      append([]Event(nil), rt.Events...),
 		Step:        rt.Step,
+		DiceValue:   rt.DiceValue,
 		Dice:        rt.Dice,
 	}
 	for i, actor := range rt.Actors {
@@ -1281,7 +1301,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			if rt.Dice == nil {
 				return true, nil
 			}
-			return rt.Dice(), nil
+			return rt.DiceValue < 0.5, nil
 		default:
 			return false, fmt.Errorf("unsupported guard symbol %q", form.Text)
 		}
@@ -1348,6 +1368,46 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			return true, nil
 		}
 		return rt.evalGuardSpec(form.Items[2], actor, offered)
+	case "dice-range":
+		if len(form.Items) != 3 {
+			return false, fmt.Errorf("dice-range guard must be (dice-range low high)")
+		}
+		if rt.Dice == nil {
+			return true, nil
+		}
+		low, err := valueFloat(form.Items[1])
+		if err != nil {
+			return false, err
+		}
+		high, err := valueFloat(form.Items[2])
+		if err != nil {
+			return false, err
+		}
+		return rt.DiceValue >= low && rt.DiceValue <= high, nil
+	case "dice<":
+		if len(form.Items) != 2 {
+			return false, fmt.Errorf("dice< guard must be (dice< high)")
+		}
+		if rt.Dice == nil {
+			return true, nil
+		}
+		high, err := valueFloat(form.Items[1])
+		if err != nil {
+			return false, err
+		}
+		return rt.DiceValue < high, nil
+	case "dice>=":
+		if len(form.Items) != 2 {
+			return false, fmt.Errorf("dice>= guard must be (dice>= low)")
+		}
+		if rt.Dice == nil {
+			return true, nil
+		}
+		low, err := valueFloat(form.Items[1])
+		if err != nil {
+			return false, err
+		}
+		return rt.DiceValue >= low, nil
 	case "data=":
 		if len(form.Items) != 3 {
 			return false, fmt.Errorf("data= guard must be (data= key value)")
@@ -1528,7 +1588,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 				if rt.Dice == nil {
 					return true
 				}
-				return rt.Dice()
+				return rt.DiceValue < 0.5
 			}, nil
 		default:
 			return nil, fmt.Errorf("unsupported guard symbol %q", form.Text)
@@ -1622,6 +1682,52 @@ func compileGuard(form Value) (GuardFunc, error) {
 		}
 		return func(rt *Runtime, actor *Actor) bool {
 			return !left(rt, actor) || right(rt, actor)
+		}, nil
+	case "dice-range":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("dice-range guard must be (dice-range low high)")
+		}
+		low, err := valueFloat(form.Items[1])
+		if err != nil {
+			return nil, err
+		}
+		high, err := valueFloat(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		return func(rt *Runtime, _ *Actor) bool {
+			if rt.Dice == nil {
+				return true
+			}
+			return rt.DiceValue >= low && rt.DiceValue <= high
+		}, nil
+	case "dice<":
+		if len(form.Items) != 2 {
+			return nil, fmt.Errorf("dice< guard must be (dice< high)")
+		}
+		high, err := valueFloat(form.Items[1])
+		if err != nil {
+			return nil, err
+		}
+		return func(rt *Runtime, _ *Actor) bool {
+			if rt.Dice == nil {
+				return true
+			}
+			return rt.DiceValue < high
+		}, nil
+	case "dice>=":
+		if len(form.Items) != 2 {
+			return nil, fmt.Errorf("dice>= guard must be (dice>= low)")
+		}
+		low, err := valueFloat(form.Items[1])
+		if err != nil {
+			return nil, err
+		}
+		return func(rt *Runtime, _ *Actor) bool {
+			if rt.Dice == nil {
+				return true
+			}
+			return rt.DiceValue >= low
 		}, nil
 	case "data=":
 		if len(form.Items) != 3 {
@@ -1859,6 +1965,33 @@ func compileAction(form Value) (ActionFunc, error) {
 			actor.Data[out] = String(hex.EncodeToString(buf))
 			return nil
 		}, nil
+	case "sample-exponential":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("sample-exponential must be (sample-exponential out rate)")
+		}
+		out, err := expectSymbol(form.Items[1], "sample-exponential out key")
+		if err != nil {
+			return nil, err
+		}
+		rate, err := valueFloat(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		if rate <= 0 {
+			return nil, fmt.Errorf("sample-exponential rate must be positive")
+		}
+		return func(rt *Runtime, actor *Actor) error {
+			u := rt.DiceValue
+			if u <= 0 {
+				u = 1e-12
+			}
+			if u >= 1 {
+				u = 1 - 1e-12
+			}
+			sample := -math.Log(1-u) / rate
+			actor.Data[out] = Number(strconv.FormatFloat(sample, 'g', -1, 64))
+			return nil
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported action form %q", head)
 	}
@@ -1927,6 +2060,13 @@ func valueInt(v Value) (int, error) {
 		return 0, fmt.Errorf("value %s is not a number", v.String())
 	}
 	return strconv.Atoi(v.Text)
+}
+
+func valueFloat(v Value) (float64, error) {
+	if v.Kind != KindNumber {
+		return 0, fmt.Errorf("value %s is not a number", v.String())
+	}
+	return strconv.ParseFloat(v.Text, 64)
 }
 
 func valueBigInt(v Value) (*big.Int, error) {
@@ -2371,6 +2511,12 @@ func tokenize(input string) ([]token, error) {
 			i++
 			for i < len(runes) && unicode.IsDigit(runes[i]) {
 				i++
+			}
+			if i < len(runes)-1 && runes[i] == '.' && unicode.IsDigit(runes[i+1]) {
+				i++
+				for i < len(runes) && unicode.IsDigit(runes[i]) {
+					i++
+				}
 			}
 			out = append(out, token{
 				kind:      "number",

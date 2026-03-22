@@ -24,6 +24,7 @@ The current repository models:
 - one mailbox per actor
 - explicit named control states
 - guarded transitions
+- one floating-point `Dice` sample in `[0,1]` per attempted step
 - explicit `(next ...)` successor declarations on transitions
 - buffered or zero-capacity rendezvous mailbox semantics
 - atomic transitions whose communication readiness is checked before execution
@@ -54,12 +55,19 @@ The explicit `(next ...)` declaration is a deliberate compromise. It gives CTL a
   - transitions
   - sends
   - receives
+- random guards:
+  - `dice`
+  - `dice-range`
+  - `dice<`
+  - `dice>=`
+- mixed deterministic/probabilistic scenarios suitable for decision-process style modeling
 - simple generated XY plots from event data
 - Mermaid state and sequence diagrams in the docs
 - low-level protocol-oriented built-ins:
   - `md5`
   - `rsa-raw`
   - `cryptorandom`
+  - `sample-exponential`
 
 ## Repository Layout
 

@@ -108,6 +108,8 @@
 <ul>
 <li><a href="#buffered-channels">Buffered Channels</a></li>
 <li><a href="#zero-capacity-channels">Zero-Capacity Channels</a></li>
+<li><a href="#random-guards">Random Guards</a></li>
+<li><a href="#decision-processes">Decision Processes</a></li>
 </ul></li>
 <li><a href="#atomic-blocks">Atomic Blocks</a>
 <ul>
@@ -235,6 +237,7 @@
 <p>The scheduler is single-threaded but concurrent in effect. At each step:</p>
 <ol type="1">
 <li>choose an actor</li>
+<li>roll a floating-point <code>Dice</code> value in <code>[0,1]</code></li>
 <li>find the current control state</li>
 <li>consider transitions in order</li>
 <li>select the first transition that is fully ready</li>
@@ -255,6 +258,41 @@
 <li><code>recv</code> is ready only if a sender is ready to rendezvous</li>
 </ul>
 <p>The runtime currently models this by checking receiver readiness before a zero-capacity send is allowed to execute.</p>
+<h2 id="random-guards">Random Guards</h2>
+<p>Before attempting a step, the runtime samples a floating-point value called <code>Dice</code> in <code>[0,1]</code>.</p>
+<p>That value can be used in guards to express random branching, for example:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>)</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  (next a)</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  (become a))</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>)</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  (next b)</span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  (become b))</span></code></pre></div>
+<p>This is enough to express:</p>
+<ul>
+<li>purely random branching</li>
+<li>Markov-chain style behavior</li>
+<li>mixed control + random behavior where some decisions are scheduled and others are probabilistic</li>
+</ul>
+<h2 id="decision-processes">Decision Processes</h2>
+<p>When the only source of branching is <code>Dice</code>, the operational picture is close to a Markov-chain style model.</p>
+<p>When both of these are present:</p>
+<ul>
+<li>scheduler choice over which actor gets the next turn</li>
+<li><code>Dice</code>-driven branching inside actor guards</li>
+</ul>
+<p>the operational picture is closer to a decision process: some choices are external or controlled, and some are probabilistic.</p>
+<p>That is the important mixed case for systems such as:</p>
+<ul>
+<li>clients competing for service while service outcomes are random</li>
+<li>retry logic with random backoff</li>
+<li>deterministic protocol logic interacting with lossy or probabilistic environments</li>
+</ul>
+<p>The current unit tests include both:</p>
+<ul>
+<li>pure random branching through <code>dice-range</code></li>
+<li>a mixed deterministic/probabilistic scenario where a client deterministically sends a request and the server randomly accepts or rejects after receipt</li>
+</ul>
 <h1 id="atomic-blocks">Atomic Blocks</h1>
 <p>Communication is part of transition readiness. There is no partial transition semantics.</p>
 <p>That means:</p>
@@ -349,6 +387,11 @@
 <li>generates cryptographic randomness</li>
 <li>stores a hex string in <code>out</code></li>
 </ul></li>
+<li><code>(sample-exponential out rate)</code>
+<ul>
+<li>samples from an exponential distribution with the given positive rate</li>
+<li>stores the sampled floating-point value in <code>out</code></li>
+</ul></li>
 </ul>
 <p>These are intentionally low-level. They are not safe protocol APIs. They are protocol-modeling primitives.</p>
 <p>Planned built-ins:</p>
@@ -436,37 +479,37 @@
 <li>declared next states</li>
 <li>CTL predicates over the resulting model</li>
 </ul>
-<div class="sourceCode" id="cb2"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(actor Client</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  (state start</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>    (on true</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>      (next done)</span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>      (send Relay &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>      (become done)))</span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  (state done))</span>
-<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>(actor Relay</span>
-<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>  (state wait</span>
-<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    (on (mailbox &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>      (next forwarded)</span>
-<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>      (recv &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>      (send Server &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a>      (become forwarded))</span>
-<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>    (on true</span>
-<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>      (next wait)</span>
-<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>      (become wait)))</span>
-<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  (state forwarded))</span>
-<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a>(actor Server</span>
-<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>  (state idle</span>
-<span id="cb2-23"><a href="#cb2-23" aria-hidden="true" tabindex="-1"></a>    (on (mailbox &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb2-24"><a href="#cb2-24" aria-hidden="true" tabindex="-1"></a>      (next accepted)</span>
-<span id="cb2-25"><a href="#cb2-25" aria-hidden="true" tabindex="-1"></a>      (recv &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb2-26"><a href="#cb2-26" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> received &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb2-27"><a href="#cb2-27" aria-hidden="true" tabindex="-1"></a>      (become accepted))</span>
-<span id="cb2-28"><a href="#cb2-28" aria-hidden="true" tabindex="-1"></a>    (on true</span>
-<span id="cb2-29"><a href="#cb2-29" aria-hidden="true" tabindex="-1"></a>      (next idle)</span>
-<span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>      (become idle)))</span>
-<span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>  (state accepted))</span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(actor Client</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  (state start</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    (on true</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>      (next done)</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>      (send Relay &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>      (become done)))</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  (state done))</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>(actor Relay</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  (state wait</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    (on (mailbox &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>      (next forwarded)</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>      (recv &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>      (send Server &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>      (become forwarded))</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    (on true</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>      (next wait)</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>      (become wait)))</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  (state forwarded))</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>(actor Server</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>  (state idle</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    (on (mailbox &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>      (next accepted)</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>      (recv &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> received &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>      (become accepted))</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>    (on true</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>      (next idle)</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>      (become idle)))</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>  (state accepted))</span></code></pre></div>
 <p>Representative CTL requirements:</p>
 <ul>
 <li><code>(ef (in-state Server accepted))</code></li>
