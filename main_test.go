@@ -1088,10 +1088,10 @@ func TestMM1QueueBranching(t *testing.T) {
 		MustCompileActor(`
 			(actor Client
 				(state loop
-					(edge dice
+					(edge (dice-range 0.0 0.5)
 						(set last "sleep")
 						(become loop))
-					(edge true
+					(edge (dice-range 0.5 1.0)
 						(send Server req)
 						(set last "send")
 						(become loop))))

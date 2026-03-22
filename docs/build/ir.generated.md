@@ -170,10 +170,10 @@ Full M/M/1/5-style example:
 ```lisp
 (actor Client
   (state loop
-    (edge dice
+    (edge (dice-range 0.0 0.5)
       (set last "sleep")
       (become loop))
-    (edge true
+    (edge (dice-range 0.5 1.0)
       (send Queue req)
       (set last "arrival")
       (become loop))))
@@ -205,7 +205,7 @@ Full M/M/1/5-style example:
 Interpretation:
 
 - `Client` models arrivals
-  each step either sleeps or emits one arrival, depending on `dice`
+  `dice-range` makes the sleep/arrival split explicit
 - `Queue` models a single-server queue with capacity `5`
   `count` is the current system size and `dropped_count` records blocked arrivals
 - departures are the random side
@@ -318,11 +318,91 @@ Runtime execution exists to validate that:
 
 This means CTL does not need to wait for simulation to discover the control graph.
 
+## What CTL Means
+
+CTL is Computation Tree Logic.
+
+The important idea is that execution does not produce one future. It produces a tree of possible futures:
+
+- scheduler choice can produce different next steps
+- random guards can produce different next steps
+- mailbox contents can enable or disable different edges
+
+CTL lets us ask whether a property holds on some future branch or on all future branches.
+
+There are two dimensions in every temporal CTL operator:
+
+- path quantifier:
+  `E` means "there exists a path"
+  `A` means "for all paths"
+- time modality:
+  `X` means "in the next step"
+  `F` means "eventually in the future"
+  `G` means "globally, always in the future"
+  `U` means "until"
+
+That is the core connection:
+
+- `E` corresponds to existential choice
+  some reachable branch works
+- `A` corresponds to universal choice
+  every reachable branch must work
+
+In ordinary language:
+
+- `EF p`
+  there exists some execution path on which `p` eventually becomes true
+  "possibly, at some point, `p` happens"
+- `AF p`
+  on every execution path, `p` eventually becomes true
+  "necessarily, sooner or later, `p` happens"
+- `EG p`
+  there exists some execution path on which `p` remains true forever
+  "possibly, the system can stay in a `p`-good region forever"
+- `AG p`
+  on every execution path, `p` remains true forever
+  "necessarily, `p` is always preserved"
+- `EX p`
+  there exists an immediate successor state where `p` holds
+  "possibly on the next step"
+- `AX p`
+  for every immediate successor state, `p` holds
+  "necessarily on the next step"
+- `E[p U q]`
+  there exists a path where `p` keeps holding until `q` eventually holds
+- `A[p U q]`
+  on every path, `p` keeps holding until `q` eventually holds
+
+This is why the pairs matter:
+
+- `EF` vs `AF`
+  possible eventuality vs guaranteed eventuality
+- `EG` vs `AG`
+  possible invariant along some branch vs invariant along all branches
+- `EX` vs `AX`
+  one-step possibility vs one-step necessity
+- `EU` vs `AU`
+  possible progress condition vs guaranteed progress condition
+
+Examples:
+
+- `(ef (in-state Server accepted))`
+  there is some way for the server to reach `accepted`
+- `(af (in-state Server accepted))`
+  every possible future must eventually reach `accepted`
+- `(ag (not (mailbox-has Relay ping)))`
+  along all futures, the relay mailbox is always free of `ping`
+- `(eg (data> Queue count 0))`
+  there exists some path where the queue can stay non-empty forever
+
+`EF` is often the right operator for reachability or possibility.
+`AF` is stronger: it means no matter how scheduling and randomness resolve, the desired state is unavoidable.
+That difference is exactly why users need the quantifier explanation up front.
+
 ## Present Operators
 
 The implementation currently supports:
 
-- `not`, `and`, `or`, `implies`, `->`
 - `not`, `and`, `or`, `implies`
 - `ex`, `ax`
 - `ef`, `af`
@@ -336,6 +416,71 @@ Atomic predicates currently include:
 - `(mailbox-has A msg "actor A currently holds the message")`
 
 Predicate forms may carry a final string argument used only as human-readable documentation. The evaluator ignores that trailing string semantically.
+
+## How The Checker Works
+
+The algorithm in this repository is a standard finite-state CTL model-checking pattern over the explored runtime graph.
+
+Step 1: build the reachable graph.
+
+- start from the initial runtime
+- execute one enabled actor step at a time
+- clone successor runtimes
+- deduplicate states by a serialized runtime key
+- record the successor relation between runtime states
+
+If a state has no enabled successors, the implementation records a self-loop labeled `deadlock`.
+That makes deadlock states explicit in the graph and keeps the temporal operators total.
+
+Step 2: evaluate formulas by computing the set of satisfying states.
+
+For each subformula, the checker computes:
+
+- the set of explored states where the subformula is true
+
+Atomic predicates are evaluated directly on each runtime state.
+Boolean operators are evaluated by ordinary set operations:
+
+- `not`
+  complement
+- `and`
+  intersection
+- `or`
+  union
+- `implies`
+  `not left or right`
+
+The temporal operators are computed from the successor graph:
+
+- `EX p`
+  mark any state with at least one successor already marked by `p`
+- `AX p`
+  mark any state whose successors are all marked by `p`
+- `EF p`
+  reduce to `E[true U p]`
+- `AF p`
+  reduce to `A[true U p]`
+- `AG p`
+  reduce to `not EF not p`
+- `EG p`
+  compute a greatest fixpoint:
+  start from states satisfying `p`, then repeatedly remove any state that cannot stay inside that set on at least one successor
+- `EU(p, q)`
+  compute a least fixpoint:
+  start from states satisfying `q`, then repeatedly add states satisfying `p` that can move to an already accepted state
+- `AU(p, q)`
+  compute a least fixpoint:
+  start from states satisfying `q`, then repeatedly add states satisfying `p` whose successors are all already accepted
+
+So the checker is not proving arbitrary mathematics.
+It is doing graph analysis on the explored transition system induced by the actor model.
+
+That is exactly why this works well here:
+
+- the graph is explicit
+- the control flow is explicit
+- the user can inspect both the model and the formulas
+- the result can be explained in ordinary "possibly/necessarily, eventually/always" language
 
 ## What CTL Is Proving Here
 
