@@ -819,6 +819,32 @@ func TestDiceSymbolDefaultTrueWhenDiceUnset(t *testing.T) {
 	}
 }
 
+func TestPredicateDescriptionOnGuard(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on (data= flag yes "flag is set")
+						(next done)
+						(set branch taken)
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Actors[0].Data["flag"] = Symbol("yes")
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected described guard to apply")
+	}
+	if got := runtime.Actors[0].Data["branch"].String(); got != "taken" {
+		t.Fatalf("expected taken branch, got %s", got)
+	}
+}
+
 func TestSampleExponentialBuiltin(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`
@@ -924,6 +950,27 @@ func TestDecisionProcessMixedDeterminismAndRandomness(t *testing.T) {
 	}
 	if got := rejected.Actors[1].Data["outcome"].String(); got != "rejected" {
 		t.Fatalf("expected rejected outcome, got %s", got)
+	}
+}
+
+func TestPredicateDescriptionOnCTL(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state done))
+		`),
+	)
+	model, err := ExploreModel(runtime)
+	if err != nil {
+		t.Fatalf("ExploreModel returned error: %v", err)
+	}
+
+	formula, err := CompileCTL(`(ag (in-state A done "actor A remains done") "global invariant")`)
+	if err != nil {
+		t.Fatalf("CompileCTL returned error: %v", err)
+	}
+	if !model.HoldsAtInitial(formula) {
+		t.Fatal("expected described CTL predicate to hold")
 	}
 }
 

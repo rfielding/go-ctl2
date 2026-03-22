@@ -682,6 +682,13 @@ func AU(left, right CTLFormula) CTLFormula {
 	return CTLFormula{Op: CTLAU, Left: &left, Right: &right}
 }
 
+func stripOptionalDescription(items []Value, minLen int) []Value {
+	if len(items) > minLen && items[len(items)-1].Kind == KindString {
+		return items[:len(items)-1]
+	}
+	return items
+}
+
 func buildCTL(form Value) (CTLFormula, error) {
 	if !isList(form) || len(form.Items) == 0 {
 		return CTLFormula{}, fmt.Errorf("ctl formula must be a non-empty list")
@@ -693,168 +700,183 @@ func buildCTL(form Value) (CTLFormula, error) {
 	}
 	switch head {
 	case "not", "¬":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("%s expects one operand", head)
 		}
-		inner, err := buildCTL(form.Items[1])
+		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return Not(inner), nil
 	case "and", "∧":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
 		}
-		left, err := buildCTL(form.Items[1])
+		left, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		right, err := buildCTL(form.Items[2])
+		right, err := buildCTL(items[2])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return And(left, right), nil
 	case "or", "∨":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
 		}
-		left, err := buildCTL(form.Items[1])
+		left, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		right, err := buildCTL(form.Items[2])
+		right, err := buildCTL(items[2])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return Or(left, right), nil
 	case "implies", "->", "→":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
 		}
-		left, err := buildCTL(form.Items[1])
+		left, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		right, err := buildCTL(form.Items[2])
+		right, err := buildCTL(items[2])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return Implies(left, right), nil
 	case "ex":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("ex expects one operand")
 		}
-		inner, err := buildCTL(form.Items[1])
+		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return EX(inner), nil
 	case "ax":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("ax expects one operand")
 		}
-		inner, err := buildCTL(form.Items[1])
+		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return AX(inner), nil
 	case "ef":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("ef expects one operand")
 		}
-		inner, err := buildCTL(form.Items[1])
+		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return EF(inner), nil
 	case "af":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("af expects one operand")
 		}
-		inner, err := buildCTL(form.Items[1])
+		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return AF(inner), nil
 	case "eg":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("eg expects one operand")
 		}
-		inner, err := buildCTL(form.Items[1])
+		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return EG(inner), nil
 	case "ag":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return CTLFormula{}, fmt.Errorf("ag expects one operand")
 		}
-		inner, err := buildCTL(form.Items[1])
+		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return AG(inner), nil
 	case "eu":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("eu expects two operands")
 		}
-		left, err := buildCTL(form.Items[1])
+		left, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		right, err := buildCTL(form.Items[2])
+		right, err := buildCTL(items[2])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return EU(left, right), nil
 	case "au":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("au expects two operands")
 		}
-		left, err := buildCTL(form.Items[1])
+		left, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		right, err := buildCTL(form.Items[2])
+		right, err := buildCTL(items[2])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return AU(left, right), nil
 	case "in-state":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("in-state expects actor and state")
 		}
-		actor, err := expectSymbol(form.Items[1], "actor name")
+		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		state, err := expectSymbol(form.Items[2], "state name")
+		state, err := expectSymbol(items[2], "state name")
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return Atom(ActorInState(actor, state)), nil
 	case "data=":
-		if len(form.Items) != 4 {
+		items := stripOptionalDescription(form.Items, 4)
+		if len(items) != 4 {
 			return CTLFormula{}, fmt.Errorf("data= expects actor, key, value")
 		}
-		actor, err := expectSymbol(form.Items[1], "actor name")
+		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		key, err := expectSymbol(form.Items[2], "data key")
+		key, err := expectSymbol(items[2], "data key")
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		return Atom(ActorDataEquals(actor, key, form.Items[3])), nil
+		return Atom(ActorDataEquals(actor, key, items[3])), nil
 	case "mailbox-has":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return CTLFormula{}, fmt.Errorf("mailbox-has expects actor and message")
 		}
-		actor, err := expectSymbol(form.Items[1], "actor name")
+		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		return Atom(MailboxHas(actor, form.Items[2])), nil
+		return Atom(MailboxHas(actor, items[2])), nil
 	default:
 		return CTLFormula{}, fmt.Errorf("unsupported ctl operator %q", head)
 	}
@@ -1315,10 +1337,11 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	}
 	switch head {
 	case "mailbox":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return false, fmt.Errorf("mailbox guard must be (mailbox message)")
 		}
-		want := form.Items[1]
+		want := items[1]
 		if offered != nil && offered.Equal(want) {
 			return true, nil
 		}
@@ -1329,7 +1352,8 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 		}
 		return false, nil
 	case "and", "∧":
-		for _, item := range form.Items[1:] {
+		items := stripOptionalDescription(form.Items, 3)
+		for _, item := range items[1:] {
 			ok, err := rt.evalGuardSpec(item, actor, offered)
 			if err != nil || !ok {
 				return false, err
@@ -1337,7 +1361,8 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 		}
 		return true, nil
 	case "or", "∨":
-		for _, item := range form.Items[1:] {
+		items := stripOptionalDescription(form.Items, 3)
+		for _, item := range items[1:] {
 			ok, err := rt.evalGuardSpec(item, actor, offered)
 			if err != nil {
 				return false, err
@@ -1348,80 +1373,87 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 		}
 		return false, nil
 	case "not", "¬":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return false, fmt.Errorf("%s guard needs one operand", head)
 		}
-		ok, err := rt.evalGuardSpec(form.Items[1], actor, offered)
+		ok, err := rt.evalGuardSpec(items[1], actor, offered)
 		if err != nil {
 			return false, err
 		}
 		return !ok, nil
 	case "implies", "->", "→":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return false, fmt.Errorf("%s guard needs two operands", head)
 		}
-		left, err := rt.evalGuardSpec(form.Items[1], actor, offered)
+		left, err := rt.evalGuardSpec(items[1], actor, offered)
 		if err != nil {
 			return false, err
 		}
 		if !left {
 			return true, nil
 		}
-		return rt.evalGuardSpec(form.Items[2], actor, offered)
+		return rt.evalGuardSpec(items[2], actor, offered)
 	case "dice-range":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return false, fmt.Errorf("dice-range guard must be (dice-range low high)")
 		}
 		if rt.Dice == nil {
 			return true, nil
 		}
-		low, err := valueFloat(form.Items[1])
+		low, err := valueFloat(items[1])
 		if err != nil {
 			return false, err
 		}
-		high, err := valueFloat(form.Items[2])
+		high, err := valueFloat(items[2])
 		if err != nil {
 			return false, err
 		}
 		return rt.DiceValue >= low && rt.DiceValue <= high, nil
 	case "dice<":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return false, fmt.Errorf("dice< guard must be (dice< high)")
 		}
 		if rt.Dice == nil {
 			return true, nil
 		}
-		high, err := valueFloat(form.Items[1])
+		high, err := valueFloat(items[1])
 		if err != nil {
 			return false, err
 		}
 		return rt.DiceValue < high, nil
 	case "dice>=":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return false, fmt.Errorf("dice>= guard must be (dice>= low)")
 		}
 		if rt.Dice == nil {
 			return true, nil
 		}
-		low, err := valueFloat(form.Items[1])
+		low, err := valueFloat(items[1])
 		if err != nil {
 			return false, err
 		}
 		return rt.DiceValue >= low, nil
 	case "data=":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return false, fmt.Errorf("data= guard must be (data= key value)")
 		}
-		key, err := expectSymbol(form.Items[1], "data key")
+		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
 			return false, err
 		}
-		return actor.Data[key].Equal(form.Items[2]), nil
+		return actor.Data[key].Equal(items[2]), nil
 	case "data>":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return false, fmt.Errorf("data> guard must be (data> key value)")
 		}
-		key, err := expectSymbol(form.Items[1], "data key")
+		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
 			return false, err
 		}
@@ -1429,7 +1461,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 		if err != nil {
 			return false, err
 		}
-		want, err := valueInt(form.Items[2])
+		want, err := valueInt(items[2])
 		if err != nil {
 			return false, err
 		}
@@ -1605,10 +1637,11 @@ func compileGuard(form Value) (GuardFunc, error) {
 	}
 	switch head {
 	case "mailbox":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return nil, fmt.Errorf("mailbox guard must be (mailbox message)")
 		}
-		want := form.Items[1]
+		want := items[1]
 		return func(rt *Runtime, actor *Actor) bool {
 			for _, message := range rt.Mailbox(actor.Name) {
 				if message.Equal(want) {
@@ -1618,11 +1651,12 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return false
 		}, nil
 	case "and", "∧":
-		if len(form.Items) < 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) < 3 {
 			return nil, fmt.Errorf("%s guard needs at least two operands", head)
 		}
 		var guards []GuardFunc
-		for _, item := range form.Items[1:] {
+		for _, item := range items[1:] {
 			guard, err := compileGuard(item)
 			if err != nil {
 				return nil, err
@@ -1638,11 +1672,12 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return true
 		}, nil
 	case "or", "∨":
-		if len(form.Items) < 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) < 3 {
 			return nil, fmt.Errorf("%s guard needs at least two operands", head)
 		}
 		var guards []GuardFunc
-		for _, item := range form.Items[1:] {
+		for _, item := range items[1:] {
 			guard, err := compileGuard(item)
 			if err != nil {
 				return nil, err
@@ -1658,10 +1693,11 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return false
 		}, nil
 	case "not", "¬":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return nil, fmt.Errorf("%s guard needs one operand", head)
 		}
-		inner, err := compileGuard(form.Items[1])
+		inner, err := compileGuard(items[1])
 		if err != nil {
 			return nil, err
 		}
@@ -1669,14 +1705,15 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return !inner(rt, actor)
 		}, nil
 	case "implies", "->", "→":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return nil, fmt.Errorf("%s guard needs two operands", head)
 		}
-		left, err := compileGuard(form.Items[1])
+		left, err := compileGuard(items[1])
 		if err != nil {
 			return nil, err
 		}
-		right, err := compileGuard(form.Items[2])
+		right, err := compileGuard(items[2])
 		if err != nil {
 			return nil, err
 		}
@@ -1684,14 +1721,15 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return !left(rt, actor) || right(rt, actor)
 		}, nil
 	case "dice-range":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return nil, fmt.Errorf("dice-range guard must be (dice-range low high)")
 		}
-		low, err := valueFloat(form.Items[1])
+		low, err := valueFloat(items[1])
 		if err != nil {
 			return nil, err
 		}
-		high, err := valueFloat(form.Items[2])
+		high, err := valueFloat(items[2])
 		if err != nil {
 			return nil, err
 		}
@@ -1702,10 +1740,11 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return rt.DiceValue >= low && rt.DiceValue <= high
 		}, nil
 	case "dice<":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return nil, fmt.Errorf("dice< guard must be (dice< high)")
 		}
-		high, err := valueFloat(form.Items[1])
+		high, err := valueFloat(items[1])
 		if err != nil {
 			return nil, err
 		}
@@ -1716,10 +1755,11 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return rt.DiceValue < high
 		}, nil
 	case "dice>=":
-		if len(form.Items) != 2 {
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
 			return nil, fmt.Errorf("dice>= guard must be (dice>= low)")
 		}
-		low, err := valueFloat(form.Items[1])
+		low, err := valueFloat(items[1])
 		if err != nil {
 			return nil, err
 		}
@@ -1730,26 +1770,28 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return rt.DiceValue >= low
 		}, nil
 	case "data=":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return nil, fmt.Errorf("data= guard must be (data= key value)")
 		}
-		key, err := expectSymbol(form.Items[1], "data key")
+		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
 			return nil, err
 		}
-		want := form.Items[2]
+		want := items[2]
 		return func(_ *Runtime, actor *Actor) bool {
 			return actor.Data[key].Equal(want)
 		}, nil
 	case "data>":
-		if len(form.Items) != 3 {
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
 			return nil, fmt.Errorf("data> guard must be (data> key value)")
 		}
-		key, err := expectSymbol(form.Items[1], "data key")
+		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
 			return nil, err
 		}
-		want, err := valueInt(form.Items[2])
+		want, err := valueInt(items[2])
 		if err != nil {
 			return nil, err
 		}
