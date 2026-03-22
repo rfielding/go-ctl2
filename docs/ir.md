@@ -1,10 +1,10 @@
 % Actor IR, CTL, and Diagram Strategy
 % go-ctl2
-% 2026-03-21
+% 2026-03-22
 
 # Goal
 
-This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, and the documentation/diagram pipeline. The target user is someone who can inspect diagrams and predicates, but does not want to learn a large formal language before getting value.
+This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, the metric/event pipeline, and the documentation build. The target user is someone who can inspect diagrams and predicates, but does not want to learn a large formal language before getting value.
 
 The central idea is:
 
@@ -15,8 +15,49 @@ The central idea is:
   - CTL checking
   - Mermaid generation
   - SVG diagrams
+  - event logs and plots
 
 The design goal is not to infer hidden control flow from simulation alone. Instead, transitions declare their possible next control states explicitly, and runtime execution validates that the declared next-state set is not wrong.
+
+# Audience
+
+This repository is for readers who want the benefits of temporal logic and executable models without first committing to a large bespoke specification language.
+
+The intended workflow is:
+
+1. describe a requirement in actor/message terms
+2. let an LLM draft the Lisp model
+3. inspect the generated control states, transitions, predicates, and diagrams
+4. run execution, exploration, and CTL checks on the same artifact
+
+The important constraint is inspectability. The user should be able to reject a bad model by reading the states, guards, transitions, predicates, and generated diagrams.
+
+# Design Principles
+
+- explicit control states instead of implicit graph inference
+- actor-local ownership of mutable state
+- communication as a readiness condition, not as hidden side effect
+- one semantic source feeding execution, proof, plots, and diagrams
+- a small enough core language that the generated output is reviewable line by line
+
+# Terminology
+
+The document uses the following terms consistently:
+
+- actor
+  an independently scheduled state-owning component with one mailbox
+- state
+  a named control location inside an actor
+- transition
+  a guarded atomic step with an explicit `(next ...)` control contract
+- mailbox
+  the actor-local queue or rendezvous endpoint through which messages arrive
+- runtime
+  the current collection of actors, local data, mailboxes, and scheduler context
+- explored model
+  the graph artifact produced by running the runtime semantics over reachable states
+- CTL formula
+  a temporal requirement evaluated over the induced transition system
 
 # Core Model
 
@@ -59,6 +100,19 @@ Example:
 ```
 
 The `(next ...)` declaration is the control-flow contract used for graph construction and CTL. Runtime execution validates that the post-step control state is one of the declared next states.
+
+## Why Explicit Next States Matter
+
+The central compromise in this repository is that transitions declare the set of possible successor control states directly.
+
+That buys several things immediately:
+
+- CTL has a clear successor relation
+- control-state diagrams can be rendered without simulation
+- sequence and communication diagrams can be generated from the same declared model
+- runtime execution can detect mismatches when an actual step lands outside the declared set
+
+It does not remove the need for correct modeling. A wrong `(next ...)` declaration can still make the proof layer wrong. The point is that the correctness obligation becomes visible and reviewable.
 
 # Scheduling Semantics
 
@@ -111,6 +165,16 @@ The intended normalized form is:
 
 Because communication readiness is checked before execution, a `send` may appear textually in the middle of an action block without creating partial updates.
 
+## What Counts As A State Change
+
+This repository treats a transition firing as a state change even when the actor remains in the same named control state. In other words:
+
+- changing a local variable is a state change
+- consuming or sending a message is a state change
+- staying in the same named state after the step does not mean “nothing happened”
+
+The graph used by execution and model checking is therefore over full runtime states, while the declared control graph remains the human-facing skeleton.
+
 # Control Flow
 
 The intended structured control tools are:
@@ -136,7 +200,8 @@ This means CTL does not need to wait for simulation to discover the control grap
 
 The implementation currently supports:
 
-- `not`, `and`, `or`
+- `¬`, `∧`, `∨`, `→`
+- `not`, `and`, `or`, `implies`
 - `ex`, `ax`
 - `ef`, `af`
 - `eg`, `ag`
@@ -147,6 +212,30 @@ Atomic predicates currently include:
 - `(in-state A done)`
 - `(data= A key value)`
 - `(mailbox-has A msg)`
+
+## What CTL Is Proving Here
+
+At the current stage, CTL is proving properties over the repository’s induced model, not solving theorem-proving problems over arbitrary infinite mathematics.
+
+That means:
+
+- if the reachable state space is finite and fully explored, the model-checking result is exact for that model
+- if the model is bounded or abstracted, the result applies to that abstraction
+- if the declared `(next ...)` relation is wrong, the result is only as good as that declaration
+
+This is still useful. The tool is intended to make control flow, messaging, and temporal requirements inspectable enough that a human can review the generated model rather than trusting a hidden formalization.
+
+# Event Log And Metrics
+
+Transitions, sends, and receives are recorded as structured runtime events. This is the base layer for line graphs and performance-style metrics.
+
+At the current stage, the runtime can already derive:
+
+- cumulative event counts
+- filtered counts, for example “sends only to Server”
+- simple rate series over scheduler steps
+
+This is the beginning of the metrics side of the tool. The goal is that message rates, queue growth, latency, throughput, and retry behavior should come from the event log rather than from ad hoc parsing of trace strings.
 
 # Built-ins
 
@@ -176,6 +265,18 @@ Planned built-ins:
 - byte concatenation and parsing helpers
 - comparison helpers for protocol checks
 
+## Protocol Modeling Direction
+
+The current crypto built-ins are intentionally raw. The purpose of the built-ins is not to provide production-safe cryptographic APIs. The purpose is to let protocol examples express byte-level and arithmetic-level steps without bloating the core language.
+
+The long-term direction is to support examples such as:
+
+- challenge-response protocols
+- request/acknowledgement handshakes
+- key transport and key confirmation flows
+- message authentication checks
+- timeout and retry logic
+
 # Why This IR Is Sensible
 
 The IR is sensible if the following remain true:
@@ -187,13 +288,34 @@ The IR is sensible if the following remain true:
 - actor-local state is only mutated by the actor itself
 - communication readiness gates transition selection
 - CTL consumes the same declared control graph that diagrams do
+- event plots are derived from the same runtime semantics
 
 This gives a coherent story for:
 
 - execution
 - proof
+- metric plots
 - diagram generation
 - LLM-assisted authoring
+
+## Relation To Other Formalisms
+
+This project is not trying to replicate TLA+, CSP, PRISM, or Erlang exactly.
+
+Instead, it borrows selected strengths:
+
+- from actor systems:
+  mailbox ownership and explicit message passing
+- from Erlang:
+  receive-driven control and guarded mailbox inspection
+- from ASM thinking:
+  explicit state updates and executable semantic steps
+- from FSM/CFG thinking:
+  named control locations and declared successor structure
+- from model checking:
+  CTL over a precise transition relation
+
+The value is in the combination: a readable actor/message IR that an LLM can draft and a human can still audit.
 
 # Reverse Mermaid Direction
 
@@ -210,6 +332,25 @@ This allows:
 - state machine diagrams without simulation
 - sequence diagrams without simulation
 - the same input feeding both proof and presentation
+
+# Repository Layout
+
+The current repository is intentionally small. The most important files are:
+
+- `main.go`
+  the reader, runtime, CTL implementation, event log, and serialization code
+- `main_test.go`
+  executable examples that pin down the semantics
+- `docs/ir.md`
+  this document
+- `docs/mermaid/`
+  Mermaid sources rendered into SVG for publication
+- `docs/generated/`
+  generated diagrams and plots
+- `scripts/`
+  helper scripts used by the documentation pipeline
+
+The tests are not secondary. They are the clearest executable specification currently in the repository.
 
 # Example Model
 
@@ -263,18 +404,6 @@ Representative CTL requirements:
 - `(af (data= Server received '(message (type ping))))`
 - `(ag (¬ (mailbox-has Relay '(message (type ping)))))`
 
-# Message Plot
-
-Because transitions, sends, and receives are now logged as structured events, the same example can also drive simple XY plots. This is the beginning of the metrics side of the tool: message counts, throughput, queue growth, and related time-series views should come from the event log rather than from ad hoc parsing.
-
-![Message Counts By Step](../generated/message_xyplot.svg)
-
-```lisp
-(ef (in-state Server accepted))
-(af (data= Server received '(message (type ping))))
-(ag (not (mailbox-has Relay '(message (type ping)))))
-```
-
 The first two are intended to hold for the example model.
 
 The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where `Relay` is holding a `ping` message before it forwards it.
@@ -285,19 +414,63 @@ The operational intent is:
 - intermediaries only accept messages of type `ping`
 - if an intermediary does not have such a message available, it remains in its waiting loop until one arrives
 
+## Walkthrough Of The Example
+
+The example should be read as three small control machines composed by message passing.
+
+`Client`
+
+- starts in `start`
+- sends one `ping`-typed message to `Relay`
+- becomes `done`
+
+`Relay`
+
+- waits in `wait`
+- if a `ping`-typed message is present, it consumes it, forwards it, and becomes `forwarded`
+- otherwise it stays in its waiting loop
+
+`Server`
+
+- waits in `idle`
+- if a `ping`-typed message is present, it consumes it, records it, and becomes `accepted`
+- otherwise it stays in `idle`
+
+This example is deliberately small, but it is enough to show:
+
+- explicit control states
+- explicit next-state declarations
+- queued communication
+- CTL requirements over the same model
+- generated state and sequence diagrams
+- generated metric plots from runtime events
+
+# Message Plot
+
+Because transitions, sends, and receives are now logged as structured events, the same example can also drive simple XY plots.
+
+![Message Counts By Step](../generated/message_xyplot.svg)
+
+The present plot is intentionally simple. It is showing the kind of visualization the structured event log can support, not claiming to be the final metrics UI.
+
+Natural follow-on plots include:
+
+- sends per step
+- receives per step
+- moving-average throughput
+- queue length by actor
+- service latency between matching send and receive events
+- timeout and retry counters
+
 # Mermaid Artifacts
 
 The build expects Mermaid sources under `docs/mermaid/` and renders SVGs into `docs/generated/`.
 
-Planned diagram set:
-
-- actor control-state graph
-- global communication overview
-- sequence diagram for a concrete protocol trace
-
 Example includes:
 
 {{DIAGRAM_SECTIONS}}
+
+The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure.
 
 # Build
 
@@ -306,6 +479,7 @@ The `Makefile` provides:
 - `make test`
 - `make docs`
 - `make diagrams`
+- `make serve-docs`
 - `make clean`
 
 Current assumptions:
@@ -314,3 +488,30 @@ Current assumptions:
 - `mmdc` is installed for Mermaid-to-SVG generation
 
 The document and Mermaid build are intentionally kept separate so the same generated Mermaid source can be inspected directly.
+
+# Serving The HTML
+
+After running `make docs`, the generated document lives at:
+
+- `docs/build/ir.html`
+
+For local review, the repository also provides a simple static server target:
+
+- `make serve-docs`
+
+That serves `docs/build/` over a local HTTP server so the generated HTML, SVG diagrams, and plots can be reviewed together in a browser.
+
+# Current Limits
+
+This repository is still a skeleton. Important things are intentionally incomplete:
+
+- the example plots are generated from a fixed example, not yet from arbitrary models
+- the Mermaid generation is still mostly document-oriented rather than language-integrated
+- CTL formulas are present, but there is not yet a full proposition language over every part of runtime state
+- the documentation explains the intended semantics more completely than the current implementation exposes through tooling
+
+That is acceptable for this stage. The repository is already good enough to show the core thesis:
+
+- actor/message models can be generated in a compact Lisp
+- the same artifact can feed execution, diagrams, CTL checks, and simple metric plots
+- the result is inspectable enough to review rather than merely trust

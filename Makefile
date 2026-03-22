@@ -19,7 +19,7 @@ MERMAID_SRC := $(wildcard $(MERMAID_DIR)/*.mmd)
 MERMAID_SVG := $(patsubst $(MERMAID_DIR)/%.mmd,$(GENERATED_DIR)/%.svg,$(MERMAID_SRC))
 DOC_ASSETS := $(MERMAID_SVG) $(MESSAGE_XYPLOT)
 
-.PHONY: all docs diagrams test clean
+.PHONY: all docs diagrams test serve-docs clean
 
 all: test docs
 
@@ -66,3 +66,6 @@ $(GENERATED_DIR):
 
 clean:
 	rm -rf $(BUILD_DIR) $(GENERATED_DIR)
+
+serve-docs: docs
+	cd $(BUILD_DIR) && python3 -m http.server 8000

@@ -5,7 +5,7 @@
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
   <meta name="author" content="go-ctl2" />
-  <meta name="dcterms.date" content="2026-03-21" />
+  <meta name="dcterms.date" content="2026-03-22" />
   <title>Actor IR, CTL, and Diagram Strategy</title>
   <style>
     code{white-space: pre-wrap;}
@@ -88,16 +88,20 @@
 <header id="title-block-header">
 <h1 class="title">Actor IR, CTL, and Diagram Strategy</h1>
 <p class="author">go-ctl2</p>
-<p class="date">2026-03-21</p>
+<p class="date">2026-03-22</p>
 </header>
 <nav id="TOC" role="doc-toc">
 <ul>
 <li><a href="#goal">Goal</a></li>
+<li><a href="#audience">Audience</a></li>
+<li><a href="#design-principles">Design Principles</a></li>
+<li><a href="#terminology">Terminology</a></li>
 <li><a href="#core-model">Core Model</a>
 <ul>
 <li><a href="#actor">Actor</a></li>
 <li><a href="#state">State</a></li>
 <li><a href="#transition">Transition</a></li>
+<li><a href="#why-explicit-next-states-matter">Why Explicit Next States Matter</a></li>
 </ul></li>
 <li><a href="#scheduling-semantics">Scheduling Semantics</a></li>
 <li><a href="#communication-semantics">Communication Semantics</a>
@@ -105,16 +109,31 @@
 <li><a href="#buffered-channels">Buffered Channels</a></li>
 <li><a href="#zero-capacity-channels">Zero-Capacity Channels</a></li>
 </ul></li>
-<li><a href="#atomic-blocks">Atomic Blocks</a></li>
+<li><a href="#atomic-blocks">Atomic Blocks</a>
+<ul>
+<li><a href="#what-counts-as-a-state-change">What Counts As A State Change</a></li>
+</ul></li>
 <li><a href="#control-flow">Control Flow</a></li>
 <li><a href="#ctl-strategy">CTL Strategy</a>
 <ul>
 <li><a href="#present-operators">Present Operators</a></li>
+<li><a href="#what-ctl-is-proving-here">What CTL Is Proving Here</a></li>
 </ul></li>
-<li><a href="#built-ins">Built-ins</a></li>
-<li><a href="#why-this-ir-is-sensible">Why This IR Is Sensible</a></li>
+<li><a href="#event-log-and-metrics">Event Log And Metrics</a></li>
+<li><a href="#built-ins">Built-ins</a>
+<ul>
+<li><a href="#protocol-modeling-direction">Protocol Modeling Direction</a></li>
+</ul></li>
+<li><a href="#why-this-ir-is-sensible">Why This IR Is Sensible</a>
+<ul>
+<li><a href="#relation-to-other-formalisms">Relation To Other Formalisms</a></li>
+</ul></li>
 <li><a href="#reverse-mermaid-direction">Reverse Mermaid Direction</a></li>
-<li><a href="#example-model">Example Model</a></li>
+<li><a href="#repository-layout">Repository Layout</a></li>
+<li><a href="#example-model">Example Model</a>
+<ul>
+<li><a href="#walkthrough-of-the-example">Walkthrough Of The Example</a></li>
+</ul></li>
 <li><a href="#message-plot">Message Plot</a></li>
 <li><a href="#mermaid-artifacts">Mermaid Artifacts</a>
 <ul>
@@ -122,10 +141,12 @@
 <li><a href="#a-to-b-state">A To B State</a></li>
 </ul></li>
 <li><a href="#build">Build</a></li>
+<li><a href="#serving-the-html">Serving The HTML</a></li>
+<li><a href="#current-limits">Current Limits</a></li>
 </ul>
 </nav>
 <h1 id="goal">Goal</h1>
-<p>This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, and the documentation/diagram pipeline. The target user is someone who can inspect diagrams and predicates, but does not want to learn a large formal language before getting value.</p>
+<p>This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, the metric/event pipeline, and the documentation build. The target user is someone who can inspect diagrams and predicates, but does not want to learn a large formal language before getting value.</p>
 <p>The central idea is:</p>
 <ul>
 <li>an LLM emits actor definitions in Lisp</li>
@@ -136,9 +157,39 @@
 <li>CTL checking</li>
 <li>Mermaid generation</li>
 <li>SVG diagrams</li>
+<li>event logs and plots</li>
 </ul></li>
 </ul>
 <p>The design goal is not to infer hidden control flow from simulation alone. Instead, transitions declare their possible next control states explicitly, and runtime execution validates that the declared next-state set is not wrong.</p>
+<h1 id="audience">Audience</h1>
+<p>This repository is for readers who want the benefits of temporal logic and executable models without first committing to a large bespoke specification language.</p>
+<p>The intended workflow is:</p>
+<ol type="1">
+<li>describe a requirement in actor/message terms</li>
+<li>let an LLM draft the Lisp model</li>
+<li>inspect the generated control states, transitions, predicates, and diagrams</li>
+<li>run execution, exploration, and CTL checks on the same artifact</li>
+</ol>
+<p>The important constraint is inspectability. The user should be able to reject a bad model by reading the states, guards, transitions, predicates, and generated diagrams.</p>
+<h1 id="design-principles">Design Principles</h1>
+<ul>
+<li>explicit control states instead of implicit graph inference</li>
+<li>actor-local ownership of mutable state</li>
+<li>communication as a readiness condition, not as hidden side effect</li>
+<li>one semantic source feeding execution, proof, plots, and diagrams</li>
+<li>a small enough core language that the generated output is reviewable line by line</li>
+</ul>
+<h1 id="terminology">Terminology</h1>
+<p>The document uses the following terms consistently:</p>
+<ul>
+<li>actor an independently scheduled state-owning component with one mailbox</li>
+<li>state a named control location inside an actor</li>
+<li>transition a guarded atomic step with an explicit <code>(next ...)</code> control contract</li>
+<li>mailbox the actor-local queue or rendezvous endpoint through which messages arrive</li>
+<li>runtime the current collection of actors, local data, mailboxes, and scheduler context</li>
+<li>explored model the graph artifact produced by running the runtime semantics over reachable states</li>
+<li>CTL formula a temporal requirement evaluated over the induced transition system</li>
+</ul>
 <h1 id="core-model">Core Model</h1>
 <h2 id="actor">Actor</h2>
 <p>An actor has:</p>
@@ -170,6 +221,16 @@
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  (recv ping)</span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  (send C ping))</span></code></pre></div>
 <p>The <code>(next ...)</code> declaration is the control-flow contract used for graph construction and CTL. Runtime execution validates that the post-step control state is one of the declared next states.</p>
+<h2 id="why-explicit-next-states-matter">Why Explicit Next States Matter</h2>
+<p>The central compromise in this repository is that transitions declare the set of possible successor control states directly.</p>
+<p>That buys several things immediately:</p>
+<ul>
+<li>CTL has a clear successor relation</li>
+<li>control-state diagrams can be rendered without simulation</li>
+<li>sequence and communication diagrams can be generated from the same declared model</li>
+<li>runtime execution can detect mismatches when an actual step lands outside the declared set</li>
+</ul>
+<p>It does not remove the need for correct modeling. A wrong <code>(next ...)</code> declaration can still make the proof layer wrong. The point is that the correctness obligation becomes visible and reviewable.</p>
 <h1 id="scheduling-semantics">Scheduling Semantics</h1>
 <p>The scheduler is single-threaded but concurrent in effect. At each step:</p>
 <ol type="1">
@@ -211,6 +272,14 @@
 <li><code>become</code> / next-state update</li>
 </ul>
 <p>Because communication readiness is checked before execution, a <code>send</code> may appear textually in the middle of an action block without creating partial updates.</p>
+<h2 id="what-counts-as-a-state-change">What Counts As A State Change</h2>
+<p>This repository treats a transition firing as a state change even when the actor remains in the same named control state. In other words:</p>
+<ul>
+<li>changing a local variable is a state change</li>
+<li>consuming or sending a message is a state change</li>
+<li>staying in the same named state after the step does not mean “nothing happened”</li>
+</ul>
+<p>The graph used by execution and model checking is therefore over full runtime states, while the declared control graph remains the human-facing skeleton.</p>
 <h1 id="control-flow">Control Flow</h1>
 <p>The intended structured control tools are:</p>
 <ul>
@@ -230,7 +299,8 @@
 <h2 id="present-operators">Present Operators</h2>
 <p>The implementation currently supports:</p>
 <ul>
-<li><code>not</code>, <code>and</code>, <code>or</code></li>
+<li><code>¬</code>, <code>∧</code>, <code>∨</code>, <code>→</code></li>
+<li><code>not</code>, <code>and</code>, <code>or</code>, <code>implies</code></li>
 <li><code>ex</code>, <code>ax</code></li>
 <li><code>ef</code>, <code>af</code></li>
 <li><code>eg</code>, <code>ag</code></li>
@@ -242,6 +312,24 @@
 <li><code>(data= A key value)</code></li>
 <li><code>(mailbox-has A msg)</code></li>
 </ul>
+<h2 id="what-ctl-is-proving-here">What CTL Is Proving Here</h2>
+<p>At the current stage, CTL is proving properties over the repository’s induced model, not solving theorem-proving problems over arbitrary infinite mathematics.</p>
+<p>That means:</p>
+<ul>
+<li>if the reachable state space is finite and fully explored, the model-checking result is exact for that model</li>
+<li>if the model is bounded or abstracted, the result applies to that abstraction</li>
+<li>if the declared <code>(next ...)</code> relation is wrong, the result is only as good as that declaration</li>
+</ul>
+<p>This is still useful. The tool is intended to make control flow, messaging, and temporal requirements inspectable enough that a human can review the generated model rather than trusting a hidden formalization.</p>
+<h1 id="event-log-and-metrics">Event Log And Metrics</h1>
+<p>Transitions, sends, and receives are recorded as structured runtime events. This is the base layer for line graphs and performance-style metrics.</p>
+<p>At the current stage, the runtime can already derive:</p>
+<ul>
+<li>cumulative event counts</li>
+<li>filtered counts, for example “sends only to Server”</li>
+<li>simple rate series over scheduler steps</li>
+</ul>
+<p>This is the beginning of the metrics side of the tool. The goal is that message rates, queue growth, latency, throughput, and retry behavior should come from the event log rather than from ad hoc parsing of trace strings.</p>
 <h1 id="built-ins">Built-ins</h1>
 <p>The language needs protocol-oriented built-ins so examples like authentication and key exchange do not require embedding large arithmetic sublanguages.</p>
 <p>Current built-ins:</p>
@@ -271,6 +359,16 @@
 <li>byte concatenation and parsing helpers</li>
 <li>comparison helpers for protocol checks</li>
 </ul>
+<h2 id="protocol-modeling-direction">Protocol Modeling Direction</h2>
+<p>The current crypto built-ins are intentionally raw. The purpose of the built-ins is not to provide production-safe cryptographic APIs. The purpose is to let protocol examples express byte-level and arithmetic-level steps without bloating the core language.</p>
+<p>The long-term direction is to support examples such as:</p>
+<ul>
+<li>challenge-response protocols</li>
+<li>request/acknowledgement handshakes</li>
+<li>key transport and key confirmation flows</li>
+<li>message authentication checks</li>
+<li>timeout and retry logic</li>
+</ul>
 <h1 id="why-this-ir-is-sensible">Why This IR Is Sensible</h1>
 <p>The IR is sensible if the following remain true:</p>
 <ul>
@@ -281,14 +379,27 @@
 <li>actor-local state is only mutated by the actor itself</li>
 <li>communication readiness gates transition selection</li>
 <li>CTL consumes the same declared control graph that diagrams do</li>
+<li>event plots are derived from the same runtime semantics</li>
 </ul>
 <p>This gives a coherent story for:</p>
 <ul>
 <li>execution</li>
 <li>proof</li>
+<li>metric plots</li>
 <li>diagram generation</li>
 <li>LLM-assisted authoring</li>
 </ul>
+<h2 id="relation-to-other-formalisms">Relation To Other Formalisms</h2>
+<p>This project is not trying to replicate TLA+, CSP, PRISM, or Erlang exactly.</p>
+<p>Instead, it borrows selected strengths:</p>
+<ul>
+<li>from actor systems: mailbox ownership and explicit message passing</li>
+<li>from Erlang: receive-driven control and guarded mailbox inspection</li>
+<li>from ASM thinking: explicit state updates and executable semantic steps</li>
+<li>from FSM/CFG thinking: named control locations and declared successor structure</li>
+<li>from model checking: CTL over a precise transition relation</li>
+</ul>
+<p>The value is in the combination: a readable actor/message IR that an LLM can draft and a human can still audit.</p>
 <h1 id="reverse-mermaid-direction">Reverse Mermaid Direction</h1>
 <p>The intended future workflow is:</p>
 <ol type="1">
@@ -304,6 +415,17 @@
 <li>sequence diagrams without simulation</li>
 <li>the same input feeding both proof and presentation</li>
 </ul>
+<h1 id="repository-layout">Repository Layout</h1>
+<p>The current repository is intentionally small. The most important files are:</p>
+<ul>
+<li><code>main.go</code> the reader, runtime, CTL implementation, event log, and serialization code</li>
+<li><code>main_test.go</code> executable examples that pin down the semantics</li>
+<li><code>docs/ir.md</code> this document</li>
+<li><code>docs/mermaid/</code> Mermaid sources rendered into SVG for publication</li>
+<li><code>docs/generated/</code> generated diagrams and plots</li>
+<li><code>scripts/</code> helper scripts used by the documentation pipeline</li>
+</ul>
+<p>The tests are not secondary. They are the clearest executable specification currently in the repository.</p>
 <h1 id="example-model">Example Model</h1>
 <p>The document example should not be a single actor in isolation. The intended workflow is to describe a set of interacting actors, generate diagrams from that same input, and check temporal requirements over the same declared control graph.</p>
 <p>This small message-chain example is intentionally simple, but it already exercises:</p>
@@ -351,14 +473,6 @@
 <li><code>(af (data= Server received '(message (type ping))))</code></li>
 <li><code>(ag (¬ (mailbox-has Relay '(message (type ping)))))</code></li>
 </ul>
-<h1 id="message-plot">Message Plot</h1>
-<p>Because transitions, sends, and receives are now logged as structured events, the same example can also drive simple XY plots. This is the beginning of the metrics side of the tool: message counts, throughput, queue growth, and related time-series views should come from the event log rather than from ad hoc parsing.</p>
-<figure>
-<img src="../generated/message_xyplot.svg" alt="Message Counts By Step" /><figcaption aria-hidden="true">Message Counts By Step</figcaption>
-</figure>
-<div class="sourceCode" id="cb3"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(ef (in-state Server accepted))</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>(af (data= Server received &#39;(message (<span class="kw">type</span> ping))))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>(ag (<span class="kw">not</span> (mailbox-has Relay &#39;(message (<span class="kw">type</span> ping)))))</span></code></pre></div>
 <p>The first two are intended to hold for the example model.</p>
 <p>The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where <code>Relay</code> is holding a <code>ping</code> message before it forwards it.</p>
 <p>The operational intent is:</p>
@@ -367,14 +481,52 @@
 <li>intermediaries only accept messages of type <code>ping</code></li>
 <li>if an intermediary does not have such a message available, it remains in its waiting loop until one arrives</li>
 </ul>
+<h2 id="walkthrough-of-the-example">Walkthrough Of The Example</h2>
+<p>The example should be read as three small control machines composed by message passing.</p>
+<p><code>Client</code></p>
+<ul>
+<li>starts in <code>start</code></li>
+<li>sends one <code>ping</code>-typed message to <code>Relay</code></li>
+<li>becomes <code>done</code></li>
+</ul>
+<p><code>Relay</code></p>
+<ul>
+<li>waits in <code>wait</code></li>
+<li>if a <code>ping</code>-typed message is present, it consumes it, forwards it, and becomes <code>forwarded</code></li>
+<li>otherwise it stays in its waiting loop</li>
+</ul>
+<p><code>Server</code></p>
+<ul>
+<li>waits in <code>idle</code></li>
+<li>if a <code>ping</code>-typed message is present, it consumes it, records it, and becomes <code>accepted</code></li>
+<li>otherwise it stays in <code>idle</code></li>
+</ul>
+<p>This example is deliberately small, but it is enough to show:</p>
+<ul>
+<li>explicit control states</li>
+<li>explicit next-state declarations</li>
+<li>queued communication</li>
+<li>CTL requirements over the same model</li>
+<li>generated state and sequence diagrams</li>
+<li>generated metric plots from runtime events</li>
+</ul>
+<h1 id="message-plot">Message Plot</h1>
+<p>Because transitions, sends, and receives are now logged as structured events, the same example can also drive simple XY plots.</p>
+<figure>
+<img src="../generated/message_xyplot.svg" alt="Message Counts By Step" /><figcaption aria-hidden="true">Message Counts By Step</figcaption>
+</figure>
+<p>The present plot is intentionally simple. It is showing the kind of visualization the structured event log can support, not claiming to be the final metrics UI.</p>
+<p>Natural follow-on plots include:</p>
+<ul>
+<li>sends per step</li>
+<li>receives per step</li>
+<li>moving-average throughput</li>
+<li>queue length by actor</li>
+<li>service latency between matching send and receive events</li>
+<li>timeout and retry counters</li>
+</ul>
 <h1 id="mermaid-artifacts">Mermaid Artifacts</h1>
 <p>The build expects Mermaid sources under <code>docs/mermaid/</code> and renders SVGs into <code>docs/generated/</code>.</p>
-<p>Planned diagram set:</p>
-<ul>
-<li>actor control-state graph</li>
-<li>global communication overview</li>
-<li>sequence diagram for a concrete protocol trace</li>
-</ul>
 <p>Example includes:</p>
 <h3 id="a-to-b-sequence">A To B Sequence</h3>
 <figure>
@@ -424,12 +576,14 @@ flowchart TD
     R_forwarded -. send ping .-&gt; S_idle
 </code></pre>
 </details>
+<p>The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure.</p>
 <h1 id="build">Build</h1>
 <p>The <code>Makefile</code> provides:</p>
 <ul>
 <li><code>make test</code></li>
 <li><code>make docs</code></li>
 <li><code>make diagrams</code></li>
+<li><code>make serve-docs</code></li>
 <li><code>make clean</code></li>
 </ul>
 <p>Current assumptions:</p>
@@ -438,5 +592,29 @@ flowchart TD
 <li><code>mmdc</code> is installed for Mermaid-to-SVG generation</li>
 </ul>
 <p>The document and Mermaid build are intentionally kept separate so the same generated Mermaid source can be inspected directly.</p>
+<h1 id="serving-the-html">Serving The HTML</h1>
+<p>After running <code>make docs</code>, the generated document lives at:</p>
+<ul>
+<li><code>docs/build/ir.html</code></li>
+</ul>
+<p>For local review, the repository also provides a simple static server target:</p>
+<ul>
+<li><code>make serve-docs</code></li>
+</ul>
+<p>That serves <code>docs/build/</code> over a local HTTP server so the generated HTML, SVG diagrams, and plots can be reviewed together in a browser.</p>
+<h1 id="current-limits">Current Limits</h1>
+<p>This repository is still a skeleton. Important things are intentionally incomplete:</p>
+<ul>
+<li>the example plots are generated from a fixed example, not yet from arbitrary models</li>
+<li>the Mermaid generation is still mostly document-oriented rather than language-integrated</li>
+<li>CTL formulas are present, but there is not yet a full proposition language over every part of runtime state</li>
+<li>the documentation explains the intended semantics more completely than the current implementation exposes through tooling</li>
+</ul>
+<p>That is acceptable for this stage. The repository is already good enough to show the core thesis:</p>
+<ul>
+<li>actor/message models can be generated in a compact Lisp</li>
+<li>the same artifact can feed execution, diagrams, CTL checks, and simple metric plots</li>
+<li>the result is inspectable enough to review rather than merely trust</li>
+</ul>
 </body>
 </html>
