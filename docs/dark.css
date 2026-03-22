@@ -1,0 +1,84 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f1115;
+  --panel: #151922;
+  --text: #e7edf5;
+  --muted: #a9b7c8;
+  --link: #8bc3ff;
+  --border: #2a3140;
+  --code: #11161f;
+}
+
+html {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Iosevka Web", "IBM Plex Sans", "Segoe UI", sans-serif;
+  line-height: 1.55;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 58rem;
+  padding: 2rem 1.25rem 4rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a {
+  color: var(--link);
+}
+
+h1, h2, h3, h4 {
+  color: var(--text);
+  line-height: 1.2;
+}
+
+code, pre {
+  font-family: "Iosevka Web", "IBM Plex Mono", "SFMono-Regular", monospace;
+}
+
+code {
+  background: var(--code);
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.25rem;
+}
+
+pre {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+}
+
+th {
+  background: var(--panel);
+}
+
+blockquote {
+  margin: 1rem 0;
+  padding: 0.25rem 1rem;
+  border-left: 4px solid var(--border);
+  color: var(--muted);
+}
+
+img, svg {
+  max-width: 100%;
+  height: auto;
+  background: transparent;
+}

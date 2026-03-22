@@ -1,4 +1,6 @@
 sequenceDiagram
-    participant A
-    participant B
-    A->>B: ping
+    participant Client
+    participant Relay
+    participant Server
+    Client-->>Relay: message(type=ping)
+    Relay-->>Server: message(type=ping)

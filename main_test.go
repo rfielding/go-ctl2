@@ -673,6 +673,35 @@ func TestBuiltinMD5AndRawRSA(t *testing.T) {
 	}
 }
 
+func TestBuiltinCryptoRandom(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor Crypto
+				(state start
+					(on true
+						(next done)
+						(cryptorandom nonce 8)
+						(become done)))
+				(state done))
+		`),
+	)
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected cryptorandom transition to apply")
+	}
+	got := runtime.Actors[0].Data["nonce"]
+	if got.Kind != KindString {
+		t.Fatalf("expected nonce to be a string, got kind %d", got.Kind)
+	}
+	if len(got.Text) != 16 {
+		t.Fatalf("expected 8 random bytes as 16 hex chars, got %q", got.Text)
+	}
+}
+
 func TestMM1QueueBranching(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`

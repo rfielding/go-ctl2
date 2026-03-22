@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/md5"
+	crand "crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -1628,6 +1629,29 @@ func compileAction(form Value) (ActionFunc, error) {
 			}
 			result := new(big.Int).Exp(m, e, n)
 			actor.Data[out] = Number(result.String())
+			return nil
+		}, nil
+	case "cryptorandom":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("cryptorandom must be (cryptorandom out bytes)")
+		}
+		out, err := expectSymbol(form.Items[1], "cryptorandom out key")
+		if err != nil {
+			return nil, err
+		}
+		nbytes, err := valueInt(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		if nbytes < 0 {
+			return nil, fmt.Errorf("cryptorandom byte count must be non-negative")
+		}
+		return func(_ *Runtime, actor *Actor) error {
+			buf := make([]byte, nbytes)
+			if _, err := crand.Read(buf); err != nil {
+				return err
+			}
+			actor.Data[out] = String(hex.EncodeToString(buf))
 			return nil
 		}, nil
 	default:

@@ -1,4 +1,20 @@
-stateDiagram-v2
-    [*] --> start
-    start --> done: send B ping
-    done --> [*]
+flowchart TD
+    subgraph Client
+        direction TB
+        C_start([start]) -->|"sent = ping<br/>become done"| C_done([done])
+    end
+
+    subgraph Relay
+        direction TB
+        R_wait([wait]) -->|"received = ping<br/>forwarded = ping<br/>become forwarded"| R_forwarded([forwarded])
+        R_wait -->|"wrong type or no ping<br/>become wait"| R_wait
+    end
+
+    subgraph Server
+        direction TB
+        S_idle([idle]) -->|"received = ping<br/>become accepted"| S_accepted([accepted])
+        S_idle -->|"wrong type or no ping<br/>become idle"| S_idle
+    end
+
+    C_done -. send ping .-> R_wait
+    R_forwarded -. send ping .-> S_idle
