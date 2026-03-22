@@ -13,9 +13,11 @@ DOC_SRC := $(DOCS_DIR)/ir.md
 DOC_BUILD_SRC := $(BUILD_DIR)/ir.generated.md
 HTML_OUT := $(BUILD_DIR)/ir.html
 DIAGRAM_SNIPPETS := $(GENERATED_DIR)/diagram_sections.md
+MESSAGE_XYPLOT := $(GENERATED_DIR)/message_xyplot.svg
 
 MERMAID_SRC := $(wildcard $(MERMAID_DIR)/*.mmd)
 MERMAID_SVG := $(patsubst $(MERMAID_DIR)/%.mmd,$(GENERATED_DIR)/%.svg,$(MERMAID_SRC))
+DOC_ASSETS := $(MERMAID_SVG) $(MESSAGE_XYPLOT)
 
 .PHONY: all docs diagrams test clean
 
@@ -26,9 +28,9 @@ test:
 
 docs: diagrams $(HTML_OUT)
 
-diagrams: $(MERMAID_SVG)
+diagrams: $(DOC_ASSETS)
 
-$(HTML_OUT): $(DOC_BUILD_SRC) $(MERMAID_SVG) $(CSS_FILE) | $(BUILD_DIR) $(BUILD_GENERATED_DIR)
+$(HTML_OUT): $(DOC_BUILD_SRC) $(DOC_ASSETS) $(CSS_FILE) | $(BUILD_DIR) $(BUILD_GENERATED_DIR)
 	$(PANDOC) --standalone --toc --css ../dark.css --from markdown --to html5 -o $@ $(DOC_BUILD_SRC)
 	cp $(GENERATED_DIR)/*.svg $(BUILD_GENERATED_DIR)/
 
@@ -49,6 +51,9 @@ $(GENERATED_DIR)/%.svg: $(MERMAID_DIR)/%.mmd $(MERMAID_CONFIG) | $(GENERATED_DIR
 
 $(DIAGRAM_SNIPPETS): $(MERMAID_SRC) | $(GENERATED_DIR)
 	python3 scripts/generate_diagram_sections.py $(MERMAID_DIR) $(DIAGRAM_SNIPPETS)
+
+$(MESSAGE_XYPLOT): scripts/generate_xyplot.py | $(GENERATED_DIR)
+	python3 scripts/generate_xyplot.py $(MESSAGE_XYPLOT)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

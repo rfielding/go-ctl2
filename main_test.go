@@ -21,6 +21,10 @@ func TestReadAcceptsManyExpressions(t *testing.T) {
 		{name: "operator head", input: "(= kind \"tick\")", want: "(= kind \"tick\")"},
 		{name: "math symbols", input: "(+ 1 2)", want: "(+ 1 2)"},
 		{name: "comparison symbols", input: "(<= retries 3)", want: "(<= retries 3)"},
+		{name: "unicode not symbol", input: "¬", want: "¬"},
+		{name: "unicode and symbol", input: "∧", want: "∧"},
+		{name: "unicode or symbol", input: "∨", want: "∨"},
+		{name: "unicode implies symbol", input: "→", want: "→"},
 		{name: "m expr simple", input: "send(actor, message)", want: "(send actor message)"},
 		{name: "m expr no spaces", input: "send(actor,message)", want: "(send actor message)"},
 		{name: "m expr with empty args", input: "now()", want: "(now)"},
@@ -32,6 +36,7 @@ func TestReadAcceptsManyExpressions(t *testing.T) {
 		{name: "symbol punctuation", input: "guard_ok?", want: "guard_ok?"},
 		{name: "operator m expr head", input: "=(kind, \"tick\")", want: "(= kind \"tick\")"},
 		{name: "nested operator m expr", input: "and(=(kind, \"tick\"), >(retries, 0))", want: "(and (= kind \"tick\") (> retries 0))"},
+		{name: "unicode operator list", input: "(→ (∧ a b) (∨ c (¬ d)))", want: "(→ (∧ a b) (∨ c (¬ d)))"},
 		{name: "whitespace before paren stays list", input: "(receive mailbox when (= kind \"tick\"))", want: "(receive mailbox when (= kind \"tick\"))"},
 		{name: "quoted symbol", input: "'actor", want: "(quote actor)"},
 		{name: "quoted number", input: "'42", want: "(quote 42)"},
@@ -391,13 +396,15 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		{name: "ex mailbox b ping", formula: "(ex (mailbox-has B ping))", want: true},
 		{name: "ef c received ping", formula: "(ef (data= C received ping))", want: true},
 		{name: "af c received ping", formula: "(af (data= C received ping))", want: true},
-		{name: "ag not mailbox b ping", formula: "(ag (not (mailbox-has B ping)))", want: false},
-		{name: "eu not received until received", formula: "(eu (not (data= C received ping)) (data= C received ping))", want: true},
+		{name: "ag unicode not mailbox b ping", formula: "(ag (¬ (mailbox-has B ping)))", want: false},
+		{name: "eu unicode not received until received", formula: "(eu (¬ (data= C received ping)) (data= C received ping))", want: true},
 		{name: "au not received until received", formula: "(au (not (data= C received ping)) (data= C received ping))", want: true},
 		{name: "ax a done", formula: "(ax (in-state A done))", want: true},
 		{name: "ef a done", formula: "(ef (in-state A done))", want: true},
 		{name: "eg a done", formula: "(eg (in-state A done))", want: false},
 		{name: "ag c sink", formula: "(ag (in-state C sink))", want: true},
+		{name: "unicode implication", formula: "(→ (in-state A start) (ef (in-state C sink)))", want: true},
+		{name: "unicode and or", formula: "(∧ (in-state A start) (∨ (ef (in-state A done)) (ef (in-state C sink))))", want: true},
 	}
 
 	for _, tc := range cases {
@@ -640,6 +647,32 @@ func TestActionIfControlFlow(t *testing.T) {
 	}
 }
 
+func TestUnicodeGuardOperators(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on (→ (∧ (data= flag yes) true) (∨ (data= flag yes) false))
+						(next done)
+						(set branch taken)
+						(become done)))
+				(state done))
+		`),
+	)
+	runtime.Actors[0].Data["flag"] = Symbol("yes")
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step A returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected unicode guard transition to apply")
+	}
+	if got := runtime.Actors[0].Data["branch"].String(); got != "taken" {
+		t.Fatalf("expected unicode guard branch, got %s", got)
+	}
+}
+
 func TestBuiltinMD5AndRawRSA(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`
@@ -699,6 +732,101 @@ func TestBuiltinCryptoRandom(t *testing.T) {
 	}
 	if len(got.Text) != 16 {
 		t.Fatalf("expected 8 random bytes as 16 hex chars, got %q", got.Text)
+	}
+}
+
+func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(on true
+						(next done)
+						(send B ping)
+						(become done)))
+				(state done))
+		`),
+		MustCompileActor(`
+			(actor B
+				(state relay
+					(on (mailbox ping)
+						(next relay)
+						(recv ping)
+						(send C ping))))
+		`),
+		MustCompileActor(`
+			(actor C
+				(state sink
+					(on (mailbox ping)
+						(next sink)
+						(recv ping)
+						(set received ping))))
+		`),
+	)
+
+	for i := 0; i < 3; i++ {
+		applied, err := runtime.StepActor(runtime.Actors[i])
+		if err != nil {
+			t.Fatalf("step %d returned error: %v", i+1, err)
+		}
+		if !applied {
+			t.Fatalf("expected step %d to apply", i+1)
+		}
+	}
+
+	if got := runtime.Step; got != 3 {
+		t.Fatalf("expected step counter 3, got %d", got)
+	}
+	if got := len(runtime.Events); got != 7 {
+		t.Fatalf("expected 7 events, got %d", got)
+	}
+
+	wantKinds := []EventKind{
+		EventTransition,
+		EventSend,
+		EventTransition,
+		EventReceive,
+		EventSend,
+		EventTransition,
+		EventReceive,
+	}
+	for i, want := range wantKinds {
+		if got := runtime.Events[i].Kind; got != want {
+			t.Fatalf("event %d kind = %s, want %s", i, got, want)
+		}
+	}
+
+	sendCounts := runtime.EventCountSeries(EventSend, nil)
+	if len(sendCounts) != 2 {
+		t.Fatalf("expected 2 send count points, got %d", len(sendCounts))
+	}
+	if sendCounts[0] != (MetricPoint{Step: 1, Value: 1}) {
+		t.Fatalf("unexpected first send count point: %+v", sendCounts[0])
+	}
+	if sendCounts[1] != (MetricPoint{Step: 2, Value: 2}) {
+		t.Fatalf("unexpected second send count point: %+v", sendCounts[1])
+	}
+
+	sendRates := runtime.EventRateSeries(EventSend, nil, 2)
+	wantRates := []MetricPoint{
+		{Step: 1, Value: 1},
+		{Step: 2, Value: 1},
+		{Step: 3, Value: 0.5},
+	}
+	if len(sendRates) != len(wantRates) {
+		t.Fatalf("expected %d send rate points, got %d", len(wantRates), len(sendRates))
+	}
+	for i, want := range wantRates {
+		if sendRates[i] != want {
+			t.Fatalf("send rate point %d = %+v, want %+v", i, sendRates[i], want)
+		}
+	}
+
+	toCCounts := runtime.EventCountSeries(EventSend, func(event Event) bool {
+		return event.PeerName == "C"
+	})
+	if len(toCCounts) != 1 || toCCounts[0] != (MetricPoint{Step: 2, Value: 1}) {
+		t.Fatalf("unexpected filtered send counts: %+v", toCCounts)
 	}
 }
 

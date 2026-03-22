@@ -86,6 +86,8 @@ type Runtime struct {
 	MailboxCaps   map[string]int
 	SyncInbox     map[string]Value
 	Trace         []string
+	Events        []Event
+	Step          int
 	ChooseActorFn func(*Runtime) int
 	Dice          func() bool
 }
@@ -97,6 +99,29 @@ type StepResult struct {
 	TransitionName string
 }
 
+type EventKind string
+
+const (
+	EventTransition EventKind = "transition"
+	EventSend       EventKind = "send"
+	EventReceive    EventKind = "receive"
+)
+
+type Event struct {
+	Step           int
+	Kind           EventKind
+	ActorName      string
+	StateName      string
+	TransitionName string
+	PeerName       string
+	Message        Value
+}
+
+type MetricPoint struct {
+	Step  int
+	Value float64
+}
+
 type StatePredicate func(*Runtime) bool
 
 type CTLOp uint8
@@ -106,6 +131,7 @@ const (
 	CTLNot
 	CTLAnd
 	CTLOr
+	CTLImplies
 	CTLEX
 	CTLAX
 	CTLEF
@@ -212,6 +238,14 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 		if !rt.transitionReady(transition, actor, nil) {
 			continue
 		}
+		rt.Step++
+		rt.logEvent(Event{
+			Step:           rt.Step,
+			Kind:           EventTransition,
+			ActorName:      actor.Name,
+			StateName:      state.Name,
+			TransitionName: transition.Name,
+		})
 		if transition.Action == nil {
 			rt.Tracef("step: actor=%s state=%s transition=%s", actor.Name, state.Name, transition.Name)
 			if err := rt.validateTransitionNext(transition, actor); err != nil {
@@ -375,6 +409,57 @@ func (rt *Runtime) Tracef(format string, args ...interface{}) {
 	rt.Trace = append(rt.Trace, fmt.Sprintf(format, args...))
 }
 
+func (rt *Runtime) logEvent(event Event) {
+	rt.Events = append(rt.Events, event)
+}
+
+func (rt *Runtime) EventCountSeries(kind EventKind, filter func(Event) bool) []MetricPoint {
+	var out []MetricPoint
+	count := 0.0
+	for _, event := range rt.Events {
+		if event.Kind != kind {
+			continue
+		}
+		if filter != nil && !filter(event) {
+			continue
+		}
+		count++
+		out = append(out, MetricPoint{Step: event.Step, Value: count})
+	}
+	return out
+}
+
+func (rt *Runtime) EventRateSeries(kind EventKind, filter func(Event) bool, window int) []MetricPoint {
+	if window <= 0 {
+		window = 1
+	}
+	counts := map[int]float64{}
+	maxStep := rt.Step
+	for _, event := range rt.Events {
+		if event.Kind != kind {
+			continue
+		}
+		if filter != nil && !filter(event) {
+			continue
+		}
+		counts[event.Step]++
+	}
+	var out []MetricPoint
+	for step := 1; step <= maxStep; step++ {
+		sum := 0.0
+		start := step - window + 1
+		if start < 1 {
+			start = 1
+		}
+		for i := start; i <= step; i++ {
+			sum += counts[i]
+		}
+		span := float64(step - start + 1)
+		out = append(out, MetricPoint{Step: step, Value: sum / span})
+	}
+	return out
+}
+
 func (rt *Runtime) Clone() *Runtime {
 	clone := &Runtime{
 		Actors:      make([]*Actor, len(rt.Actors)),
@@ -382,6 +467,8 @@ func (rt *Runtime) Clone() *Runtime {
 		MailboxCaps: make(map[string]int, len(rt.MailboxCaps)),
 		SyncInbox:   cloneValueMap(rt.SyncInbox),
 		Trace:       append([]string(nil), rt.Trace...),
+		Events:      append([]Event(nil), rt.Events...),
+		Step:        rt.Step,
 		Dice:        rt.Dice,
 	}
 	for i, actor := range rt.Actors {
@@ -539,6 +626,10 @@ func Or(left, right CTLFormula) CTLFormula {
 	return CTLFormula{Op: CTLOr, Left: &left, Right: &right}
 }
 
+func Implies(left, right CTLFormula) CTLFormula {
+	return CTLFormula{Op: CTLImplies, Left: &left, Right: &right}
+}
+
 func EX(inner CTLFormula) CTLFormula {
 	return CTLFormula{Op: CTLEX, Left: &inner}
 }
@@ -581,18 +672,18 @@ func buildCTL(form Value) (CTLFormula, error) {
 		return CTLFormula{}, err
 	}
 	switch head {
-	case "not":
+	case "not", "¬":
 		if len(form.Items) != 2 {
-			return CTLFormula{}, fmt.Errorf("not expects one operand")
+			return CTLFormula{}, fmt.Errorf("%s expects one operand", head)
 		}
 		inner, err := buildCTL(form.Items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return Not(inner), nil
-	case "and":
+	case "and", "∧":
 		if len(form.Items) != 3 {
-			return CTLFormula{}, fmt.Errorf("and expects two operands")
+			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
 		}
 		left, err := buildCTL(form.Items[1])
 		if err != nil {
@@ -603,9 +694,9 @@ func buildCTL(form Value) (CTLFormula, error) {
 			return CTLFormula{}, err
 		}
 		return And(left, right), nil
-	case "or":
+	case "or", "∨":
 		if len(form.Items) != 3 {
-			return CTLFormula{}, fmt.Errorf("or expects two operands")
+			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
 		}
 		left, err := buildCTL(form.Items[1])
 		if err != nil {
@@ -616,6 +707,19 @@ func buildCTL(form Value) (CTLFormula, error) {
 			return CTLFormula{}, err
 		}
 		return Or(left, right), nil
+	case "implies", "->", "→":
+		if len(form.Items) != 3 {
+			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
+		}
+		left, err := buildCTL(form.Items[1])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		right, err := buildCTL(form.Items[2])
+		if err != nil {
+			return CTLFormula{}, err
+		}
+		return Implies(left, right), nil
 	case "ex":
 		if len(form.Items) != 2 {
 			return CTLFormula{}, fmt.Errorf("ex expects one operand")
@@ -784,6 +888,16 @@ func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 			}
 		}
 		return out
+	case CTLImplies:
+		left := m.SatisfyingStates(*formula.Left)
+		right := m.SatisfyingStates(*formula.Right)
+		out := map[string]bool{}
+		for id := range m.States {
+			if !left[id] || right[id] {
+				out[id] = true
+			}
+		}
+		return out
 	case CTLEX:
 		inner := m.SatisfyingStates(*formula.Left)
 		out := map[string]bool{}
@@ -934,6 +1048,13 @@ func Send(to string, message Value) ActionFunc {
 			if err := rt.rendezvous(to, message); err != nil {
 				return err
 			}
+			rt.logEvent(Event{
+				Step:      rt.Step,
+				Kind:      EventSend,
+				ActorName: actor.Name,
+				PeerName:  to,
+				Message:   cloneValue(message),
+			})
 			rt.Tracef("%s -> %s %s", actor.Name, to, message.String())
 			return nil
 		}
@@ -941,6 +1062,13 @@ func Send(to string, message Value) ActionFunc {
 			return fmt.Errorf("mailbox %s is full", to)
 		}
 		rt.Enqueue(to, message)
+		rt.logEvent(Event{
+			Step:      rt.Step,
+			Kind:      EventSend,
+			ActorName: actor.Name,
+			PeerName:  to,
+			Message:   cloneValue(message),
+		})
 		rt.Tracef("%s -> %s %s", actor.Name, to, message.String())
 		return nil
 	}
@@ -951,6 +1079,12 @@ func Receive(match MessageGuardFunc, handler MessageHandlerFunc) ActionFunc {
 		if offered, ok := rt.SyncInbox[actor.Name]; ok {
 			if match == nil || match(offered) {
 				delete(rt.SyncInbox, actor.Name)
+				rt.logEvent(Event{
+					Step:      rt.Step,
+					Kind:      EventReceive,
+					ActorName: actor.Name,
+					Message:   cloneValue(offered),
+				})
 				rt.Tracef("%s <= %s", actor.Name, offered.String())
 				if handler == nil {
 					return nil
@@ -962,6 +1096,12 @@ func Receive(match MessageGuardFunc, handler MessageHandlerFunc) ActionFunc {
 		if !ok {
 			return nil
 		}
+		rt.logEvent(Event{
+			Step:      rt.Step,
+			Kind:      EventReceive,
+			ActorName: actor.Name,
+			Message:   cloneValue(message),
+		})
 		rt.Tracef("%s <= %s", actor.Name, message.String())
 		if handler == nil {
 			return nil
@@ -1095,6 +1235,13 @@ func (rt *Runtime) rendezvous(target string, message Value) error {
 		if !rt.transitionReady(transition, targetActor, &offered) {
 			continue
 		}
+		rt.logEvent(Event{
+			Step:           rt.Step,
+			Kind:           EventTransition,
+			ActorName:      targetActor.Name,
+			StateName:      state.Name,
+			TransitionName: transition.Name,
+		})
 		rt.SyncInbox[target] = message
 		rt.Tracef("step: actor=%s state=%s transition=%s", targetActor.Name, state.Name, transition.Name)
 		if transition.Action != nil {
@@ -1161,7 +1308,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			}
 		}
 		return false, nil
-	case "and":
+	case "and", "∧":
 		for _, item := range form.Items[1:] {
 			ok, err := rt.evalGuardSpec(item, actor, offered)
 			if err != nil || !ok {
@@ -1169,15 +1316,38 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			}
 		}
 		return true, nil
-	case "not":
+	case "or", "∨":
+		for _, item := range form.Items[1:] {
+			ok, err := rt.evalGuardSpec(item, actor, offered)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "not", "¬":
 		if len(form.Items) != 2 {
-			return false, fmt.Errorf("not guard needs one operand")
+			return false, fmt.Errorf("%s guard needs one operand", head)
 		}
 		ok, err := rt.evalGuardSpec(form.Items[1], actor, offered)
 		if err != nil {
 			return false, err
 		}
 		return !ok, nil
+	case "implies", "->", "→":
+		if len(form.Items) != 3 {
+			return false, fmt.Errorf("%s guard needs two operands", head)
+		}
+		left, err := rt.evalGuardSpec(form.Items[1], actor, offered)
+		if err != nil {
+			return false, err
+		}
+		if !left {
+			return true, nil
+		}
+		return rt.evalGuardSpec(form.Items[2], actor, offered)
 	case "data=":
 		if len(form.Items) != 3 {
 			return false, fmt.Errorf("data= guard must be (data= key value)")
@@ -1387,9 +1557,9 @@ func compileGuard(form Value) (GuardFunc, error) {
 			}
 			return false
 		}, nil
-	case "and":
+	case "and", "∧":
 		if len(form.Items) < 3 {
-			return nil, fmt.Errorf("and guard needs at least two operands")
+			return nil, fmt.Errorf("%s guard needs at least two operands", head)
 		}
 		var guards []GuardFunc
 		for _, item := range form.Items[1:] {
@@ -1407,9 +1577,29 @@ func compileGuard(form Value) (GuardFunc, error) {
 			}
 			return true
 		}, nil
-	case "not":
+	case "or", "∨":
+		if len(form.Items) < 3 {
+			return nil, fmt.Errorf("%s guard needs at least two operands", head)
+		}
+		var guards []GuardFunc
+		for _, item := range form.Items[1:] {
+			guard, err := compileGuard(item)
+			if err != nil {
+				return nil, err
+			}
+			guards = append(guards, guard)
+		}
+		return func(rt *Runtime, actor *Actor) bool {
+			for _, guard := range guards {
+				if guard(rt, actor) {
+					return true
+				}
+			}
+			return false
+		}, nil
+	case "not", "¬":
 		if len(form.Items) != 2 {
-			return nil, fmt.Errorf("not guard needs one operand")
+			return nil, fmt.Errorf("%s guard needs one operand", head)
 		}
 		inner, err := compileGuard(form.Items[1])
 		if err != nil {
@@ -1417,6 +1607,21 @@ func compileGuard(form Value) (GuardFunc, error) {
 		}
 		return func(rt *Runtime, actor *Actor) bool {
 			return !inner(rt, actor)
+		}, nil
+	case "implies", "->", "→":
+		if len(form.Items) != 3 {
+			return nil, fmt.Errorf("%s guard needs two operands", head)
+		}
+		left, err := compileGuard(form.Items[1])
+		if err != nil {
+			return nil, err
+		}
+		right, err := compileGuard(form.Items[2])
+		if err != nil {
+			return nil, err
+		}
+		return func(rt *Runtime, actor *Actor) bool {
+			return !left(rt, actor) || right(rt, actor)
 		}, nil
 	case "data=":
 		if len(form.Items) != 3 {
@@ -1797,6 +2002,39 @@ func MustRead(input string) Value {
 	return v
 }
 
+func (f CTLFormula) String() string {
+	switch f.Op {
+	case CTLAtom:
+		return "atom"
+	case CTLNot:
+		return fmt.Sprintf("(¬ %s)", f.Left.String())
+	case CTLAnd:
+		return fmt.Sprintf("(∧ %s %s)", f.Left.String(), f.Right.String())
+	case CTLOr:
+		return fmt.Sprintf("(∨ %s %s)", f.Left.String(), f.Right.String())
+	case CTLImplies:
+		return fmt.Sprintf("(→ %s %s)", f.Left.String(), f.Right.String())
+	case CTLEX:
+		return fmt.Sprintf("(EX %s)", f.Left.String())
+	case CTLAX:
+		return fmt.Sprintf("(AX %s)", f.Left.String())
+	case CTLEF:
+		return fmt.Sprintf("(EF %s)", f.Left.String())
+	case CTLAF:
+		return fmt.Sprintf("(AF %s)", f.Left.String())
+	case CTLEG:
+		return fmt.Sprintf("(EG %s)", f.Left.String())
+	case CTLAG:
+		return fmt.Sprintf("(AG %s)", f.Left.String())
+	case CTLEU:
+		return fmt.Sprintf("(EU %s %s)", f.Left.String(), f.Right.String())
+	case CTLAU:
+		return fmt.Sprintf("(AU %s %s)", f.Left.String(), f.Right.String())
+	default:
+		return "<invalid-ctl>"
+	}
+}
+
 func (v Value) String() string {
 	switch v.Kind {
 	case KindSymbol:
@@ -2062,9 +2300,10 @@ func (p *parser) match(kind string) bool {
 func tokenize(input string) ([]token, error) {
 	var out []token
 	lastEnd := 0
+	runes := []rune(input)
 
-	for i := 0; i < len(input); {
-		ch := rune(input[i])
+	for i := 0; i < len(runes); {
+		ch := runes[i]
 
 		if unicode.IsSpace(ch) {
 			i++
@@ -2111,15 +2350,15 @@ func tokenize(input string) ([]token, error) {
 		case '"':
 			start := i + 1
 			i++
-			for i < len(input) && input[i] != '"' {
+			for i < len(runes) && runes[i] != '"' {
 				i++
 			}
-			if i >= len(input) {
+			if i >= len(runes) {
 				return nil, fmt.Errorf("unterminated string literal")
 			}
 			out = append(out, token{
 				kind:      "string",
-				text:      input[start:i],
+				text:      string(runes[start:i]),
 				tightLeft: start-1 == lastEnd,
 			})
 			i++
@@ -2127,15 +2366,15 @@ func tokenize(input string) ([]token, error) {
 			continue
 		}
 
-		if unicode.IsDigit(ch) || (ch == '-' && i+1 < len(input) && unicode.IsDigit(rune(input[i+1]))) {
+		if unicode.IsDigit(ch) || (ch == '-' && i+1 < len(runes) && unicode.IsDigit(runes[i+1])) {
 			start := i
 			i++
-			for i < len(input) && unicode.IsDigit(rune(input[i])) {
+			for i < len(runes) && unicode.IsDigit(runes[i]) {
 				i++
 			}
 			out = append(out, token{
 				kind:      "number",
-				text:      input[start:i],
+				text:      string(runes[start:i]),
 				tightLeft: start == lastEnd,
 			})
 			lastEnd = i
@@ -2145,10 +2384,10 @@ func tokenize(input string) ([]token, error) {
 		if isSymbolStart(ch) {
 			start := i
 			i++
-			for i < len(input) && isSymbolPart(rune(input[i])) {
+			for i < len(runes) && isSymbolPart(runes[i]) {
 				i++
 			}
-			text := input[start:i]
+			text := string(runes[start:i])
 			switch text {
 			case "true", "false":
 				out = append(out, token{
@@ -2174,11 +2413,11 @@ func tokenize(input string) ([]token, error) {
 }
 
 func isSymbolStart(ch rune) bool {
-	return unicode.IsLetter(ch) || strings.ContainsRune("+-*/<>=!?_", ch)
+	return unicode.IsLetter(ch) || strings.ContainsRune("+-*/<>=!?_¬∧∨→", ch)
 }
 
 func isSymbolPart(ch rune) bool {
-	return unicode.IsLetter(ch) || unicode.IsDigit(ch) || strings.ContainsRune("+-*/<>=!?_", ch)
+	return unicode.IsLetter(ch) || unicode.IsDigit(ch) || strings.ContainsRune("+-*/<>=!?_¬∧∨→", ch)
 }
 
 func main() {}

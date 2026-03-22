@@ -259,6 +259,16 @@ This small message-chain example is intentionally simple, but it already exercis
 
 Representative CTL requirements:
 
+- `(ef (in-state Server accepted))`
+- `(af (data= Server received '(message (type ping))))`
+- `(ag (¬ (mailbox-has Relay '(message (type ping)))))`
+
+# Message Plot
+
+Because transitions, sends, and receives are now logged as structured events, the same example can also drive simple XY plots. This is the beginning of the metrics side of the tool: message counts, throughput, queue growth, and related time-series views should come from the event log rather than from ad hoc parsing.
+
+![Message Counts By Step](../generated/message_xyplot.svg)
+
 ```lisp
 (ef (in-state Server accepted))
 (af (data= Server received '(message (type ping))))

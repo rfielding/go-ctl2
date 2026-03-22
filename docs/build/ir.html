@@ -115,6 +115,7 @@
 <li><a href="#why-this-ir-is-sensible">Why This IR Is Sensible</a></li>
 <li><a href="#reverse-mermaid-direction">Reverse Mermaid Direction</a></li>
 <li><a href="#example-model">Example Model</a></li>
+<li><a href="#message-plot">Message Plot</a></li>
 <li><a href="#mermaid-artifacts">Mermaid Artifacts</a>
 <ul>
 <li><a href="#a-to-b-sequence">A To B Sequence</a></li>
@@ -345,6 +346,16 @@
 <span id="cb2-30"><a href="#cb2-30" aria-hidden="true" tabindex="-1"></a>      (become idle)))</span>
 <span id="cb2-31"><a href="#cb2-31" aria-hidden="true" tabindex="-1"></a>  (state accepted))</span></code></pre></div>
 <p>Representative CTL requirements:</p>
+<ul>
+<li><code>(ef (in-state Server accepted))</code></li>
+<li><code>(af (data= Server received '(message (type ping))))</code></li>
+<li><code>(ag (¬ (mailbox-has Relay '(message (type ping)))))</code></li>
+</ul>
+<h1 id="message-plot">Message Plot</h1>
+<p>Because transitions, sends, and receives are now logged as structured events, the same example can also drive simple XY plots. This is the beginning of the metrics side of the tool: message counts, throughput, queue growth, and related time-series views should come from the event log rather than from ad hoc parsing.</p>
+<figure>
+<img src="../generated/message_xyplot.svg" alt="Message Counts By Step" /><figcaption aria-hidden="true">Message Counts By Step</figcaption>
+</figure>
 <div class="sourceCode" id="cb3"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(ef (in-state Server accepted))</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>(af (data= Server received &#39;(message (<span class="kw">type</span> ping))))</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>(ag (<span class="kw">not</span> (mailbox-has Relay &#39;(message (<span class="kw">type</span> ping)))))</span></code></pre></div>
