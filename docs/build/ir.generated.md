@@ -451,9 +451,9 @@ This small message-chain example is intentionally simple, but it already exercis
 
 Representative CTL requirements:
 
-- `(ef (in-state Server accepted "server eventually accepts"))`
-- `(af (data= Server received '(message (type ping)) "server records the ping message"))`
-- `(ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")))`
+- `(ef (in-state Server accepted "possibly server accepts"))`
+- `(af (data= Server received '(message (type ping)) "eventually server records the ping message"))`
+- `(ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping")`
 
 The first two are intended to hold for the example model.
 
