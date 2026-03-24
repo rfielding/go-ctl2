@@ -38,7 +38,7 @@ def circles(points, color, x0, y0, w, h, xmax, ymax):
 def difference_series(sends, recvs, xmax):
     send_map = {step: value for step, value in sends}
     recv_map = {step: value for step, value in recvs}
-    out = []
+    out = [(0, 0.0)]
     last_send = 0.0
     last_recv = 0.0
     for step in range(1, xmax + 1):
@@ -52,13 +52,11 @@ def difference_series(sends, recvs, xmax):
 
 def axis_ticks(count):
     if count <= 10:
-        return list(range(1, count + 1))
+        return list(range(0, count + 1))
     step = max(10, count // 10)
     ticks = list(range(0, count + 1, step))
     if ticks[-1] != count:
         ticks.append(count)
-    if ticks[0] == 0:
-        ticks = ticks[1:]
     return ticks
 
 

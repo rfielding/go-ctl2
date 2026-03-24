@@ -873,7 +873,7 @@
 <figure>
 <img src="../generated/message_xyplot.svg" alt="Outstanding Messages By Step" /><figcaption aria-hidden="true">Outstanding Messages By Step</figcaption>
 </figure>
-<p>The current plot is a 100-step run of the M/M/1/5-style queue example above, showing outstanding messages as <code>sent - received</code>. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.</p>
+<p>The current plot is a 100-step run of the M/M/1/5-style queue example above, followed by a drain phase so the series starts at <code>0</code> messages and ends at <code>0</code> messages. The plotted value is <code>sent - received</code>, so the line is positive exactly when sends are ahead of receives. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.</p>
 <p>Natural follow-on plots include:</p>
 <ul>
 <li>sends per step</li>

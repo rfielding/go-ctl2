@@ -3330,6 +3330,17 @@ func docQueueRuntime(steps int) (*Runtime, error) {
 	if rt.Step < steps {
 		return nil, fmt.Errorf("doc queue example reached only %d applied steps after %d ticks", rt.Step, maxTicks)
 	}
+	rt.Dice = func() float64 { return 0.25 }
+	rt.ChooseActorFn = func(*Runtime) int { return 1 }
+	drainTicks := steps*4 + 64
+	for attempts := 0; eventBacklog(rt) > 0 && attempts < drainTicks; attempts++ {
+		if err := rt.Tick(); err != nil {
+			return nil, err
+		}
+	}
+	if eventBacklog(rt) > 0 {
+		return nil, fmt.Errorf("doc queue example backlog remained %.0f after drain phase", eventBacklog(rt))
+	}
 	return rt, nil
 }
 
@@ -3346,6 +3357,20 @@ func emitDocPlotData(steps int) error {
 		Receives: rt.EventCountSeries(EventReceive, nil),
 	}
 	return json.NewEncoder(os.Stdout).Encode(data)
+}
+
+func eventBacklog(rt *Runtime) float64 {
+	sends := 0.0
+	receives := 0.0
+	for _, event := range rt.Events {
+		switch event.Kind {
+		case EventSend:
+			sends++
+		case EventReceive:
+			receives++
+		}
+	}
+	return sends - receives
 }
 
 func main() {
