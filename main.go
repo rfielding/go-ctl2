@@ -1819,6 +1819,8 @@ func buildTransitionChain(form Value, stateName string, waitCounter *int) ([]Tra
 	if len(commIdxs) == 0 || (len(commIdxs) == 1 && commIdxs[0] == 0) {
 		return []Transition{base}, nil, false, nil
 	}
+	waitNames := generatedWaitNames(stateName, items, commIdxs)
+	nextWait := 0
 
 	var transitions []Transition
 	var hiddenStates []State
@@ -1827,7 +1829,8 @@ func buildTransitionChain(form Value, stateName string, waitCounter *int) ([]Tra
 	start := 0
 	for i, idx := range commIdxs {
 		if idx > start {
-			waitName := generatedWaitName(stateName, *waitCounter)
+			waitName := waitNames[nextWait]
+			nextWait++
 			*waitCounter++
 			preItems := append([]Value{}, items[start:idx]...)
 			preItems = append(preItems, List(Symbol("become"), Symbol(waitName)))
@@ -1855,7 +1858,8 @@ func buildTransitionChain(form Value, stateName string, waitCounter *int) ([]Tra
 		}
 		segmentItems := append([]Value{}, items[idx:end]...)
 		if i+1 < len(commIdxs) {
-			waitName := generatedWaitName(stateName, *waitCounter)
+			waitName := waitNames[nextWait]
+			nextWait++
 			*waitCounter++
 			segmentItems = append(segmentItems, List(Symbol("become"), Symbol(waitName)))
 			segmentAction := seqForm(segmentItems)
@@ -1895,6 +1899,27 @@ func buildTransitionChain(form Value, stateName string, waitCounter *int) ([]Tra
 	return transitions, hiddenStates, true, nil
 }
 
+func generatedWaitNames(stateName string, items []Value, commIdxs []int) []string {
+	count := 0
+	start := 0
+	for i, idx := range commIdxs {
+		if idx > start {
+			count++
+		}
+		if i+1 < len(commIdxs) {
+			count++
+			start = commIdxs[i+1]
+		} else {
+			start = len(items)
+		}
+	}
+	names := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		names = append(names, generatedWaitName(stateName, i, count))
+	}
+	return names
+}
+
 func communicationIndices(items []Value) []int {
 	var out []int
 	for i, item := range items {
@@ -1905,7 +1930,10 @@ func communicationIndices(items []Value) []int {
 	return out
 }
 
-func generatedWaitName(stateName string, idx int) string {
+func generatedWaitName(stateName string, idx, total int) string {
+	if total == 1 {
+		return fmt.Sprintf("%s__wait", stateName)
+	}
 	return fmt.Sprintf("%s__wait_%d", stateName, idx)
 }
 

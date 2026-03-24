@@ -1,19 +1,24 @@
 flowchart TD
     subgraph Client
         direction TB
-        C_start([start]) -->|"sent = ping<br/>become done"| C_done([done])
+        C_start([start]) -->|"sent = ping"| C_done([done])
     end
 
     subgraph Relay
         direction TB
-        R_relay([relay]) -->|"recv msg<br/>become relay__wait_0"| R_wait0([relay__wait_0])
-        R_wait0 -->|"send msg<br/>become relay"| R_relay
+        subgraph R_relay["relay"]
+            direction TB
+            R_wait([wait])
+        end
+        R_entry(( ))
+        R_entry -->|"recv msg"| R_wait
+        R_wait -->|"send msg"| R_entry
     end
 
     subgraph Server
         direction TB
-        S_idle([idle]) -->|"received = ping<br/>become accepted"| S_accepted([accepted])
+        S_idle([idle]) -->|"received = ping"| S_accepted([accepted])
     end
 
     C_done -. send ping .-> R_relay
-    R_wait0 -. send ping .-> S_idle
+    R_wait -. send ping .-> S_idle

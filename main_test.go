@@ -406,7 +406,7 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 	want := map[string]bool{
 		"A|start|true":          false,
 		"B|relay|true":          false,
-		"B|relay__wait_0|true":  false,
+		"B|relay__wait|true":    false,
 		"C|sink|true":           false,
 	}
 	for _, edge := range model.Edges {
@@ -603,7 +603,7 @@ func TestCompileActorNormalizesSendAfterLeadingAction(t *testing.T) {
 	}
 	found := false
 	for _, state := range actor.States {
-		if state.Name == "start__wait_0" {
+		if state.Name == "start__wait" {
 			found = true
 			break
 		}

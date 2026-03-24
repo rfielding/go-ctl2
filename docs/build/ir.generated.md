@@ -302,9 +302,9 @@ becomes an internal shape more like:
 ```lisp
 (edge true
   (set before 1)
-  (become start__wait_0))
+  (become start__wait))
 
-(state start__wait_0
+(state start__wait
   (edge true
     (send B ping)
     (set after 1)
@@ -989,22 +989,27 @@ sequenceDiagram
 flowchart TD
     subgraph Client
         direction TB
-        C_start([start]) --&gt;|&quot;sent = ping&lt;br/&gt;become done&quot;| C_done([done])
+        C_start([start]) --&gt;|&quot;sent = ping&quot;| C_done([done])
     end
 
     subgraph Relay
         direction TB
-        R_relay([relay]) --&gt;|&quot;recv msg&lt;br/&gt;become relay__wait_0&quot;| R_wait0([relay__wait_0])
-        R_wait0 --&gt;|&quot;send msg&lt;br/&gt;become relay&quot;| R_relay
+        subgraph R_relay[&quot;relay&quot;]
+            direction TB
+            R_wait([wait])
+        end
+        R_entry(( ))
+        R_entry --&gt;|&quot;recv msg&quot;| R_wait
+        R_wait --&gt;|&quot;send msg&quot;| R_entry
     end
 
     subgraph Server
         direction TB
-        S_idle([idle]) --&gt;|&quot;received = ping&lt;br/&gt;become accepted&quot;| S_accepted([accepted])
+        S_idle([idle]) --&gt;|&quot;received = ping&quot;| S_accepted([accepted])
     end
 
     C_done -. send ping .-&gt; R_relay
-    R_wait0 -. send ping .-&gt; S_idle
+    R_wait -. send ping .-&gt; S_idle
 </code></pre>
 </details>
 
@@ -1049,17 +1054,17 @@ sequenceDiagram
 flowchart TD
     subgraph Client
         direction TB
-        C_loop([loop]) --&gt;|&quot;dice&amp;lt;0.5&lt;br/&gt;last = sleep&lt;br/&gt;become loop&quot;| C_loop
-        C_loop --&gt;|&quot;dice&amp;gt;=0.5&lt;br/&gt;send req&lt;br/&gt;last = arrival&lt;br/&gt;become loop&quot;| C_loop
+        C_loop([loop]) --&gt;|&quot;dice&amp;lt;0.5&lt;br/&gt;last = sleep&quot;| C_loop
+        C_loop --&gt;|&quot;dice&amp;gt;=0.5&lt;br/&gt;send req&lt;br/&gt;last = arrival&quot;| C_loop
     end
 
     subgraph Queue
         direction TB
-        Q_wait([wait]) --&gt;|&quot;req and count = 0&lt;br/&gt;count += 1&lt;br/&gt;elapsed = 0&lt;br/&gt;become wait&quot;| Q_wait
-        Q_wait --&gt;|&quot;req and 0 &amp;lt; count &amp;lt; 5&lt;br/&gt;count += 1&lt;br/&gt;become wait&quot;| Q_wait
-        Q_wait --&gt;|&quot;req and count = 5&lt;br/&gt;dropped_count += 1&lt;br/&gt;become wait&quot;| Q_wait
-        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;lt;0.5&lt;br/&gt;count -= 1&lt;br/&gt;last_departure = service-complete&lt;br/&gt;become wait&quot;| Q_wait
-        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;gt;=0.5&lt;br/&gt;last_departure = busy&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait([wait]) --&gt;|&quot;req and count = 0&lt;br/&gt;count += 1&lt;br/&gt;elapsed = 0&quot;| Q_wait
+        Q_wait --&gt;|&quot;req and 0 &amp;lt; count &amp;lt; 5&lt;br/&gt;count += 1&quot;| Q_wait
+        Q_wait --&gt;|&quot;req and count = 5&lt;br/&gt;dropped_count += 1&quot;| Q_wait
+        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;lt;0.5&lt;br/&gt;count -= 1&lt;br/&gt;last_departure = service-complete&quot;| Q_wait
+        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;gt;=0.5&lt;br/&gt;last_departure = busy&quot;| Q_wait
     end
 
     C_loop -. arrival req .-&gt; Q_wait

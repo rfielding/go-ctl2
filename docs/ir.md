@@ -302,9 +302,9 @@ becomes an internal shape more like:
 ```lisp
 (edge true
   (set before 1)
-  (become start__wait_0))
+  (become start__wait))
 
-(state start__wait_0
+(state start__wait
   (edge true
     (send B ping)
     (set after 1)

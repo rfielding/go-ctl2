@@ -1,17 +1,17 @@
 flowchart TD
     subgraph Client
         direction TB
-        C_loop([loop]) -->|"dice&lt;0.5<br/>last = sleep<br/>become loop"| C_loop
-        C_loop -->|"dice&gt;=0.5<br/>send req<br/>last = arrival<br/>become loop"| C_loop
+        C_loop([loop]) -->|"dice&lt;0.5<br/>last = sleep"| C_loop
+        C_loop -->|"dice&gt;=0.5<br/>send req<br/>last = arrival"| C_loop
     end
 
     subgraph Queue
         direction TB
-        Q_wait([wait]) -->|"req and count = 0<br/>count += 1<br/>elapsed = 0<br/>become wait"| Q_wait
-        Q_wait -->|"req and 0 &lt; count &lt; 5<br/>count += 1<br/>become wait"| Q_wait
-        Q_wait -->|"req and count = 5<br/>dropped_count += 1<br/>become wait"| Q_wait
-        Q_wait -->|"count &gt; 0 and dice&lt;0.5<br/>count -= 1<br/>last_departure = service-complete<br/>become wait"| Q_wait
-        Q_wait -->|"count &gt; 0 and dice&gt;=0.5<br/>last_departure = busy<br/>become wait"| Q_wait
+        Q_wait([wait]) -->|"req and count = 0<br/>count += 1<br/>elapsed = 0"| Q_wait
+        Q_wait -->|"req and 0 &lt; count &lt; 5<br/>count += 1"| Q_wait
+        Q_wait -->|"req and count = 5<br/>dropped_count += 1"| Q_wait
+        Q_wait -->|"count &gt; 0 and dice&lt;0.5<br/>count -= 1<br/>last_departure = service-complete"| Q_wait
+        Q_wait -->|"count &gt; 0 and dice&gt;=0.5<br/>last_departure = busy"| Q_wait
     end
 
     C_loop -. arrival req .-> Q_wait
