@@ -234,14 +234,11 @@ func TestCompileActorAndRunMessageChainABC(t *testing.T) {
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay-recv
+				(state relay
 					(edge true
 						(recv msg)
-						(become relay-send)))
-				(state relay-send
-					(edge true
 						(send C msg)
-						(become relay-recv))))
+						(become relay))))
 		`),
 		MustCompileActor(`
 			(actor C
@@ -350,14 +347,11 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay-recv
+				(state relay
 					(edge true
 						(recv msg)
-						(become relay-send)))
-				(state relay-send
-					(edge true
 						(send C msg)
-						(become relay-recv))))
+						(become relay))))
 		`),
 		MustCompileActor(`
 			(actor C
@@ -410,10 +404,10 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		t.Fatal("expected explored edges to be recorded")
 	}
 	want := map[string]bool{
-		"A|start|true":      false,
-		"B|relay-recv|true": false,
-		"B|relay-send|true": false,
-		"C|sink|true":       false,
+		"A|start|true":          false,
+		"B|relay|true":          false,
+		"B|relay__wait_0|true":  false,
+		"C|sink|true":           false,
 	}
 	for _, edge := range model.Edges {
 		key := edge.ActorName + "|" + edge.StateName + "|" + edge.TransitionName
@@ -1041,14 +1035,11 @@ func TestRuntimeLogsEventsAndBuildsSeries(t *testing.T) {
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay-recv
+				(state relay
 					(edge true
 						(recv msg)
-						(become relay-send)))
-				(state relay-send
-					(edge true
 						(send C msg)
-						(become relay-recv))))
+						(become relay))))
 		`),
 		MustCompileActor(`
 			(actor C
@@ -1277,19 +1268,16 @@ func TestRuntimeLispSerializationForCompiledModel(t *testing.T) {
 		`),
 		MustCompileActor(`
 			(actor B
-				(state relay-recv
+				(state relay
 					(edge true
 						(recv msg)
-						(become relay-send)))
-				(state relay-send
-					(edge true
 						(send C msg)
-						(become relay-recv))))
+						(become relay))))
 		`),
 	)
 
 	got := runtime.Lisp().String()
-	want := `(runtime (actor A (state start (edge true (send B ping) (become done))) (state done)) (current-state A start) (data A (state start)) (mailbox A) (actor B (state relay-recv (edge true (recv msg) (become relay-send))) (state relay-send (edge true (send C msg) (become relay-recv)))) (current-state B relay-recv) (data B (state relay-recv)) (mailbox B))`
+	want := `(runtime (actor A (state start (edge true (send B ping) (become done))) (state done)) (current-state A start) (data A (state start)) (mailbox A) (actor B (state relay (edge true (recv msg) (send C msg) (become relay)))) (current-state B relay) (data B (state relay)) (mailbox B))`
 	if got != want {
 		t.Fatalf("got %s, want %s", got, want)
 	}

@@ -880,22 +880,17 @@ This small message-chain example is intentionally simple, but it already exercis
   (state done))
 
 (actor Relay
-  (state wait
+  (state relay
     (edge true
       (recv msg)
-      (become forwarded)))
-  (state forwarded
-    (edge true
       (send Server msg)
-      (become wait))))
+      (become relay))))
 
 (actor Server
   (state idle
     (edge true
       (recv received)
-      (become accepted))
-    (edge true
-      (become idle)))
+      (become accepted)))
   (state accepted))
 ```
 
@@ -912,8 +907,8 @@ The third is intentionally useful as a negative example: it should fail at the i
 The operational intent is:
 
 - the client declares a message value whose `type` is `ping`
-- intermediaries only accept messages of type `ping`
-- if an intermediary does not have such a message available, it remains in its waiting loop until one arrives
+- the relay forwards that value unchanged to the server
+- if a `recv` has no message available, that edge is simply not ready
 
 ## Walkthrough Of The Example
 
@@ -927,15 +922,14 @@ The example should be read as three small control machines composed by message p
 
 `Relay`
 
-- waits in `wait`
-- if a `ping`-typed message is present, it consumes it, forwards it, and becomes `forwarded`
-- otherwise it stays in its waiting loop
+- has one explicit source state, `relay`
+- when a message is available, it consumes it, forwards it to `Server`, and becomes `relay` again
+- the compiler inserts an internal wait substate so the compiled control graph still begins each communication step with `recv` or `send`
 
 `Server`
 
 - waits in `idle`
-- if a `ping`-typed message is present, it consumes it, records it, and becomes `accepted`
-- otherwise it stays in `idle`
+- when a message is available, it consumes it, records it, and becomes `accepted`
 
 This example is deliberately small, but it is enough to show:
 
@@ -1000,18 +994,17 @@ flowchart TD
 
     subgraph Relay
         direction TB
-        R_wait([wait]) --&gt;|&quot;received = ping&lt;br/&gt;forwarded = ping&lt;br/&gt;become forwarded&quot;| R_forwarded([forwarded])
-        R_wait --&gt;|&quot;wrong type or no ping&lt;br/&gt;become wait&quot;| R_wait
+        R_relay([relay]) --&gt;|&quot;recv msg&lt;br/&gt;become relay__wait_0&quot;| R_wait0([relay__wait_0])
+        R_wait0 --&gt;|&quot;send msg&lt;br/&gt;become relay&quot;| R_relay
     end
 
     subgraph Server
         direction TB
         S_idle([idle]) --&gt;|&quot;received = ping&lt;br/&gt;become accepted&quot;| S_accepted([accepted])
-        S_idle --&gt;|&quot;wrong type or no ping&lt;br/&gt;become idle&quot;| S_idle
     end
 
-    C_done -. send ping .-&gt; R_wait
-    R_forwarded -. send ping .-&gt; S_idle
+    C_done -. send ping .-&gt; R_relay
+    R_wait0 -. send ping .-&gt; S_idle
 </code></pre>
 </details>
 

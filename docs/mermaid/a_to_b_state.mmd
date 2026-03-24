@@ -6,15 +6,14 @@ flowchart TD
 
     subgraph Relay
         direction TB
-        R_wait([wait]) -->|"received = ping<br/>forwarded = ping<br/>become forwarded"| R_forwarded([forwarded])
-        R_wait -->|"wrong type or no ping<br/>become wait"| R_wait
+        R_relay([relay]) -->|"recv msg<br/>become relay__wait_0"| R_wait0([relay__wait_0])
+        R_wait0 -->|"send msg<br/>become relay"| R_relay
     end
 
     subgraph Server
         direction TB
         S_idle([idle]) -->|"received = ping<br/>become accepted"| S_accepted([accepted])
-        S_idle -->|"wrong type or no ping<br/>become idle"| S_idle
     end
 
-    C_done -. send ping .-> R_wait
-    R_forwarded -. send ping .-> S_idle
+    C_done -. send ping .-> R_relay
+    R_wait0 -. send ping .-> S_idle

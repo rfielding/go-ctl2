@@ -101,7 +101,7 @@
 <li><a href="#actor">Actor</a></li>
 <li><a href="#state">State</a></li>
 <li><a href="#transition">Transition</a></li>
-<li><a href="#why-explicit-next-states-matter">Why Explicit Next States Matter</a></li>
+<li><a href="#why-derived-next-states-matter">Why Derived Next States Matter</a></li>
 </ul></li>
 <li><a href="#scheduling-semantics">Scheduling Semantics</a></li>
 <li><a href="#communication-semantics">Communication Semantics</a>
@@ -118,7 +118,17 @@
 <li><a href="#control-flow">Control Flow</a></li>
 <li><a href="#ctl-strategy">CTL Strategy</a>
 <ul>
+<li><a href="#what-ctl-means">What CTL Means</a></li>
+<li><a href="#mu-calculus-tutorial">Mu-Calculus Tutorial</a>
+<ul>
+<li><a href="#small-examples">Small Examples</a></li>
+<li><a href="#why-the-algorithm-is-so-small">Why The Algorithm Is So Small</a></li>
+<li><a href="#ctl-as-a-special-case">CTL As A Special Case</a></li>
+<li><a href="#why-this-feels-like-ltl-territory">Why This Feels Like LTL Territory</a></li>
+<li><a href="#practical-reading-guide">Practical Reading Guide</a></li>
+</ul></li>
 <li><a href="#present-operators">Present Operators</a></li>
+<li><a href="#how-the-checker-works">How The Checker Works</a></li>
 <li><a href="#what-ctl-is-proving-here">What CTL Is Proving Here</a></li>
 </ul></li>
 <li><a href="#event-log-and-metrics">Event Log And Metrics</a></li>
@@ -141,6 +151,8 @@
 <ul>
 <li><a href="#a-to-b-sequence">A To B Sequence</a></li>
 <li><a href="#a-to-b-state">A To B State</a></li>
+<li><a href="#mm1-5-queue-flow">Mm1 5 Queue Flow</a></li>
+<li><a href="#mm1-5-queue-state">Mm1 5 Queue State</a></li>
 </ul></li>
 <li><a href="#build">Build</a></li>
 <li><a href="#serving-the-html">Serving The HTML</a></li>
@@ -162,7 +174,7 @@
 <li>event logs and plots</li>
 </ul></li>
 </ul>
-<p>The design goal is not to infer hidden control flow from simulation alone. Instead, transitions declare their possible next control states explicitly, and runtime execution validates that the declared next-state set is not wrong.</p>
+<p>The design goal is not to infer hidden control flow from simulation alone. Instead, transitions expose control flow through explicit <code>become</code> calls, and the compiler walks those action trees to recover possible successor control states.</p>
 <h1 id="audience">Audience</h1>
 <p>This repository is for readers who want the benefits of temporal logic and executable models without first committing to a large bespoke specification language.</p>
 <p>The intended workflow is:</p>
@@ -186,7 +198,7 @@
 <ul>
 <li>actor an independently scheduled state-owning component with one mailbox</li>
 <li>state a named control location inside an actor</li>
-<li>transition a guarded atomic step with an explicit <code>(next ...)</code> control contract</li>
+<li>transition a guarded atomic step whose successor states are derived from <code>become</code></li>
 <li>mailbox the actor-local queue or rendezvous endpoint through which messages arrive</li>
 <li>runtime the current collection of actors, local data, mailboxes, and scheduler context</li>
 <li>explored model the graph artifact produced by running the runtime semantics over reachable states</li>
@@ -214,25 +226,25 @@
 <p>A transition contains:</p>
 <ul>
 <li>a guard</li>
-<li>an explicit <code>(next ...)</code> declaration</li>
 <li>an atomic action block</li>
 </ul>
 <p>Example:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>(on (mailbox ping)</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  (next relay)</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  (recv ping)</span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  (send C ping))</span></code></pre></div>
-<p>The <code>(next ...)</code> declaration is the control-flow contract used for graph construction and CTL. Runtime execution validates that the post-step control state is one of the declared next states.</p>
-<h2 id="why-explicit-next-states-matter">Why Explicit Next States Matter</h2>
-<p>The central compromise in this repository is that transitions declare the set of possible successor control states directly.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>(edge true</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  (recv msg)</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  (become got-ping))</span></code></pre></div>
+<p>The compiler walks the action block, collects reachable <code>become</code> targets, and uses that successor set for graph construction and CTL. Runtime execution validates that the post-step control state is one of those derived successor states.</p>
+<p>An <code>edge</code> must contain at least one <code>become</code>. Omitting <code>become</code> is a compile error; the language does not use implicit self-loops.</p>
+<p>The compiler also walks the action block for communication operations. If <code>send</code> or <code>recv</code> appear later in the body, the compiler inserts internal wait substates such as <code>wait__0</code>, <code>wait__1</code>, and rewrites the edge into a chain of explicit control states where each communication step appears at the front of its compiled substate. That keeps the user-facing source compact while still giving the runtime and the proof layer a clean explicit control graph.</p>
+<h2 id="why-derived-next-states-matter">Why Derived Next States Matter</h2>
+<p>The central compromise in this repository is that transitions still expose successor control states structurally through <code>become</code>, rather than leaving control flow hidden in simulation traces.</p>
 <p>That buys several things immediately:</p>
 <ul>
 <li>CTL has a clear successor relation</li>
 <li>control-state diagrams can be rendered without simulation</li>
 <li>sequence and communication diagrams can be generated from the same declared model</li>
-<li>runtime execution can detect mismatches when an actual step lands outside the declared set</li>
+<li>runtime execution can detect mismatches when an actual step lands outside the derived set</li>
 </ul>
-<p>It does not remove the need for correct modeling. A wrong <code>(next ...)</code> declaration can still make the proof layer wrong. The point is that the correctness obligation becomes visible and reviewable.</p>
+<p>It does not remove the need for correct modeling. A wrong <code>become</code> structure can still make the proof layer wrong. The point is that the control-flow obligation remains visible and reviewable.</p>
 <h1 id="scheduling-semantics">Scheduling Semantics</h1>
 <p>The scheduler is single-threaded but concurrent in effect. At each step:</p>
 <ol type="1">
@@ -261,18 +273,85 @@
 <h2 id="random-guards">Random Guards</h2>
 <p>Before attempting a step, the runtime samples a floating-point value called <code>Dice</code> in <code>[0,1]</code>.</p>
 <p>That value can be used in guards to express random branching, for example:</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span> <span class="st">&quot;route to branch a&quot;</span>)</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  (next a)</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  (become a))</span>
-<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>(on (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span> <span class="st">&quot;route to branch b&quot;</span>)</span>
-<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  (next b)</span>
-<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  (become b))</span></code></pre></div>
+<div class="sourceCode" id="cb2"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(edge (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span> <span class="st">&quot;route to branch a&quot;</span>)</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  (become a))</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>(edge (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span> <span class="st">&quot;route to branch b&quot;</span>)</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  (become b))</span></code></pre></div>
 <p>This is enough to express:</p>
 <ul>
 <li>purely random branching</li>
 <li>Markov-chain style behavior</li>
 <li>mixed control + random behavior where some decisions are scheduled and others are probabilistic</li>
+</ul>
+<p>Full M/M/1/5-style example:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(actor Client</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  (state <span class="kw">loop</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    (edge (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>)</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;sleep&quot;</span>)</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>      (become <span class="kw">loop</span>))</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    (edge (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>)</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>      (send Queue req)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;arrival&quot;</span>)</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>      (become <span class="kw">loop</span>))))</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>(actor Queue</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  (state wait</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">0</span>))</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>      (recv msg)</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>      (add <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> elapsed <span class="dv">0</span>)</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>      (become wait))</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    (edge (<span class="kw">and</span> (mailbox req) (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (<span class="kw">not</span> (data= <span class="kw">count</span> <span class="dv">5</span>)))</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>      (recv msg)</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>      (add <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>      (become wait))</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>    (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">5</span>))</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>      (recv dropped)</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>      (add dropped_count <span class="dv">1</span>)</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>      (become wait))</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>    (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>))</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>      (sub <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> last_departure <span class="st">&quot;service-complete&quot;</span>)</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>      (become wait))</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>    (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>))</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> last_departure <span class="st">&quot;busy&quot;</span>)</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>      (become wait))))</span></code></pre></div>
+<p>Interpretation:</p>
+<ul>
+<li><code>Client</code> models arrivals <code>dice-range</code> makes the sleep/arrival split explicit</li>
+<li><code>Queue</code> models a single-server queue with capacity <code>5</code> <code>count</code> is the current system size and <code>dropped_count</code> records blocked arrivals</li>
+<li>departures are the random side when <code>count &gt; 0</code>, <code>dice-range</code> decides whether service completes on that step</li>
+<li>arrivals are client-driven and probabilistic scheduler choice still decides when the client gets to act</li>
+<li>the <code>count = 5</code> branch is the finite-capacity part arrivals are consumed and recorded as drops instead of increasing the queue</li>
+<li>the self-loops are written explicitly with <code>become</code> the example does not rely on implicit stay-in-place behavior</li>
+</ul>
+<p>This is not a continuous-time simulator. It is a small executable control model that captures the same queueing shape:</p>
+<ul>
+<li>probabilistic client arrivals</li>
+<li>one server</li>
+<li>finite capacity <code>5</code></li>
+<li>blocked arrivals counted as losses</li>
+<li>random service completions</li>
+</ul>
+<p>That is usually enough for inspectable CTL properties such as:</p>
+<ul>
+<li>eventually the queue becomes non-empty</li>
+<li>the queue can reach saturation</li>
+<li>some executions accumulate drops</li>
+<li>if arrivals stop, the system can drain</li>
+</ul>
+<p>Representative predicates for this queue model:</p>
+<ul>
+<li><code>(ef (data&gt; Queue count 0) "eventually the queue can become non-empty")</code></li>
+<li><code>(ef (data= Queue count 5) "the finite-capacity queue can saturate")</code></li>
+<li><code>(ef (data&gt; Queue dropped_count 0) "some execution can observe blocked arrivals")</code></li>
+<li><code>(ag (implies (data= Queue count 0) (not (data&gt; Queue dropped_count 0))) "drops only occur after the system has filled at some earlier point")</code></li>
+</ul>
+<p>The Mermaid artifacts below are a useful companion view for this example:</p>
+<ul>
+<li>a queue state rendition showing explicit self-loops</li>
+<li>a queue message/service rendition showing arrival and service-completion flows</li>
 </ul>
 <h2 id="decision-processes">Decision Processes</h2>
 <p>When the only source of branching is <code>Dice</code>, the operational picture is close to a Markov-chain style model.</p>
@@ -302,14 +381,25 @@
 <li>no local updates before blocked communication are committed</li>
 </ul>
 <p>This makes an atomic transition a real scheduler unit.</p>
-<p>The intended normalized form is:</p>
-<ul>
-<li>boolean guard</li>
-<li>optional communication readiness</li>
-<li>local atomic work</li>
-<li><code>become</code> / next-state update</li>
-</ul>
-<p>Because communication readiness is checked before execution, a <code>send</code> may appear textually in the middle of an action block without creating partial updates.</p>
+<p>The compiler normalizes communication-heavy bodies into explicit wait substates.</p>
+<p>At the source level, the user can write local work and communication in one edge body. At the compiled level, the actor is split so that each <code>send</code> or <code>recv</code> sits at the front of a generated substate transition, with explicit <code>become</code> hops connecting the pieces.</p>
+<p>Conceptually, something like this:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>(edge true</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">set</span> before <span class="dv">1</span>)</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  (send B ping)</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">set</span> after <span class="dv">1</span>)</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  (become done))</span></code></pre></div>
+<p>becomes an internal shape more like:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>(edge true</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">set</span> before <span class="dv">1</span>)</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  (become start__wait_0))</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>(state start__wait_0</span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>  (edge true</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    (send B ping)</span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">set</span> after <span class="dv">1</span>)</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    (become done)))</span></code></pre></div>
+<p>That removes a lot of source-language noise while preserving explicit compiled control flow.</p>
 <h2 id="what-counts-as-a-state-change">What Counts As A State Change</h2>
 <p>This repository treats a transition firing as a state change even when the actor remains in the same named control state. In other words:</p>
 <ul>
@@ -317,7 +407,7 @@
 <li>consuming or sending a message is a state change</li>
 <li>staying in the same named state after the step does not mean “nothing happened”</li>
 </ul>
-<p>The graph used by execution and model checking is therefore over full runtime states, while the declared control graph remains the human-facing skeleton.</p>
+<p>The graph used by execution and model checking is therefore over full runtime states, while the derived control graph remains the human-facing skeleton.</p>
 <h1 id="control-flow">Control Flow</h1>
 <p>The intended structured control tools are:</p>
 <ul>
@@ -327,22 +417,197 @@
 </ul>
 <p>This is closer to a small structured machine IR than to an arbitrary scripting language.</p>
 <h1 id="ctl-strategy">CTL Strategy</h1>
-<p>CTL needs an exact successor relation. In this design, the declared <code>(next ...)</code> relation is the control successor relation used by the proof layer.</p>
+<p>CTL needs an exact successor relation. In this design, the successor relation is derived from <code>become</code> calls in each transition body.</p>
 <p>Runtime execution exists to validate that:</p>
 <ul>
-<li>transitions only land in declared next states</li>
+<li>transitions only land in derived successor states</li>
 <li>control state updates are not inconsistent with the model</li>
 </ul>
 <p>This means CTL does not need to wait for simulation to discover the control graph.</p>
+<h2 id="what-ctl-means">What CTL Means</h2>
+<p>CTL is Computation Tree Logic.</p>
+<p>The important idea is that execution does not produce one future. It produces a tree of possible futures:</p>
+<ul>
+<li>scheduler choice can produce different next steps</li>
+<li>random guards can produce different next steps</li>
+<li>mailbox contents can enable or disable different edges</li>
+</ul>
+<p>CTL lets us ask whether a property holds on some future branch or on all future branches.</p>
+<p>There are two dimensions in every temporal CTL operator:</p>
+<ul>
+<li>path quantifier: <code>E</code> means “there exists a path” <code>A</code> means “for all paths”</li>
+<li>time modality: <code>X</code> means “in the next step” <code>F</code> means “eventually in the future” <code>G</code> means “globally, always in the future” <code>U</code> means “until”</li>
+</ul>
+<p>That is the core connection:</p>
+<ul>
+<li><code>E</code> corresponds to existential choice some reachable branch works</li>
+<li><code>A</code> corresponds to universal choice every reachable branch must work</li>
+</ul>
+<p>In ordinary language:</p>
+<ul>
+<li><code>EF p</code> there exists some execution path on which <code>p</code> eventually becomes true “possibly, at some point, <code>p</code> happens”</li>
+<li><code>AF p</code> on every execution path, <code>p</code> eventually becomes true “necessarily, sooner or later, <code>p</code> happens”</li>
+<li><code>EG p</code> there exists some execution path on which <code>p</code> remains true forever “possibly, the system can stay in a <code>p</code>-good region forever”</li>
+<li><code>AG p</code> on every execution path, <code>p</code> remains true forever “necessarily, <code>p</code> is always preserved”</li>
+<li><code>EX p</code> there exists an immediate successor state where <code>p</code> holds “possibly on the next step”</li>
+<li><code>AX p</code> for every immediate successor state, <code>p</code> holds “necessarily on the next step”</li>
+<li><code>E[p U q]</code> there exists a path where <code>p</code> keeps holding until <code>q</code> eventually holds</li>
+<li><code>A[p U q]</code> on every path, <code>p</code> keeps holding until <code>q</code> eventually holds</li>
+</ul>
+<p>This is why the pairs matter:</p>
+<ul>
+<li><code>EF</code> vs <code>AF</code> possible eventuality vs guaranteed eventuality</li>
+<li><code>EG</code> vs <code>AG</code> possible invariant along some branch vs invariant along all branches</li>
+<li><code>EX</code> vs <code>AX</code> one-step possibility vs one-step necessity</li>
+<li><code>EU</code> vs <code>AU</code> possible progress condition vs guaranteed progress condition</li>
+</ul>
+<p>Examples:</p>
+<ul>
+<li><code>(ef (in-state Server accepted))</code> there is some way for the server to reach <code>accepted</code></li>
+<li><code>(af (in-state Server accepted))</code> every possible future must eventually reach <code>accepted</code></li>
+<li><code>(ag (not (mailbox-has Relay ping)))</code> along all futures, the relay mailbox is always free of <code>ping</code></li>
+<li><code>(eg (data&gt; Queue count 0))</code> there exists some path where the queue can stay non-empty forever</li>
+</ul>
+<p><code>EF</code> is often the right operator for reachability or possibility. <code>AF</code> is stronger: it means no matter how scheduling and randomness resolve, the desired state is unavoidable. That difference is exactly why users need the quantifier explanation up front.</p>
+<h2 id="mu-calculus-tutorial">Mu-Calculus Tutorial</h2>
+<p>The modal mu-calculus is the lower-level fixpoint logic underneath this checker. CTL is now treated as a readable special case of that more general logic.</p>
+<p>At first glance, the implementation of <code>mu</code> and <code>nu</code> can look almost suspiciously small. That is because the power comes from the combination of just three ideas:</p>
+<ul>
+<li>boolean structure</li>
+<li>modal next-step structure</li>
+<li>fixpoints over a finite successor graph</li>
+</ul>
+<p>The modal operators are:</p>
+<ul>
+<li><code>diamond p</code> there exists a successor state where <code>p</code> holds this is the same branching idea as CTL’s existential next-step operator</li>
+<li><code>box p</code> for all successor states, <code>p</code> holds this is the universal next-step version</li>
+</ul>
+<p>The fixpoint operators are:</p>
+<ul>
+<li><code>mu X body</code> least fixpoint think “the smallest set of states that satisfies this recursive equation”</li>
+<li><code>nu X body</code> greatest fixpoint think “the largest set of states that satisfies this recursive equation”</li>
+</ul>
+<p>Intuition:</p>
+<ul>
+<li><code>mu</code> is usually how you express eventuality, progress, or finite escape</li>
+<li><code>nu</code> is usually how you express invariance, persistence, or the ability to remain inside a region forever</li>
+</ul>
+<p>That is the core mental model:</p>
+<ul>
+<li>least fixpoint = build upward from nothing</li>
+<li>greatest fixpoint = prune downward from everything</li>
+</ul>
+<h3 id="small-examples">Small Examples</h3>
+<p>Reachability:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>(mu X</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">or</span> (in-state Server accepted)</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>      (diamond X)))</span></code></pre></div>
+<p>Read it as:</p>
+<ul>
+<li>a state satisfies this formula if it is already an <code>accepted</code> state or it can move in one step to another state that satisfies the same formula</li>
+</ul>
+<p>That is exactly “there exists a path that eventually reaches <code>accepted</code>”. So this is the mu-calculus form of <code>EF</code>.</p>
+<p>Invariant preservation:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>(nu X</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">and</span> (<span class="kw">not</span> (mailbox-has Relay ping))</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>       (box X)))</span></code></pre></div>
+<p>Read it as:</p>
+<ul>
+<li>a state satisfies this formula if it is safe now and all of its successors also satisfy the same invariant</li>
+</ul>
+<p>That is exactly “on all paths, always safe”. So this is the mu-calculus form of <code>AG</code>.</p>
+<p>Possible persistence:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>(nu X</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">and</span> (data&gt; Queue <span class="kw">count</span> <span class="dv">0</span>)</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>       (diamond X)))</span></code></pre></div>
+<p>Read it as:</p>
+<ul>
+<li>the queue is non-empty now</li>
+<li>and there exists some next step that keeps you inside the same region</li>
+</ul>
+<p>That captures the idea that there is some execution branch along which the queue can remain non-empty forever. That is the mu-calculus form of <code>EG</code>.</p>
+<h3 id="why-the-algorithm-is-so-small">Why The Algorithm Is So Small</h3>
+<p>The evaluator looks small because it is doing repeated set refinement on a finite graph.</p>
+<p>For <code>mu</code>:</p>
+<ul>
+<li>start with the empty set</li>
+<li>evaluate the body assuming <code>X</code> means that current set</li>
+<li>keep adding states until nothing changes</li>
+</ul>
+<p>For <code>nu</code>:</p>
+<ul>
+<li>start with the set of all states</li>
+<li>evaluate the body assuming <code>X</code> means that current set</li>
+<li>keep removing states until nothing changes</li>
+</ul>
+<p>That is enough to express a large amount of temporal reasoning because recursive temporal properties are exactly what fixpoints are good at.</p>
+<p>For example:</p>
+<ul>
+<li>“eventually reach a good state” means repeated predecessor expansion until the set stabilizes</li>
+<li>“always remain safe” means repeated pruning of states that have bad successors until the set stabilizes</li>
+<li>“stay inside this region forever on some branch” means repeatedly removing states that cannot remain inside the region</li>
+</ul>
+<h3 id="ctl-as-a-special-case">CTL As A Special Case</h3>
+<p>The reason this is such a good foundation is that standard CTL operators translate directly into mu-calculus:</p>
+<ul>
+<li><code>EX p</code> becomes <code>(diamond p)</code></li>
+<li><code>AX p</code> becomes <code>(box p)</code></li>
+<li><code>EF p</code> becomes <code>(mu X (or p (diamond X)))</code></li>
+<li><code>AF p</code> becomes <code>(mu X (or p (box X)))</code></li>
+<li><code>EG p</code> becomes <code>(nu X (and p (diamond X)))</code></li>
+<li><code>AG p</code> becomes <code>(nu X (and p (box X)))</code></li>
+<li><code>E[p U q]</code> becomes <code>(mu X (or q (and p (diamond X))))</code></li>
+<li><code>A[p U q]</code> becomes <code>(mu X (or q (and p (box X))))</code></li>
+</ul>
+<p>So CTL is not being replaced here. It becomes the user-facing fragment with the friendlier names, while the semantic engine underneath is the more general fixpoint logic.</p>
+<h3 id="why-this-feels-like-ltl-territory">Why This Feels Like LTL Territory</h3>
+<p>It is reasonable to look at these formulas and think: “these are the kinds of things I usually use LTL for”.</p>
+<p>That instinct is right in a practical sense. Many properties people ask for in system design sound like:</p>
+<ul>
+<li>eventually something good happens</li>
+<li>always something bad is prevented</li>
+<li>once a request arrives, eventually a response appears</li>
+<li>some loop can continue forever</li>
+</ul>
+<p>Those are the same kinds of temporal intuitions that lead people to LTL.</p>
+<p>The important distinction is semantic:</p>
+<ul>
+<li>LTL talks about a single path at a time</li>
+<li>CTL and the mu-calculus talk directly about branching futures</li>
+</ul>
+<p>In this repository, branching matters a lot:</p>
+<ul>
+<li>scheduler choice creates alternative next steps</li>
+<li>random guards create alternative next steps</li>
+<li>mailbox contents create alternative next steps</li>
+</ul>
+<p>So a branching-time logic is a better fit than plain linear-time reasoning.</p>
+<p>The nice surprise is that the mu-calculus is expressive enough to capture many of the “eventually”, “always”, and “until” properties people informally think of as LTL-style requirements, while still speaking directly about the branching graph your runtime actually explores.</p>
+<h3 id="practical-reading-guide">Practical Reading Guide</h3>
+<p>When reading a raw mu-calculus formula:</p>
+<ol type="1">
+<li>identify the atomic predicate what is the local fact you care about?</li>
+<li>identify the modal direction <code>diamond</code> means “some next branch”, <code>box</code> means “every next branch”</li>
+<li>identify the fixpoint <code>mu</code> usually means eventuality or progress <code>nu</code> usually means invariance or persistence</li>
+<li>read the recursion as “keep applying this condition until it stabilizes”</li>
+</ol>
+<p>That is all the checker is doing in code. It is simple enough to implement compactly, but general enough to cover a large part of practical temporal reasoning.</p>
 <h2 id="present-operators">Present Operators</h2>
 <p>The implementation currently supports:</p>
 <ul>
-<li><code>¬</code>, <code>∧</code>, <code>∨</code>, <code>→</code></li>
 <li><code>not</code>, <code>and</code>, <code>or</code>, <code>implies</code></li>
 <li><code>ex</code>, <code>ax</code></li>
 <li><code>ef</code>, <code>af</code></li>
 <li><code>eg</code>, <code>ag</code></li>
 <li><code>eu</code>, <code>au</code></li>
+</ul>
+<p>Raw mu-calculus operators currently include:</p>
+<ul>
+<li><code>true</code>, <code>false</code></li>
+<li><code>not</code>, <code>and</code>, <code>or</code></li>
+<li><code>diamond</code>, <code>box</code></li>
+<li><code>mu</code>, <code>nu</code></li>
+<li>atomic predicates such as <code>in-state</code>, <code>data=</code>, and <code>mailbox-has</code></li>
 </ul>
 <p>Atomic predicates currently include:</p>
 <ul>
@@ -351,13 +616,55 @@
 <li><code>(mailbox-has A msg "actor A currently holds the message")</code></li>
 </ul>
 <p>Predicate forms may carry a final string argument used only as human-readable documentation. The evaluator ignores that trailing string semantically.</p>
+<h2 id="how-the-checker-works">How The Checker Works</h2>
+<p>The algorithm in this repository is a standard finite-state CTL model-checking pattern over the explored runtime graph.</p>
+<p>Step 1: build the reachable graph.</p>
+<ul>
+<li>start from the initial runtime</li>
+<li>execute one enabled actor step at a time</li>
+<li>clone successor runtimes</li>
+<li>deduplicate states by a serialized runtime key</li>
+<li>record the successor relation between runtime states</li>
+</ul>
+<p>If a state has no enabled successors, the implementation records a self-loop labeled <code>deadlock</code>. That makes deadlock states explicit in the graph and keeps the temporal operators total.</p>
+<p>Step 2: evaluate formulas by computing the set of satisfying states.</p>
+<p>For each subformula, the checker computes:</p>
+<ul>
+<li>the set of explored states where the subformula is true</li>
+</ul>
+<p>Atomic predicates are evaluated directly on each runtime state. Boolean operators are evaluated by ordinary set operations:</p>
+<ul>
+<li><code>not</code> complement</li>
+<li><code>and</code> intersection</li>
+<li><code>or</code> union</li>
+<li><code>implies</code> <code>not left or right</code></li>
+</ul>
+<p>The temporal operators are computed from the successor graph:</p>
+<ul>
+<li><code>EX p</code> mark any state with at least one successor already marked by <code>p</code></li>
+<li><code>AX p</code> mark any state whose successors are all marked by <code>p</code></li>
+<li><code>EF p</code> reduce to <code>E[true U p]</code></li>
+<li><code>AF p</code> reduce to <code>A[true U p]</code></li>
+<li><code>AG p</code> reduce to <code>not EF not p</code></li>
+<li><code>EG p</code> compute a greatest fixpoint: start from states satisfying <code>p</code>, then repeatedly remove any state that cannot stay inside that set on at least one successor</li>
+<li><code>EU(p, q)</code> compute a least fixpoint: start from states satisfying <code>q</code>, then repeatedly add states satisfying <code>p</code> that can move to an already accepted state</li>
+<li><code>AU(p, q)</code> compute a least fixpoint: start from states satisfying <code>q</code>, then repeatedly add states satisfying <code>p</code> whose successors are all already accepted</li>
+</ul>
+<p>So the checker is not proving arbitrary mathematics. It is doing graph analysis on the explored transition system induced by the actor model.</p>
+<p>That is exactly why this works well here:</p>
+<ul>
+<li>the graph is explicit</li>
+<li>the control flow is explicit</li>
+<li>the user can inspect both the model and the formulas</li>
+<li>the result can be explained in ordinary “possibly/necessarily, eventually/always” language</li>
+</ul>
 <h2 id="what-ctl-is-proving-here">What CTL Is Proving Here</h2>
 <p>At the current stage, CTL is proving properties over the repository’s induced model, not solving theorem-proving problems over arbitrary infinite mathematics.</p>
 <p>That means:</p>
 <ul>
 <li>if the reachable state space is finite and fully explored, the model-checking result is exact for that model</li>
 <li>if the model is bounded or abstracted, the result applies to that abstraction</li>
-<li>if the declared <code>(next ...)</code> relation is wrong, the result is only as good as that declaration</li>
+<li>if the derived <code>become</code> successor relation is wrong, the result is only as good as that model</li>
 </ul>
 <p>This is still useful. The tool is intended to make control flow, messaging, and temporal requirements inspectable enough that a human can review the generated model rather than trusting a hidden formalization.</p>
 <h1 id="event-log-and-metrics">Event Log And Metrics</h1>
@@ -394,6 +701,25 @@
 <li>stores the sampled floating-point value in <code>out</code></li>
 </ul></li>
 </ul>
+<p>Pure value-level helpers:</p>
+<ul>
+<li><code>(cons a b)</code>
+<ul>
+<li>builds a simple list by prepending <code>a</code> to <code>b</code></li>
+</ul></li>
+<li><code>(car xs)</code>
+<ul>
+<li>returns the first element of a list</li>
+</ul></li>
+<li><code>(cdr xs)</code>
+<ul>
+<li>returns the tail of a list</li>
+</ul></li>
+<li><code>(def name (params...) body)</code>
+<ul>
+<li>defines an actor-local pure helper function whose body can be used inside value positions such as <code>set</code> and <code>send</code></li>
+</ul></li>
+</ul>
 <p>These are intentionally low-level. They are not safe protocol APIs. They are protocol-modeling primitives.</p>
 <p>Planned built-ins:</p>
 <ul>
@@ -419,7 +745,7 @@
 <li>one mailbox per actor</li>
 <li>explicit named control states</li>
 <li>explicit transition names</li>
-<li>explicit declared next states</li>
+<li>successor states derived from <code>become</code></li>
 <li>actor-local state is only mutated by the actor itself</li>
 <li>communication readiness gates transition selection</li>
 <li>CTL consumes the same declared control graph that diagrams do</li>
@@ -471,46 +797,35 @@
 </ul>
 <p>The tests are not secondary. They are the clearest executable specification currently in the repository.</p>
 <h1 id="example-model">Example Model</h1>
-<p>The document example should not be a single actor in isolation. The intended workflow is to describe a set of interacting actors, generate diagrams from that same input, and check temporal requirements over the same declared control graph.</p>
+<p>The document example should not be a single actor in isolation. The intended workflow is to describe a set of interacting actors, generate diagrams from that same input, and check temporal requirements over the same derived control graph.</p>
 <p>This small message-chain example is intentionally simple, but it already exercises:</p>
 <ul>
 <li>multiple actors</li>
 <li>message passing</li>
 <li>explicit control states</li>
-<li>declared next states</li>
+<li>successor states derived from <code>become</code></li>
 <li>CTL predicates over the resulting model</li>
 </ul>
-<div class="sourceCode" id="cb3"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(actor Client</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  (state start</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    (on true</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>      (next done)</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>      (send Relay &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>      (become done)))</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  (state done))</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>(actor Relay</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>  (state wait</span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    (on (mailbox &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>      (next forwarded)</span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>      (recv &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>      (send Server &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>      (become forwarded))</span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    (on true</span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>      (next wait)</span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>      (become wait)))</span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>  (state forwarded))</span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>(actor Server</span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>  (state idle</span>
-<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    (on (mailbox &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>      (next accepted)</span>
-<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>      (recv &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">set</span> received &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>      (become accepted))</span>
-<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>    (on true</span>
-<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>      (next idle)</span>
-<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>      (become idle)))</span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>  (state accepted))</span></code></pre></div>
+<div class="sourceCode" id="cb9"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>(actor Client</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (state start</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    (edge true</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>      (send Relay &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>      (become done)))</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  (state done))</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>(actor Relay</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  (state relay</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    (edge true</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>      (recv msg)</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>      (send Server msg)</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>      (become relay))))</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>(actor Server</span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>  (state idle</span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>    (edge true</span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>      (recv received)</span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>      (become accepted)))</span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>  (state accepted))</span></code></pre></div>
 <p>Representative CTL requirements:</p>
 <ul>
 <li><code>(ef (in-state Server accepted "possibly server accepts"))</code></li>
@@ -522,8 +837,8 @@
 <p>The operational intent is:</p>
 <ul>
 <li>the client declares a message value whose <code>type</code> is <code>ping</code></li>
-<li>intermediaries only accept messages of type <code>ping</code></li>
-<li>if an intermediary does not have such a message available, it remains in its waiting loop until one arrives</li>
+<li>the relay forwards that value unchanged to the server</li>
+<li>if a <code>recv</code> has no message available, that edge is simply not ready</li>
 </ul>
 <h2 id="walkthrough-of-the-example">Walkthrough Of The Example</h2>
 <p>The example should be read as three small control machines composed by message passing.</p>
@@ -535,20 +850,19 @@
 </ul>
 <p><code>Relay</code></p>
 <ul>
-<li>waits in <code>wait</code></li>
-<li>if a <code>ping</code>-typed message is present, it consumes it, forwards it, and becomes <code>forwarded</code></li>
-<li>otherwise it stays in its waiting loop</li>
+<li>has one explicit source state, <code>relay</code></li>
+<li>when a message is available, it consumes it, forwards it to <code>Server</code>, and becomes <code>relay</code> again</li>
+<li>the compiler inserts an internal wait substate so the compiled control graph still begins each communication step with <code>recv</code> or <code>send</code></li>
 </ul>
 <p><code>Server</code></p>
 <ul>
 <li>waits in <code>idle</code></li>
-<li>if a <code>ping</code>-typed message is present, it consumes it, records it, and becomes <code>accepted</code></li>
-<li>otherwise it stays in <code>idle</code></li>
+<li>when a message is available, it consumes it, records it, and becomes <code>accepted</code></li>
 </ul>
 <p>This example is deliberately small, but it is enough to show:</p>
 <ul>
 <li>explicit control states</li>
-<li>explicit next-state declarations</li>
+<li>successor extraction from <code>become</code></li>
 <li>queued communication</li>
 <li>CTL requirements over the same model</li>
 <li>generated state and sequence diagrams</li>
@@ -606,18 +920,77 @@ flowchart TD
 
     subgraph Relay
         direction TB
-        R_wait([wait]) --&gt;|&quot;received = ping&lt;br/&gt;forwarded = ping&lt;br/&gt;become forwarded&quot;| R_forwarded([forwarded])
-        R_wait --&gt;|&quot;wrong type or no ping&lt;br/&gt;become wait&quot;| R_wait
+        R_relay([relay]) --&gt;|&quot;recv msg&lt;br/&gt;become relay__wait_0&quot;| R_wait0([relay__wait_0])
+        R_wait0 --&gt;|&quot;send msg&lt;br/&gt;become relay&quot;| R_relay
     end
 
     subgraph Server
         direction TB
         S_idle([idle]) --&gt;|&quot;received = ping&lt;br/&gt;become accepted&quot;| S_accepted([accepted])
-        S_idle --&gt;|&quot;wrong type or no ping&lt;br/&gt;become idle&quot;| S_idle
     end
 
-    C_done -. send ping .-&gt; R_wait
-    R_forwarded -. send ping .-&gt; S_idle
+    C_done -. send ping .-&gt; R_relay
+    R_wait0 -. send ping .-&gt; S_idle
+</code></pre>
+</details>
+<h3 id="mm1-5-queue-flow">Mm1 5 Queue Flow</h3>
+<figure>
+<img src="../generated/mm1_5_queue_flow.svg" alt="Mm1 5 Queue Flow" /><figcaption aria-hidden="true">Mm1 5 Queue Flow</figcaption>
+</figure>
+<details>
+<summary>
+Mermaid Source: <code>mm1_5_queue_flow.mmd</code>
+</summary>
+<pre><code class="language-mermaid">
+sequenceDiagram
+    participant Client
+    participant Queue
+    Note over Client: dice branch
+    alt arrival
+        Client--&gt;&gt;Queue: req
+        alt count &lt; 5
+            Queue-&gt;&gt;Queue: count += 1
+        else count = 5
+            Queue-&gt;&gt;Queue: dropped_count += 1
+        end
+    else sleep
+        Client-&gt;&gt;Client: last = sleep
+    end
+    Note over Queue: service branch when count &gt; 0
+    alt service-complete
+        Queue-&gt;&gt;Queue: count -= 1
+        Queue-&gt;&gt;Queue: last_departure = service-complete
+    else busy
+        Queue-&gt;&gt;Queue: last_departure = busy
+    end
+</code></pre>
+</details>
+<h3 id="mm1-5-queue-state">Mm1 5 Queue State</h3>
+<figure>
+<img src="../generated/mm1_5_queue_state.svg" alt="Mm1 5 Queue State" /><figcaption aria-hidden="true">Mm1 5 Queue State</figcaption>
+</figure>
+<details>
+<summary>
+Mermaid Source: <code>mm1_5_queue_state.mmd</code>
+</summary>
+<pre><code class="language-mermaid">
+flowchart TD
+    subgraph Client
+        direction TB
+        C_loop([loop]) --&gt;|&quot;dice&amp;lt;0.5&lt;br/&gt;last = sleep&lt;br/&gt;become loop&quot;| C_loop
+        C_loop --&gt;|&quot;dice&amp;gt;=0.5&lt;br/&gt;send req&lt;br/&gt;last = arrival&lt;br/&gt;become loop&quot;| C_loop
+    end
+
+    subgraph Queue
+        direction TB
+        Q_wait([wait]) --&gt;|&quot;req and count = 0&lt;br/&gt;count += 1&lt;br/&gt;elapsed = 0&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;req and 0 &amp;lt; count &amp;lt; 5&lt;br/&gt;count += 1&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;req and count = 5&lt;br/&gt;dropped_count += 1&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;lt;0.5&lt;br/&gt;count -= 1&lt;br/&gt;last_departure = service-complete&lt;br/&gt;become wait&quot;| Q_wait
+        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;gt;=0.5&lt;br/&gt;last_departure = busy&lt;br/&gt;become wait&quot;| Q_wait
+    end
+
+    C_loop -. arrival req .-&gt; Q_wait
 </code></pre>
 </details>
 <p>The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure.</p>
