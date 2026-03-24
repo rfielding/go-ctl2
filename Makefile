@@ -13,11 +13,12 @@ DOC_SRC := $(DOCS_DIR)/ir.md
 DOC_BUILD_SRC := $(BUILD_DIR)/ir.generated.md
 HTML_OUT := $(BUILD_DIR)/ir.html
 DIAGRAM_SNIPPETS := $(GENERATED_DIR)/diagram_sections.md
-MESSAGE_XYPLOT := $(GENERATED_DIR)/message_xyplot.svg
+PLOT_SNIPPETS := $(GENERATED_DIR)/plot_sections.md
+PLOT_STAMP := $(GENERATED_DIR)/xyplots.stamp
 
 MERMAID_SRC := $(wildcard $(MERMAID_DIR)/*.mmd)
 MERMAID_SVG := $(patsubst $(MERMAID_DIR)/%.mmd,$(GENERATED_DIR)/%.svg,$(MERMAID_SRC))
-DOC_ASSETS := $(MERMAID_SVG) $(MESSAGE_XYPLOT)
+DOC_ASSETS := $(MERMAID_SVG) $(PLOT_STAMP)
 
 .PHONY: all docs diagrams test serve-docs clean
 
@@ -34,8 +35,8 @@ $(HTML_OUT): $(DOC_BUILD_SRC) $(DOC_ASSETS) $(CSS_FILE) | $(BUILD_DIR) $(BUILD_G
 	$(PANDOC) --standalone --toc --css ../dark.css --from markdown --to html5 -o $@ $(DOC_BUILD_SRC)
 	cp $(GENERATED_DIR)/*.svg $(BUILD_GENERATED_DIR)/
 
-$(DOC_BUILD_SRC): $(DOC_SRC) $(DIAGRAM_SNIPPETS) | $(BUILD_DIR)
-	python3 scripts/build_doc.py $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(DOC_BUILD_SRC)
+$(DOC_BUILD_SRC): $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(PLOT_SNIPPETS) | $(BUILD_DIR)
+	python3 scripts/build_doc.py $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(PLOT_SNIPPETS) $(DOC_BUILD_SRC)
 
 $(GENERATED_DIR)/%.svg: $(MERMAID_DIR)/%.mmd $(MERMAID_CONFIG) | $(GENERATED_DIR)
 	@if command -v $(MMDC) >/dev/null 2>&1; then \
@@ -52,8 +53,9 @@ $(GENERATED_DIR)/%.svg: $(MERMAID_DIR)/%.mmd $(MERMAID_CONFIG) | $(GENERATED_DIR
 $(DIAGRAM_SNIPPETS): $(MERMAID_SRC) | $(GENERATED_DIR)
 	python3 scripts/generate_diagram_sections.py $(MERMAID_DIR) $(DIAGRAM_SNIPPETS)
 
-$(MESSAGE_XYPLOT): scripts/generate_xyplot.py $(wildcard *.go) | $(GENERATED_DIR)
-	python3 scripts/generate_xyplot.py $(MESSAGE_XYPLOT)
+$(PLOT_STAMP): scripts/generate_xyplot.py $(wildcard *.go) | $(GENERATED_DIR)
+	python3 scripts/generate_xyplot.py $(GENERATED_DIR) $(PLOT_SNIPPETS)
+	touch $(PLOT_STAMP)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

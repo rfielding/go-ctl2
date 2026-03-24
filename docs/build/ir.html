@@ -146,7 +146,13 @@
 <ul>
 <li><a href="#walkthrough-of-the-example">Walkthrough Of The Example</a></li>
 </ul></li>
-<li><a href="#message-plot">Message Plot</a></li>
+<li><a href="#message-plot">Message Plot</a>
+<ul>
+<li><a href="#message-outstanding">Message Outstanding</a></li>
+<li><a href="#message-receives">Message Receives</a></li>
+<li><a href="#message-sends">Message Sends</a></li>
+<li><a href="#queue-outstanding">Queue Outstanding</a></li>
+</ul></li>
 <li><a href="#mermaid-artifacts">Mermaid Artifacts</a>
 <ul>
 <li><a href="#a-to-b-sequence">A To B Sequence</a></li>
@@ -835,7 +841,20 @@
 <span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ef (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;possibly server records the ping message&quot;</span>)))</span>
 <span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (af (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;eventually server records the ping message&quot;</span>)))</span>
-<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ag (<span class="kw">not</span> (mailbox-has Relay &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;relay still holds ping&quot;</span>)) <span class="st">&quot;always relay mailbox is empty of ping&quot;</span>)))</span></code></pre></div>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ag (<span class="kw">not</span> (mailbox-has Relay &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;relay still holds ping&quot;</span>)) <span class="st">&quot;always relay mailbox is empty of ping&quot;</span>))</span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>  (xyplot message_outstanding</span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Outstanding Messages&quot;</span>)</span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received))</span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>  (xyplot message_sends</span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Sends By Step&quot;</span>)</span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>    (metric send-count))</span>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>  (xyplot message_receives</span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Receives By Step&quot;</span>)</span>
+<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a>    (metric receive-count)))</span></code></pre></div>
 <p>The first two embedded assertions are intended to hold for the example model.</p>
 <p>The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where <code>Relay</code> is holding a <code>ping</code> message before it forwards it.</p>
 <p>The operational intent is:</p>
@@ -874,15 +893,72 @@
 </ul>
 <h1 id="message-plot">Message Plot</h1>
 <p>Because transitions, sends, and receives are now logged as structured events, the docs can render plots from an actual Runtime execution instead of from hand-written points.</p>
-<p>The plot above is declared in the model itself with:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>(xyplot outstanding</span>
+<p>One such plot is declared in the model itself with:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>(xyplot queue_outstanding</span>
 <span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
 <span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  (steps <span class="dv">100</span>)</span>
 <span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  (metric sent-minus-received))</span></code></pre></div>
+<p>The line charts below are rendered from every <code>xyplot</code> declaration in the example models. The queue plot is a 100-step run of the M/M/1/5-style queue example above. It starts at <code>0</code>, and the <code>sent-minus-received</code> line is positive exactly when sends are ahead of receives. It does not force the run to end at <code>0</code>, because this queue model can still have accepted work in service even after mailbox traffic has balanced out.</p>
+<h3 id="message-outstanding">Message Outstanding</h3>
 <figure>
-<img src="../generated/message_xyplot.svg" alt="Outstanding Messages By Step" /><figcaption aria-hidden="true">Outstanding Messages By Step</figcaption>
+<img src="../generated/message_outstanding.svg" alt="Message Chain Outstanding Messages" /><figcaption aria-hidden="true">Message Chain Outstanding Messages</figcaption>
 </figure>
-<p>The current plot is a 100-step run of the M/M/1/5-style queue example above. It starts at <code>0</code>, and the plotted value is <code>sent - received</code>, so the line is positive exactly when sends are ahead of receives. It does not force the run to end at <code>0</code>, because this queue model can still have accepted work in service even after mailbox traffic has balanced out. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.</p>
+<details>
+<summary>
+XY Plot Source: <code>message_outstanding</code>
+</summary>
+<pre><code class="language-lisp">
+(xyplot message_outstanding
+  (title &quot;Message Chain Outstanding Messages&quot;)
+  (steps 24)
+  (metric sent-minus-received))
+</code></pre>
+</details>
+<h3 id="message-receives">Message Receives</h3>
+<figure>
+<img src="../generated/message_receives.svg" alt="Message Chain Receives By Step" /><figcaption aria-hidden="true">Message Chain Receives By Step</figcaption>
+</figure>
+<details>
+<summary>
+XY Plot Source: <code>message_receives</code>
+</summary>
+<pre><code class="language-lisp">
+(xyplot message_receives
+  (title &quot;Message Chain Receives By Step&quot;)
+  (steps 24)
+  (metric receive-count))
+</code></pre>
+</details>
+<h3 id="message-sends">Message Sends</h3>
+<figure>
+<img src="../generated/message_sends.svg" alt="Message Chain Sends By Step" /><figcaption aria-hidden="true">Message Chain Sends By Step</figcaption>
+</figure>
+<details>
+<summary>
+XY Plot Source: <code>message_sends</code>
+</summary>
+<pre><code class="language-lisp">
+(xyplot message_sends
+  (title &quot;Message Chain Sends By Step&quot;)
+  (steps 24)
+  (metric send-count))
+</code></pre>
+</details>
+<h3 id="queue-outstanding">Queue Outstanding</h3>
+<figure>
+<img src="../generated/queue_outstanding.svg" alt="Outstanding Messages By Step" /><figcaption aria-hidden="true">Outstanding Messages By Step</figcaption>
+</figure>
+<details>
+<summary>
+XY Plot Source: <code>queue_outstanding</code>
+</summary>
+<pre><code class="language-lisp">
+(xyplot queue_outstanding
+  (title &quot;Outstanding Messages By Step&quot;)
+  (steps 100)
+  (metric sent-minus-received))
+</code></pre>
+</details>
 <p>Natural follow-on plots include:</p>
 <ul>
 <li>sends per step</li>

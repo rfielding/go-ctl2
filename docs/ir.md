@@ -901,7 +901,20 @@ This small message-chain example is intentionally simple, but it already exercis
 
   (assert (ef (data= Server received '(message (type ping)) "possibly server records the ping message")))
   (assert (af (data= Server received '(message (type ping)) "eventually server records the ping message")))
-  (assert (ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping")))
+  (assert (ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping"))
+
+  (xyplot message_outstanding
+    (title "Message Chain Outstanding Messages")
+    (steps 24)
+    (metric sent-minus-received))
+  (xyplot message_sends
+    (title "Message Chain Sends By Step")
+    (steps 24)
+    (metric send-count))
+  (xyplot message_receives
+    (title "Message Chain Receives By Step")
+    (steps 24)
+    (metric receive-count)))
 ```
 
 The first two embedded assertions are intended to hold for the example model.
@@ -948,18 +961,18 @@ This example is deliberately small, but it is enough to show:
 
 Because transitions, sends, and receives are now logged as structured events, the docs can render plots from an actual Runtime execution instead of from hand-written points.
 
-The plot above is declared in the model itself with:
+One such plot is declared in the model itself with:
 
 ```lisp
-(xyplot outstanding
+(xyplot queue_outstanding
   (title "Outstanding Messages By Step")
   (steps 100)
   (metric sent-minus-received))
 ```
 
-![Outstanding Messages By Step](../generated/message_xyplot.svg)
+The line charts below are rendered from every `xyplot` declaration in the example models. The queue plot is a 100-step run of the M/M/1/5-style queue example above. It starts at `0`, and the `sent-minus-received` line is positive exactly when sends are ahead of receives. It does not force the run to end at `0`, because this queue model can still have accepted work in service even after mailbox traffic has balanced out.
 
-The current plot is a 100-step run of the M/M/1/5-style queue example above. It starts at `0`, and the plotted value is `sent - received`, so the line is positive exactly when sends are ahead of receives. It does not force the run to end at `0`, because this queue model can still have accepted work in service even after mailbox traffic has balanced out. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.
+{{PLOT_SECTIONS}}
 
 Natural follow-on plots include:
 

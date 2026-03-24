@@ -1910,7 +1910,9 @@ func buildXYPlot(form Value) (XYPlot, error) {
 			if err != nil {
 				return XYPlot{}, err
 			}
-			if metric != "sent-minus-received" {
+			switch metric {
+			case "sent-minus-received", "send-count", "receive-count":
+			default:
 				return XYPlot{}, fmt.Errorf("unsupported xyplot metric %q", metric)
 			}
 			plot.Metric = metric
@@ -3476,11 +3478,21 @@ func isSymbolPart(ch rune) bool {
 }
 
 type docPlotData struct {
-	Title    string        `json:"title"`
-	Subtitle string        `json:"subtitle"`
-	Steps    int           `json:"steps"`
-	Sends    []MetricPoint `json:"sends"`
-	Receives []MetricPoint `json:"receives"`
+	Name      string        `json:"name"`
+	Title     string        `json:"title"`
+	Subtitle  string        `json:"subtitle"`
+	Steps     int           `json:"steps"`
+	Metric    string        `json:"metric"`
+	YLabel    string        `json:"ylabel"`
+	Legend    string        `json:"legend"`
+	Series    []MetricPoint `json:"series"`
+	ImageName string        `json:"image_name"`
+}
+
+type docPlotBinding struct {
+	Plot     XYPlot
+	Subtitle string
+	Runtime  func(int) (*Runtime, error)
 }
 
 const docQueueModelSource = `
@@ -3518,14 +3530,56 @@ const docQueueModelSource = `
 					(set last_departure "busy")
 					(become wait))))
 
-		(xyplot outstanding
+		(xyplot queue_outstanding
 			(title "Outstanding Messages By Step")
 			(steps 100)
 			(metric sent-minus-received)))
 `
 
+const docMessageModelSource = `
+	(model
+		(actor Client
+			(state loop
+				(edge true
+					(send Relay '(message (type ping)))
+					(become loop))))
+
+		(actor Relay
+			(state relay
+				(edge true
+					(recv msg)
+					(send Server msg)
+					(become relay))))
+
+		(actor Server
+			(state idle
+				(edge true
+					(recv received)
+					(become idle))))
+
+		(assert (ef (data= Server received '(message (type ping)))))
+		(assert (af (data= Server received '(message (type ping)))))
+
+		(xyplot message_outstanding
+			(title "Message Chain Outstanding Messages")
+			(steps 24)
+			(metric sent-minus-received))
+		(xyplot message_sends
+			(title "Message Chain Sends By Step")
+			(steps 24)
+			(metric send-count))
+		(xyplot message_receives
+			(title "Message Chain Receives By Step")
+			(steps 24)
+			(metric receive-count)))
+`
+
 func docQueueModel() (*RequirementsModel, error) {
 	return CompileModel(docQueueModelSource)
+}
+
+func docMessageModel() (*RequirementsModel, error) {
+	return CompileModel(docMessageModelSource)
 }
 
 func docQueueRuntime(steps int) (*Runtime, error) {
@@ -3560,46 +3614,194 @@ func docQueueRuntime(steps int) (*Runtime, error) {
 	return rt, nil
 }
 
-func emitDocPlotData(steps int) error {
-	spec, err := docQueueModel()
+func docMessageRuntime(steps int) (*Runtime, error) {
+	spec, err := docMessageModel()
+	if err != nil {
+		return nil, err
+	}
+	rt := spec.Runtime()
+	order := []int{0, 1, 1, 2}
+	next := 0
+	rt.ChooseActorFn = func(*Runtime) int {
+		index := order[next%len(order)]
+		next++
+		return index
+	}
+	maxTicks := steps + 16
+	for attempts := 0; rt.Step < steps && attempts < maxTicks; attempts++ {
+		if err := rt.Tick(); err != nil {
+			return nil, err
+		}
+	}
+	if rt.Step < steps {
+		return nil, fmt.Errorf("doc message example reached only %d applied steps after %d ticks", rt.Step, maxTicks)
+	}
+	return rt, nil
+}
+
+func docPlotBindings() (map[string]docPlotBinding, error) {
+	queueModel, err := docQueueModel()
+	if err != nil {
+		return nil, err
+	}
+	messageModel, err := docMessageModel()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]docPlotBinding{}
+	add := func(model *RequirementsModel, subtitle string, runtime func(int) (*Runtime, error)) {
+		for _, plot := range model.Plots {
+			out[plot.Name] = docPlotBinding{
+				Plot:     plot,
+				Subtitle: subtitle,
+				Runtime:  runtime,
+			}
+		}
+	}
+	add(messageModel, "Runtime trace of the message-chain example.", docMessageRuntime)
+	add(queueModel, "Runtime trace of the M/M/1/5-style queue example.", docQueueRuntime)
+	return out, nil
+}
+
+func docPlotSeries(rt *Runtime, metric string) ([]MetricPoint, string, string, error) {
+	switch metric {
+	case "send-count":
+		series := append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventCountSeries(EventSend, nil)...)
+		return series, "cumulative sends", "sends", nil
+	case "receive-count":
+		series := append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventCountSeries(EventReceive, nil)...)
+		return series, "cumulative receives", "receives", nil
+	case "sent-minus-received":
+		sendSeries := rt.EventCountSeries(EventSend, nil)
+		receiveSeries := rt.EventCountSeries(EventReceive, nil)
+		sendMap := map[int]float64{}
+		recvMap := map[int]float64{}
+		for _, point := range sendSeries {
+			sendMap[point.Step] = point.Value
+		}
+		for _, point := range receiveSeries {
+			recvMap[point.Step] = point.Value
+		}
+		out := []MetricPoint{{Step: 0, Value: 0}}
+		sends := 0.0
+		receives := 0.0
+		for step := 1; step <= rt.Step; step++ {
+			if value, ok := sendMap[step]; ok {
+				sends = value
+			}
+			if value, ok := recvMap[step]; ok {
+				receives = value
+			}
+			out = append(out, MetricPoint{Step: step, Value: sends - receives})
+		}
+		return out, "sent - received", "outstanding = sends - receives", nil
+	default:
+		return nil, "", "", fmt.Errorf("unsupported doc plot metric %q", metric)
+	}
+}
+
+func emitDocPlotManifest() error {
+	plots, err := docPlotManifestData()
 	if err != nil {
 		return err
 	}
-	plot := XYPlot{Title: "Outstanding Messages By Step", Steps: steps, Metric: "sent-minus-received"}
-	if len(spec.Plots) > 0 {
-		plot = spec.Plots[0]
+	return json.NewEncoder(os.Stdout).Encode(plots)
+}
+
+func docPlotManifestData() ([]docPlotData, error) {
+	bindings, err := docPlotBindings()
+	if err != nil {
+		return nil, err
 	}
-	if steps > 0 {
-		plot.Steps = steps
+	var plots []docPlotData
+	names := make([]string, 0, len(bindings))
+	for name := range bindings {
+		names = append(names, name)
 	}
-	rt, err := docQueueRuntime(steps)
+	sort.Strings(names)
+	for _, name := range names {
+		binding := bindings[name]
+		plots = append(plots, docPlotData{
+			Name:      binding.Plot.Name,
+			Title:     binding.Plot.Title,
+			Subtitle:  binding.Subtitle,
+			Steps:     binding.Plot.Steps,
+			Metric:    binding.Plot.Metric,
+			ImageName: binding.Plot.Name + ".svg",
+		})
+	}
+	return plots, nil
+}
+
+func emitDocPlotData(name string, steps int) error {
+	data, err := docPlotDataByName(name, steps)
 	if err != nil {
 		return err
-	}
-	data := docPlotData{
-		Title:    plot.Title,
-		Subtitle: fmt.Sprintf("%d-step Runtime trace of the M/M/1/5-style queue example.", rt.Step),
-		Steps:    rt.Step,
-		Sends:    rt.EventCountSeries(EventSend, nil),
-		Receives: rt.EventCountSeries(EventReceive, nil),
 	}
 	return json.NewEncoder(os.Stdout).Encode(data)
 }
 
+func docPlotDataByName(name string, steps int) (docPlotData, error) {
+	bindings, err := docPlotBindings()
+	if err != nil {
+		return docPlotData{}, err
+	}
+	binding, ok := bindings[name]
+	if !ok {
+		return docPlotData{}, fmt.Errorf("unknown doc plot %q", name)
+	}
+	plot := binding.Plot
+	if steps > 0 {
+		plot.Steps = steps
+	}
+	rt, err := binding.Runtime(plot.Steps)
+	if err != nil {
+		return docPlotData{}, err
+	}
+	series, ylabel, legend, err := docPlotSeries(rt, plot.Metric)
+	if err != nil {
+		return docPlotData{}, err
+	}
+	data := docPlotData{
+		Name:      plot.Name,
+		Title:     plot.Title,
+		Subtitle:  fmt.Sprintf("%d-step %s", rt.Step, binding.Subtitle),
+		Steps:     rt.Step,
+		Metric:    plot.Metric,
+		YLabel:    ylabel,
+		Legend:    legend,
+		Series:    series,
+		ImageName: plot.Name + ".svg",
+	}
+	return data, nil
+}
+
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "doc-xyplot-data" {
-		steps := 100
-		if len(os.Args) >= 3 {
-			value, err := strconv.Atoi(os.Args[2])
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "invalid step count %q: %v\n", os.Args[2], err)
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "doc-xyplots-manifest":
+			if err := emitDocPlotManifest(); err != nil {
+				fmt.Fprintf(os.Stderr, "doc-xyplots-manifest: %v\n", err)
 				os.Exit(1)
 			}
-			steps = value
-		}
-		if err := emitDocPlotData(steps); err != nil {
-			fmt.Fprintf(os.Stderr, "doc-xyplot-data: %v\n", err)
-			os.Exit(1)
+		case "doc-xyplot-data":
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: doc-xyplot-data <plot-name> [steps]")
+				os.Exit(1)
+			}
+			steps := 0
+			if len(os.Args) >= 4 {
+				value, err := strconv.Atoi(os.Args[3])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "invalid step count %q: %v\n", os.Args[3], err)
+					os.Exit(1)
+				}
+				steps = value
+			}
+			if err := emitDocPlotData(os.Args[2], steps); err != nil {
+				fmt.Fprintf(os.Stderr, "doc-xyplot-data: %v\n", err)
+				os.Exit(1)
+			}
 		}
 	}
 }

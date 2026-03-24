@@ -1,6 +1,48 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"flag"
+	"os"
+	"testing"
+)
+
+var (
+	docPlotMode = flag.String("doc-plot-mode", "", "internal helper for docs plot generation")
+	docPlotOut  = flag.String("doc-plot-out", "", "internal helper output path for docs plot generation")
+	docPlotName = flag.String("doc-plot-name", "", "internal helper plot name for docs plot generation")
+)
+
+func TestEmitDocPlotDataForDocs(t *testing.T) {
+	mode := *docPlotMode
+	if mode == "" {
+		t.Skip("doc plot helper")
+	}
+	if *docPlotOut == "" {
+		t.Fatal("--doc-plot-out must be set")
+	}
+
+	var data interface{}
+	var err error
+	switch mode {
+	case "manifest":
+		data, err = docPlotManifestData()
+	case "data":
+		data, err = docPlotDataByName(*docPlotName, 0)
+	default:
+		t.Fatalf("unsupported CTL_DOC_PLOT_MODE %q", mode)
+	}
+	if err != nil {
+		t.Fatalf("doc plot helper returned error: %v", err)
+	}
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
+	}
+	if err := os.WriteFile(*docPlotOut, bytes, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+}
 
 func TestReadAcceptsManyExpressions(t *testing.T) {
 	cases := []struct {
