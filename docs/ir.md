@@ -946,7 +946,7 @@ Because transitions, sends, and receives are now logged as structured events, th
 
 ![Outstanding Messages By Step](../generated/message_xyplot.svg)
 
-The current plot is a 100-step run of the M/M/1/5-style queue example above, followed by a drain phase so the series starts at `0` messages and ends at `0` messages. The plotted value is `sent - received`, so the line is positive exactly when sends are ahead of receives. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.
+The current plot is a 100-step run of the M/M/1/5-style queue example above. It starts at `0`, and the plotted value is `sent - received`, so the line is positive exactly when sends are ahead of receives. It does not force the run to end at `0`, because this queue model can still have accepted work in service even after mailbox traffic has balanced out. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.
 
 Natural follow-on plots include:
 
