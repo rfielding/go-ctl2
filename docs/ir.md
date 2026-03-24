@@ -399,6 +399,195 @@ Examples:
 `AF` is stronger: it means no matter how scheduling and randomness resolve, the desired state is unavoidable.
 That difference is exactly why users need the quantifier explanation up front.
 
+## Mu-Calculus Tutorial
+
+The modal mu-calculus is the lower-level fixpoint logic underneath this checker.
+CTL is now treated as a readable special case of that more general logic.
+
+At first glance, the implementation of `mu` and `nu` can look almost suspiciously small.
+That is because the power comes from the combination of just three ideas:
+
+- boolean structure
+- modal next-step structure
+- fixpoints over a finite successor graph
+
+The modal operators are:
+
+- `diamond p`
+  there exists a successor state where `p` holds
+  this is the same branching idea as CTL's existential next-step operator
+- `box p`
+  for all successor states, `p` holds
+  this is the universal next-step version
+
+The fixpoint operators are:
+
+- `mu X body`
+  least fixpoint
+  think "the smallest set of states that satisfies this recursive equation"
+- `nu X body`
+  greatest fixpoint
+  think "the largest set of states that satisfies this recursive equation"
+
+Intuition:
+
+- `mu` is usually how you express eventuality, progress, or finite escape
+- `nu` is usually how you express invariance, persistence, or the ability to remain inside a region forever
+
+That is the core mental model:
+
+- least fixpoint = build upward from nothing
+- greatest fixpoint = prune downward from everything
+
+### Small Examples
+
+Reachability:
+
+```lisp
+(mu X
+  (or (in-state Server accepted)
+      (diamond X)))
+```
+
+Read it as:
+
+- a state satisfies this formula if
+  it is already an `accepted` state
+  or it can move in one step to another state that satisfies the same formula
+
+That is exactly "there exists a path that eventually reaches `accepted`".
+So this is the mu-calculus form of `EF`.
+
+Invariant preservation:
+
+```lisp
+(nu X
+  (and (not (mailbox-has Relay ping))
+       (box X)))
+```
+
+Read it as:
+
+- a state satisfies this formula if
+  it is safe now
+  and all of its successors also satisfy the same invariant
+
+That is exactly "on all paths, always safe".
+So this is the mu-calculus form of `AG`.
+
+Possible persistence:
+
+```lisp
+(nu X
+  (and (data> Queue count 0)
+       (diamond X)))
+```
+
+Read it as:
+
+- the queue is non-empty now
+- and there exists some next step that keeps you inside the same region
+
+That captures the idea that there is some execution branch along which the queue can remain non-empty forever.
+That is the mu-calculus form of `EG`.
+
+### Why The Algorithm Is So Small
+
+The evaluator looks small because it is doing repeated set refinement on a finite graph.
+
+For `mu`:
+
+- start with the empty set
+- evaluate the body assuming `X` means that current set
+- keep adding states until nothing changes
+
+For `nu`:
+
+- start with the set of all states
+- evaluate the body assuming `X` means that current set
+- keep removing states until nothing changes
+
+That is enough to express a large amount of temporal reasoning because recursive temporal properties are exactly what fixpoints are good at.
+
+For example:
+
+- "eventually reach a good state"
+  means repeated predecessor expansion until the set stabilizes
+- "always remain safe"
+  means repeated pruning of states that have bad successors until the set stabilizes
+- "stay inside this region forever on some branch"
+  means repeatedly removing states that cannot remain inside the region
+
+### CTL As A Special Case
+
+The reason this is such a good foundation is that standard CTL operators translate directly into mu-calculus:
+
+- `EX p`
+  becomes `(diamond p)`
+- `AX p`
+  becomes `(box p)`
+- `EF p`
+  becomes `(mu X (or p (diamond X)))`
+- `AF p`
+  becomes `(mu X (or p (box X)))`
+- `EG p`
+  becomes `(nu X (and p (diamond X)))`
+- `AG p`
+  becomes `(nu X (and p (box X)))`
+- `E[p U q]`
+  becomes `(mu X (or q (and p (diamond X))))`
+- `A[p U q]`
+  becomes `(mu X (or q (and p (box X))))`
+
+So CTL is not being replaced here.
+It becomes the user-facing fragment with the friendlier names, while the semantic engine underneath is the more general fixpoint logic.
+
+### Why This Feels Like LTL Territory
+
+It is reasonable to look at these formulas and think:
+"these are the kinds of things I usually use LTL for".
+
+That instinct is right in a practical sense.
+Many properties people ask for in system design sound like:
+
+- eventually something good happens
+- always something bad is prevented
+- once a request arrives, eventually a response appears
+- some loop can continue forever
+
+Those are the same kinds of temporal intuitions that lead people to LTL.
+
+The important distinction is semantic:
+
+- LTL talks about a single path at a time
+- CTL and the mu-calculus talk directly about branching futures
+
+In this repository, branching matters a lot:
+
+- scheduler choice creates alternative next steps
+- random guards create alternative next steps
+- mailbox contents create alternative next steps
+
+So a branching-time logic is a better fit than plain linear-time reasoning.
+
+The nice surprise is that the mu-calculus is expressive enough to capture many of the "eventually", "always", and "until" properties people informally think of as LTL-style requirements, while still speaking directly about the branching graph your runtime actually explores.
+
+### Practical Reading Guide
+
+When reading a raw mu-calculus formula:
+
+1. identify the atomic predicate
+   what is the local fact you care about?
+2. identify the modal direction
+   `diamond` means "some next branch", `box` means "every next branch"
+3. identify the fixpoint
+   `mu` usually means eventuality or progress
+   `nu` usually means invariance or persistence
+4. read the recursion as "keep applying this condition until it stabilizes"
+
+That is all the checker is doing in code.
+It is simple enough to implement compactly, but general enough to cover a large part of practical temporal reasoning.
+
 ## Present Operators
 
 The implementation currently supports:
@@ -408,6 +597,14 @@ The implementation currently supports:
 - `ef`, `af`
 - `eg`, `ag`
 - `eu`, `au`
+
+Raw mu-calculus operators currently include:
+
+- `true`, `false`
+- `not`, `and`, `or`
+- `diamond`, `box`
+- `mu`, `nu`
+- atomic predicates such as `in-state`, `data=`, and `mailbox-has`
 
 Atomic predicates currently include:
 
