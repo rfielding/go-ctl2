@@ -118,7 +118,7 @@ def main() -> int:
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="100%" height="100%" fill="{BG}"/>
   <rect x="20" y="20" width="{width - 40}" height="{height - 40}" rx="14" fill="{PANEL}" stroke="{BORDER}"/>
-  <text x="{margin_left}" y="38" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="22">Outstanding Messages By Step</text>
+  <text x="{margin_left}" y="38" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="22">{data["title"]}</text>
   <text x="{margin_left}" y="58" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">{data["subtitle"]}</text>
 
   <line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{margin_top + plot_h}" stroke="{MUTED}" stroke-width="1.5"/>

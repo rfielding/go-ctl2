@@ -172,38 +172,44 @@ This is enough to express:
 Full M/M/1/5-style example:
 
 ```lisp
-(actor Client
-  (state loop
-    (edge (dice-range 0.0 0.5)
-      (set last "sleep")
-      (become loop))
-    (edge (dice-range 0.5 1.0)
-      (send Queue req)
-      (set last "arrival")
-      (become loop))))
+(model
+  (actor Client
+    (state loop
+      (edge (dice-range 0.0 0.5)
+        (set last "sleep")
+        (become loop))
+      (edge (dice-range 0.5 1.0)
+        (send Queue req)
+        (set last "arrival")
+        (become loop))))
 
-(actor Queue
-  (state wait
-    (edge (and (mailbox req) (data= count 0))
-      (recv msg)
-      (add count 1)
-      (set elapsed 0)
-      (become wait))
-    (edge (and (mailbox req) (data> count 0) (not (data= count 5)))
-      (recv msg)
-      (add count 1)
-      (become wait))
-    (edge (and (mailbox req) (data= count 5))
-      (recv dropped)
-      (add dropped_count 1)
-      (become wait))
-    (edge (and (data> count 0) (dice-range 0.0 0.5))
-      (sub count 1)
-      (set last_departure "service-complete")
-      (become wait))
-    (edge (and (data> count 0) (dice-range 0.5 1.0))
-      (set last_departure "busy")
-      (become wait))))
+  (actor Queue
+    (state wait
+      (edge (and (mailbox req) (data= count 0))
+        (recv msg)
+        (add count 1)
+        (set elapsed 0)
+        (become wait))
+      (edge (and (mailbox req) (data> count 0) (not (data= count 5)))
+        (recv msg)
+        (add count 1)
+        (become wait))
+      (edge (and (mailbox req) (data= count 5))
+        (recv dropped)
+        (add dropped_count 1)
+        (become wait))
+      (edge (and (data> count 0) (dice-range 0.0 0.5))
+        (sub count 1)
+        (set last_departure "service-complete")
+        (become wait))
+      (edge (and (data> count 0) (dice-range 0.5 1.0))
+        (set last_departure "busy")
+        (become wait))))
+
+  (xyplot outstanding
+    (title "Outstanding Messages By Step")
+    (steps 100)
+    (metric sent-minus-received)))
 ```
 
 Interpretation:
@@ -220,6 +226,7 @@ Interpretation:
   arrivals are consumed and recorded as drops instead of increasing the queue
 - the self-loops are written explicitly with `become`
   the example does not rely on implicit stay-in-place behavior
+- the `xyplot` declaration says which runtime-derived chart should be rendered for this model
 
 This is not a continuous-time simulator. It is a small executable control model that captures the same queueing shape:
 
@@ -940,6 +947,15 @@ This example is deliberately small, but it is enough to show:
 # Message Plot
 
 Because transitions, sends, and receives are now logged as structured events, the docs can render plots from an actual Runtime execution instead of from hand-written points.
+
+The plot above is declared in the model itself with:
+
+```lisp
+(xyplot outstanding
+  (title "Outstanding Messages By Step")
+  (steps 100)
+  (metric sent-minus-received))
+```
 
 ![Outstanding Messages By Step](../generated/message_xyplot.svg)
 

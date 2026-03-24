@@ -202,7 +202,16 @@ type AssertionResult struct {
 type RequirementsModel struct {
 	Actors     []*Actor
 	Assertions []Assertion
+	Plots      []XYPlot
 	Spec       Value
+}
+
+type XYPlot struct {
+	Name   string
+	Title  string
+	Steps  int
+	Metric string
+	Spec   Value
 }
 
 type ExploredState struct {
@@ -1828,8 +1837,14 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 				return nil, err
 			}
 			model.Assertions = append(model.Assertions, assertion)
+		case isListHead(item, "xyplot"):
+			plot, err := buildXYPlot(item)
+			if err != nil {
+				return nil, err
+			}
+			model.Plots = append(model.Plots, plot)
 		default:
-			return nil, fmt.Errorf("model item must be actor or assert")
+			return nil, fmt.Errorf("model item must be actor, assert, or xyplot")
 		}
 	}
 	if len(model.Actors) == 0 {
@@ -1847,6 +1862,63 @@ func buildAssertion(form Value) (Assertion, error) {
 		return Assertion{}, err
 	}
 	return Assertion{Formula: formula, Spec: form}, nil
+}
+
+func buildXYPlot(form Value) (XYPlot, error) {
+	if !isListHead(form, "xyplot") || len(form.Items) < 2 {
+		return XYPlot{}, fmt.Errorf("xyplot form must be (xyplot name option...)")
+	}
+	name, err := expectSymbol(form.Items[1], "xyplot name")
+	if err != nil {
+		return XYPlot{}, err
+	}
+	plot := XYPlot{
+		Name:   name,
+		Title:  name,
+		Steps:  100,
+		Metric: "sent-minus-received",
+		Spec:   form,
+	}
+	for _, item := range form.Items[2:] {
+		if !isList(item) || len(item.Items) == 0 {
+			return XYPlot{}, fmt.Errorf("xyplot option must be a non-empty list")
+		}
+		head, err := expectSymbol(item.Items[0], "xyplot option")
+		if err != nil {
+			return XYPlot{}, err
+		}
+		switch head {
+		case "title":
+			if len(item.Items) != 2 || item.Items[1].Kind != KindString {
+				return XYPlot{}, fmt.Errorf("xyplot title must be (title \"...\")")
+			}
+			plot.Title = item.Items[1].Text
+		case "steps":
+			if len(item.Items) != 2 {
+				return XYPlot{}, fmt.Errorf("xyplot steps must be (steps n)")
+			}
+			steps, err := valueInt(item.Items[1])
+			if err != nil {
+				return XYPlot{}, err
+			}
+			plot.Steps = steps
+		case "metric":
+			if len(item.Items) != 2 {
+				return XYPlot{}, fmt.Errorf("xyplot metric must be (metric name)")
+			}
+			metric, err := expectSymbol(item.Items[1], "xyplot metric")
+			if err != nil {
+				return XYPlot{}, err
+			}
+			if metric != "sent-minus-received" {
+				return XYPlot{}, fmt.Errorf("unsupported xyplot metric %q", metric)
+			}
+			plot.Metric = metric
+		default:
+			return XYPlot{}, fmt.Errorf("unsupported xyplot option %q", head)
+		}
+	}
+	return plot, nil
 }
 
 func buildState(form Value) ([]State, error) {
@@ -3091,6 +3163,19 @@ func (a Assertion) Lisp() Value {
 	return List(Symbol("assert"))
 }
 
+func (p XYPlot) Lisp() Value {
+	if p.Spec.Kind != KindInvalid {
+		return p.Spec
+	}
+	return List(
+		Symbol("xyplot"),
+		Symbol(p.Name),
+		List(Symbol("title"), String(p.Title)),
+		List(Symbol("steps"), Number(strconv.Itoa(p.Steps))),
+		List(Symbol("metric"), Symbol(p.Metric)),
+	)
+}
+
 func (m RequirementsModel) Lisp() Value {
 	if m.Spec.Kind != KindInvalid {
 		return m.Spec
@@ -3101,6 +3186,9 @@ func (m RequirementsModel) Lisp() Value {
 	}
 	for _, assertion := range m.Assertions {
 		items = append(items, assertion.Lisp())
+	}
+	for _, plot := range m.Plots {
+		items = append(items, plot.Lisp())
 	}
 	return List(items...)
 }
@@ -3395,44 +3483,57 @@ type docPlotData struct {
 	Receives []MetricPoint `json:"receives"`
 }
 
+const docQueueModelSource = `
+	(model
+		(actor Client
+			(state loop
+				(edge (dice-range 0.0 0.5)
+					(set last "sleep")
+					(become loop))
+				(edge (dice-range 0.5 1.0)
+					(send Queue req)
+					(set last "arrival")
+					(become loop))))
+
+		(actor Queue
+			(state wait
+				(edge (and (mailbox req) (data= count 0))
+					(recv msg)
+					(add count 1)
+					(set elapsed 0)
+					(become wait))
+				(edge (and (mailbox req) (data> count 0) (not (data= count 5)))
+					(recv msg)
+					(add count 1)
+					(become wait))
+				(edge (and (mailbox req) (data= count 5))
+					(recv dropped)
+					(add dropped_count 1)
+					(become wait))
+				(edge (and (data> count 0) (dice-range 0.0 0.5))
+					(sub count 1)
+					(set last_departure "service-complete")
+					(become wait))
+				(edge (and (data> count 0) (dice-range 0.5 1.0))
+					(set last_departure "busy")
+					(become wait))))
+
+		(xyplot outstanding
+			(title "Outstanding Messages By Step")
+			(steps 100)
+			(metric sent-minus-received)))
+`
+
+func docQueueModel() (*RequirementsModel, error) {
+	return CompileModel(docQueueModelSource)
+}
+
 func docQueueRuntime(steps int) (*Runtime, error) {
-	rt := NewRuntime(
-		MustCompileActor(`
-			(actor Client
-				(state loop
-					(edge (dice-range 0.0 0.5)
-						(set last "sleep")
-						(become loop))
-					(edge (dice-range 0.5 1.0)
-						(send Queue req)
-						(set last "arrival")
-						(become loop))))
-		`),
-		MustCompileActor(`
-			(actor Queue
-				(state wait
-					(edge (and (mailbox req) (data= count 0))
-						(recv msg)
-						(add count 1)
-						(set elapsed 0)
-						(become wait))
-					(edge (and (mailbox req) (data> count 0) (not (data= count 5)))
-						(recv msg)
-						(add count 1)
-						(become wait))
-					(edge (and (mailbox req) (data= count 5))
-						(recv dropped)
-						(add dropped_count 1)
-						(become wait))
-					(edge (and (data> count 0) (dice-range 0.0 0.5))
-						(sub count 1)
-						(set last_departure "service-complete")
-						(become wait))
-					(edge (and (data> count 0) (dice-range 0.5 1.0))
-						(set last_departure "busy")
-						(become wait))))
-		`),
-	)
+	spec, err := docQueueModel()
+	if err != nil {
+		return nil, err
+	}
+	rt := spec.Runtime()
 	rt.Actors[1].Data["count"] = Number("0")
 	rt.Actors[1].Data["elapsed"] = Number("0")
 	rt.Actors[1].Data["dropped_count"] = Number("0")
@@ -3460,12 +3561,23 @@ func docQueueRuntime(steps int) (*Runtime, error) {
 }
 
 func emitDocPlotData(steps int) error {
+	spec, err := docQueueModel()
+	if err != nil {
+		return err
+	}
+	plot := XYPlot{Title: "Outstanding Messages By Step", Steps: steps, Metric: "sent-minus-received"}
+	if len(spec.Plots) > 0 {
+		plot = spec.Plots[0]
+	}
+	if steps > 0 {
+		plot.Steps = steps
+	}
 	rt, err := docQueueRuntime(steps)
 	if err != nil {
 		return err
 	}
 	data := docPlotData{
-		Title:    "Message Counts By Step",
+		Title:    plot.Title,
 		Subtitle: fmt.Sprintf("%d-step Runtime trace of the M/M/1/5-style queue example.", rt.Step),
 		Steps:    rt.Step,
 		Sends:    rt.EventCountSeries(EventSend, nil),

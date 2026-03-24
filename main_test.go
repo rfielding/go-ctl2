@@ -453,6 +453,37 @@ func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 	}
 }
 
+func TestCompileModelCapturesXYPlot(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(actor A
+				(state loop
+					(edge true
+						(become loop))))
+			(xyplot outstanding
+				(title "Outstanding Messages By Step")
+				(steps 100)
+				(metric sent-minus-received)))
+	`)
+
+	if len(spec.Plots) != 1 {
+		t.Fatalf("expected 1 plot, got %d", len(spec.Plots))
+	}
+	plot := spec.Plots[0]
+	if plot.Name != "outstanding" {
+		t.Fatalf("unexpected plot name %q", plot.Name)
+	}
+	if plot.Title != "Outstanding Messages By Step" {
+		t.Fatalf("unexpected plot title %q", plot.Title)
+	}
+	if plot.Steps != 100 {
+		t.Fatalf("unexpected plot steps %d", plot.Steps)
+	}
+	if plot.Metric != "sent-minus-received" {
+		t.Fatalf("unexpected plot metric %q", plot.Metric)
+	}
+}
+
 func TestCTLDeadlockSelfLoopSupportsAX(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`
