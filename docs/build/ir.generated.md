@@ -872,33 +872,32 @@ This small message-chain example is intentionally simple, but it already exercis
 - CTL predicates over the resulting model
 
 ```lisp
-(actor Client
-  (state loop
-    (edge true
-      (send Relay '(message (type ping)))
-      (become loop))))
+(model
+  (actor Client
+    (state loop
+      (edge true
+        (send Relay '(message (type ping)))
+        (become loop))))
 
-(actor Relay
-  (state relay
-    (edge true
-      (recv msg)
-      (send Server msg)
-      (become relay))))
+  (actor Relay
+    (state relay
+      (edge true
+        (recv msg)
+        (send Server msg)
+        (become relay))))
 
-(actor Server
-  (state idle
-    (edge true
-      (recv received)
-      (become idle))))
+  (actor Server
+    (state idle
+      (edge true
+        (recv received)
+        (become idle))))
+
+  (assert (ef (data= Server received '(message (type ping)) "possibly server records the ping message")))
+  (assert (af (data= Server received '(message (type ping)) "eventually server records the ping message")))
+  (assert (ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping")))
 ```
 
-Representative CTL requirements:
-
-- `(ef (data= Server received '(message (type ping)) "possibly server records the ping message"))`
-- `(af (data= Server received '(message (type ping)) "eventually server records the ping message"))`
-- `(ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping")`
-
-The first two are intended to hold for the example model.
+The first two embedded assertions are intended to hold for the example model.
 
 The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where `Relay` is holding a `ping` message before it forwards it.
 
@@ -910,7 +909,7 @@ The operational intent is:
 
 ## Walkthrough Of The Example
 
-The example should be read as three small control machines composed by message passing.
+The example should be read as a top-level `model` containing three small control machines plus CTL assertions that are checked against the explored graph.
 
 `Client`
 
@@ -934,7 +933,7 @@ This example is deliberately small, but it is enough to show:
 - explicit control states
 - successor extraction from `become`
 - queued communication
-- CTL requirements over the same model
+- CTL assertions embedded in the same IR
 - generated state and sequence diagrams
 - generated metric plots from runtime events
 

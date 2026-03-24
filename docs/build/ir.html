@@ -806,31 +806,30 @@
 <li>successor states derived from <code>become</code></li>
 <li>CTL predicates over the resulting model</li>
 </ul>
-<div class="sourceCode" id="cb9"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>(actor Client</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (state <span class="kw">loop</span></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    (edge true</span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>      (send Relay &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>      (become <span class="kw">loop</span>))))</span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>(actor Relay</span>
-<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  (state relay</span>
-<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    (edge true</span>
-<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>      (recv msg)</span>
-<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>      (send Server msg)</span>
-<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>      (become relay))))</span>
-<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>(actor Server</span>
-<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>  (state idle</span>
-<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    (edge true</span>
-<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>      (recv received)</span>
-<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>      (become idle))))</span></code></pre></div>
-<p>Representative CTL requirements:</p>
-<ul>
-<li><code>(ef (data= Server received '(message (type ping)) "possibly server records the ping message"))</code></li>
-<li><code>(af (data= Server received '(message (type ping)) "eventually server records the ping message"))</code></li>
-<li><code>(ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping")</code></li>
-</ul>
-<p>The first two are intended to hold for the example model.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>(model</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (actor Client</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        (send Relay &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  (actor Relay</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    (state relay</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>        (send Server msg)</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>        (become relay))))</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>  (actor Server</span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    (state idle</span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>        (recv received)</span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>        (become idle))))</span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ef (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;possibly server records the ping message&quot;</span>)))</span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (af (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;eventually server records the ping message&quot;</span>)))</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ag (<span class="kw">not</span> (mailbox-has Relay &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;relay still holds ping&quot;</span>)) <span class="st">&quot;always relay mailbox is empty of ping&quot;</span>)))</span></code></pre></div>
+<p>The first two embedded assertions are intended to hold for the example model.</p>
 <p>The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where <code>Relay</code> is holding a <code>ping</code> message before it forwards it.</p>
 <p>The operational intent is:</p>
 <ul>
@@ -839,7 +838,7 @@
 <li>if a <code>recv</code> has no message available, that edge is simply not ready</li>
 </ul>
 <h2 id="walkthrough-of-the-example">Walkthrough Of The Example</h2>
-<p>The example should be read as three small control machines composed by message passing.</p>
+<p>The example should be read as a top-level <code>model</code> containing three small control machines plus CTL assertions that are checked against the explored graph.</p>
 <p><code>Client</code></p>
 <ul>
 <li>starts in <code>loop</code></li>
@@ -862,7 +861,7 @@
 <li>explicit control states</li>
 <li>successor extraction from <code>become</code></li>
 <li>queued communication</li>
-<li>CTL requirements over the same model</li>
+<li>CTL assertions embedded in the same IR</li>
 <li>generated state and sequence diagrams</li>
 <li>generated metric plots from runtime events</li>
 </ul>

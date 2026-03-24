@@ -3,8 +3,8 @@ package main
 import (
 	"crypto/md5"
 	crand "crypto/rand"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -187,6 +187,22 @@ type Model struct {
 	States     map[string]*ExploredState
 	Successors map[string][]string
 	Edges      []ExploredEdge
+}
+
+type Assertion struct {
+	Formula CTLFormula
+	Spec    Value
+}
+
+type AssertionResult struct {
+	Assertion Assertion
+	Holds     bool
+}
+
+type RequirementsModel struct {
+	Actors     []*Actor
+	Assertions []Assertion
+	Spec       Value
 }
 
 type ExploredState struct {
@@ -538,6 +554,16 @@ func (rt *Runtime) Clone() *Runtime {
 		clone.MailboxCaps[name] = cap
 	}
 	return clone
+}
+
+func cloneActor(actor *Actor) *Actor {
+	return &Actor{
+		Name:   actor.Name,
+		Data:   cloneValueMap(actor.Data),
+		Defs:   cloneFunctionDefs(actor.Defs),
+		States: append([]State(nil), actor.States...),
+		Spec:   cloneValue(actor.Spec),
+	}
 }
 
 func (rt *Runtime) StateKey() string {
@@ -1132,6 +1158,29 @@ func (m *Model) Holds(stateID string, formula CTLFormula) bool {
 	return set[stateID]
 }
 
+func (m *RequirementsModel) Runtime() *Runtime {
+	actors := make([]*Actor, len(m.Actors))
+	for i, actor := range m.Actors {
+		actors[i] = cloneActor(actor)
+	}
+	return NewRuntime(actors...)
+}
+
+func (m *RequirementsModel) CheckAssertions() ([]AssertionResult, error) {
+	explored, err := ExploreModel(m.Runtime())
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AssertionResult, 0, len(m.Assertions))
+	for _, assertion := range m.Assertions {
+		results = append(results, AssertionResult{
+			Assertion: assertion,
+			Holds:     explored.HoldsAtInitial(assertion.Formula),
+		})
+	}
+	return results, nil
+}
+
 func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 	return m.SatisfyingMuStates(lowerCTL(formula))
 }
@@ -1707,12 +1756,28 @@ func CompileActor(src string) (*Actor, error) {
 	return buildActor(form)
 }
 
+func CompileModel(src string) (*RequirementsModel, error) {
+	form, err := Read(src)
+	if err != nil {
+		return nil, err
+	}
+	return buildRequirementsModel(form)
+}
+
 func MustCompileActor(src string) *Actor {
 	actor, err := CompileActor(src)
 	if err != nil {
 		panic(err)
 	}
 	return actor
+}
+
+func MustCompileModel(src string) *RequirementsModel {
+	model, err := CompileModel(src)
+	if err != nil {
+		panic(err)
+	}
+	return model
 }
 
 func buildActor(form Value) (*Actor, error) {
@@ -1742,6 +1807,46 @@ func buildActor(form Value) (*Actor, error) {
 	}
 	actor.Data["state"] = Symbol(actor.States[0].Name)
 	return actor, nil
+}
+
+func buildRequirementsModel(form Value) (*RequirementsModel, error) {
+	if !isListHead(form, "model") || len(form.Items) < 2 {
+		return nil, fmt.Errorf("model form must be (model item...)")
+	}
+	model := &RequirementsModel{Spec: form}
+	for _, item := range form.Items[1:] {
+		switch {
+		case isListHead(item, "actor"):
+			actor, err := buildActor(item)
+			if err != nil {
+				return nil, err
+			}
+			model.Actors = append(model.Actors, actor)
+		case isListHead(item, "assert"):
+			assertion, err := buildAssertion(item)
+			if err != nil {
+				return nil, err
+			}
+			model.Assertions = append(model.Assertions, assertion)
+		default:
+			return nil, fmt.Errorf("model item must be actor or assert")
+		}
+	}
+	if len(model.Actors) == 0 {
+		return nil, fmt.Errorf("model: no actors")
+	}
+	return model, nil
+}
+
+func buildAssertion(form Value) (Assertion, error) {
+	if !isListHead(form, "assert") || len(form.Items) != 2 {
+		return Assertion{}, fmt.Errorf("assert form must be (assert ctl-formula)")
+	}
+	formula, err := buildCTL(form.Items[1])
+	if err != nil {
+		return Assertion{}, err
+	}
+	return Assertion{Formula: formula, Spec: form}, nil
 }
 
 func buildState(form Value) ([]State, error) {
@@ -2975,6 +3080,27 @@ func (a Actor) Lisp() Value {
 	items := []Value{Symbol("actor"), Symbol(a.Name)}
 	for _, state := range a.States {
 		items = append(items, state.Lisp())
+	}
+	return List(items...)
+}
+
+func (a Assertion) Lisp() Value {
+	if a.Spec.Kind != KindInvalid {
+		return a.Spec
+	}
+	return List(Symbol("assert"))
+}
+
+func (m RequirementsModel) Lisp() Value {
+	if m.Spec.Kind != KindInvalid {
+		return m.Spec
+	}
+	items := []Value{Symbol("model")}
+	for _, actor := range m.Actors {
+		items = append(items, actor.Lisp())
+	}
+	for _, assertion := range m.Assertions {
+		items = append(items, assertion.Lisp())
 	}
 	return List(items...)
 }

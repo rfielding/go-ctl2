@@ -23,8 +23,8 @@ func TestReadAcceptsManyExpressions(t *testing.T) {
 		{name: "operator head", input: "(= kind \"tick\")", want: "(= kind \"tick\")"},
 		{name: "math symbols", input: "(+ 1 2)", want: "(+ 1 2)"},
 		{name: "comparison symbols", input: "(<= retries 3)", want: "(<= retries 3)"},
-										{name: "symbol punctuation", input: "guard_ok?", want: "guard_ok?"},
-				{name: "whitespace before paren stays list", input: "(receive mailbox when (= kind \"tick\"))", want: "(receive mailbox when (= kind \"tick\"))"},
+		{name: "symbol punctuation", input: "guard_ok?", want: "guard_ok?"},
+		{name: "whitespace before paren stays list", input: "(receive mailbox when (= kind \"tick\"))", want: "(receive mailbox when (= kind \"tick\"))"},
 		{name: "quoted symbol", input: "'actor", want: "(quote actor)"},
 		{name: "quoted number", input: "'42", want: "(quote 42)"},
 		{name: "quoted string", input: "'\"hello\"", want: "(quote \"hello\")"},
@@ -404,10 +404,10 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		t.Fatal("expected explored edges to be recorded")
 	}
 	want := map[string]bool{
-		"A|start|true":          false,
-		"B|relay|true":          false,
-		"B|relay__wait|true":    false,
-		"C|sink|true":           false,
+		"A|start|true":       false,
+		"B|relay|true":       false,
+		"B|relay__wait|true": false,
+		"C|sink|true":        false,
 	}
 	for _, edge := range model.Edges {
 		key := edge.ActorName + "|" + edge.StateName + "|" + edge.TransitionName
@@ -419,6 +419,37 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		if !seen {
 			t.Fatalf("expected explored edge metadata for %s", key)
 		}
+	}
+}
+
+func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(actor A
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(assert (ef (in-state A done)))
+			(assert (ag (in-state A start))))
+	`)
+
+	results, err := spec.CheckAssertions()
+	if err != nil {
+		t.Fatalf("CheckAssertions returned error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 assertion results, got %d", len(results))
+	}
+	if !results[0].Holds {
+		t.Fatal("expected first embedded assertion to hold")
+	}
+	if results[1].Holds {
+		t.Fatal("expected second embedded assertion to fail")
+	}
+	want := `(model (actor A (state start (edge true (become done))) (state done)) (assert (ef (in-state A done))) (assert (ag (in-state A start))))`
+	if got := spec.Lisp().String(); got != want {
+		t.Fatalf("unexpected model serialization: %s", got)
 	}
 }
 
