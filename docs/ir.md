@@ -873,11 +873,10 @@ This small message-chain example is intentionally simple, but it already exercis
 
 ```lisp
 (actor Client
-  (state start
+  (state loop
     (edge true
       (send Relay '(message (type ping)))
-      (become done)))
-  (state done))
+      (become loop))))
 
 (actor Relay
   (state relay
@@ -890,13 +889,12 @@ This small message-chain example is intentionally simple, but it already exercis
   (state idle
     (edge true
       (recv received)
-      (become accepted)))
-  (state accepted))
+      (become idle))))
 ```
 
 Representative CTL requirements:
 
-- `(ef (in-state Server accepted "possibly server accepts"))`
+- `(ef (data= Server received '(message (type ping)) "possibly server records the ping message"))`
 - `(af (data= Server received '(message (type ping)) "eventually server records the ping message"))`
 - `(ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping")`
 
@@ -916,9 +914,9 @@ The example should be read as three small control machines composed by message p
 
 `Client`
 
-- starts in `start`
+- starts in `loop`
 - sends one `ping`-typed message to `Relay`
-- becomes `done`
+- becomes `loop` again
 
 `Relay`
 
@@ -929,7 +927,7 @@ The example should be read as three small control machines composed by message p
 `Server`
 
 - waits in `idle`
-- when a message is available, it consumes it, records it, and becomes `accepted`
+- when a message is available, it consumes it, records it, and becomes `idle` again
 
 This example is deliberately small, but it is enough to show:
 

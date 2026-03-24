@@ -24,7 +24,7 @@ sequenceDiagram
 flowchart TD
     subgraph Client
         direction TB
-        C_start([start]) --&gt;|&quot;sent = ping&quot;| C_done([done])
+        C_loop([loop]) --&gt;|&quot;sent = ping&quot;| C_loop
     end
 
     subgraph Relay
@@ -40,10 +40,10 @@ flowchart TD
 
     subgraph Server
         direction TB
-        S_idle([idle]) --&gt;|&quot;received = ping&quot;| S_accepted([accepted])
+        S_idle([idle]) --&gt;|&quot;received = ping&quot;| S_idle
     end
 
-    C_done -. send ping .-&gt; R_relay
+    C_loop -. send ping .-&gt; R_relay
     R_wait -. send ping .-&gt; S_idle
 </code></pre>
 </details>
