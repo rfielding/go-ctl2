@@ -156,6 +156,30 @@ type CTLFormula struct {
 	Right *CTLFormula
 }
 
+type MuOp uint8
+
+const (
+	MuFalse MuOp = iota
+	MuTrue
+	MuAtom
+	MuVar
+	MuNot
+	MuAnd
+	MuOr
+	MuDiamond
+	MuBox
+	MuMu
+	MuNu
+)
+
+type MuFormula struct {
+	Op    MuOp
+	Name  string
+	Pred  StatePredicate
+	Left  *MuFormula
+	Right *MuFormula
+}
+
 type Model struct {
 	InitialID  string
 	States     map[string]*ExploredState
@@ -632,6 +656,22 @@ func CompileCTL(src string) (CTLFormula, error) {
 	return buildCTL(form)
 }
 
+func CompileMu(src string) (MuFormula, error) {
+	form, err := Read(src)
+	if err != nil {
+		return MuFormula{}, err
+	}
+	return buildMu(form)
+}
+
+func MustCompileMu(src string) MuFormula {
+	formula, err := CompileMu(src)
+	if err != nil {
+		panic(err)
+	}
+	return formula
+}
+
 func MustCompileCTL(src string) CTLFormula {
 	formula, err := CompileCTL(src)
 	if err != nil {
@@ -686,6 +726,50 @@ func EU(left, right CTLFormula) CTLFormula {
 
 func AU(left, right CTLFormula) CTLFormula {
 	return CTLFormula{Op: CTLAU, Left: &left, Right: &right}
+}
+
+func MuTrueFormula() MuFormula {
+	return MuFormula{Op: MuTrue}
+}
+
+func MuFalseFormula() MuFormula {
+	return MuFormula{Op: MuFalse}
+}
+
+func MuAtomFormula(pred StatePredicate) MuFormula {
+	return MuFormula{Op: MuAtom, Pred: pred}
+}
+
+func MuVarFormula(name string) MuFormula {
+	return MuFormula{Op: MuVar, Name: name}
+}
+
+func MuNotFormula(inner MuFormula) MuFormula {
+	return MuFormula{Op: MuNot, Left: &inner}
+}
+
+func MuAndFormula(left, right MuFormula) MuFormula {
+	return MuFormula{Op: MuAnd, Left: &left, Right: &right}
+}
+
+func MuOrFormula(left, right MuFormula) MuFormula {
+	return MuFormula{Op: MuOr, Left: &left, Right: &right}
+}
+
+func MuDiamondFormula(inner MuFormula) MuFormula {
+	return MuFormula{Op: MuDiamond, Left: &inner}
+}
+
+func MuBoxFormula(inner MuFormula) MuFormula {
+	return MuFormula{Op: MuBox, Left: &inner}
+}
+
+func MuMuFormula(name string, body MuFormula) MuFormula {
+	return MuFormula{Op: MuMu, Name: name, Left: &body}
+}
+
+func MuNuFormula(name string, body MuFormula) MuFormula {
+	return MuFormula{Op: MuNu, Name: name, Left: &body}
 }
 
 func stripOptionalDescription(items []Value, minLen int) []Value {
@@ -888,6 +972,155 @@ func buildCTL(form Value) (CTLFormula, error) {
 	}
 }
 
+func buildMu(form Value) (MuFormula, error) {
+	if form.Kind == KindSymbol {
+		switch form.Text {
+		case "true":
+			return MuTrueFormula(), nil
+		case "false":
+			return MuFalseFormula(), nil
+		default:
+			return MuVarFormula(form.Text), nil
+		}
+	}
+	if !isList(form) || len(form.Items) == 0 {
+		return MuFormula{}, fmt.Errorf("mu formula must be a symbol or non-empty list")
+	}
+
+	head, err := expectSymbol(form.Items[0], "mu operator")
+	if err != nil {
+		return MuFormula{}, err
+	}
+	switch head {
+	case "not":
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
+			return MuFormula{}, fmt.Errorf("not expects one operand")
+		}
+		inner, err := buildMu(items[1])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuNotFormula(inner), nil
+	case "and":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
+			return MuFormula{}, fmt.Errorf("and expects two operands")
+		}
+		left, err := buildMu(items[1])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		right, err := buildMu(items[2])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuAndFormula(left, right), nil
+	case "or":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
+			return MuFormula{}, fmt.Errorf("or expects two operands")
+		}
+		left, err := buildMu(items[1])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		right, err := buildMu(items[2])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuOrFormula(left, right), nil
+	case "diamond":
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
+			return MuFormula{}, fmt.Errorf("diamond expects one operand")
+		}
+		inner, err := buildMu(items[1])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuDiamondFormula(inner), nil
+	case "box":
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) != 2 {
+			return MuFormula{}, fmt.Errorf("box expects one operand")
+		}
+		inner, err := buildMu(items[1])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuBoxFormula(inner), nil
+	case "mu":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
+			return MuFormula{}, fmt.Errorf("mu expects a variable and body")
+		}
+		name, err := expectSymbol(items[1], "mu variable")
+		if err != nil {
+			return MuFormula{}, err
+		}
+		body, err := buildMu(items[2])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuMuFormula(name, body), nil
+	case "nu":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
+			return MuFormula{}, fmt.Errorf("nu expects a variable and body")
+		}
+		name, err := expectSymbol(items[1], "nu variable")
+		if err != nil {
+			return MuFormula{}, err
+		}
+		body, err := buildMu(items[2])
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuNuFormula(name, body), nil
+	case "in-state":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
+			return MuFormula{}, fmt.Errorf("in-state expects actor and state")
+		}
+		actor, err := expectSymbol(items[1], "actor name")
+		if err != nil {
+			return MuFormula{}, err
+		}
+		state, err := expectSymbol(items[2], "state name")
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuAtomFormula(ActorInState(actor, state)), nil
+	case "data=":
+		items := stripOptionalDescription(form.Items, 4)
+		if len(items) != 4 {
+			return MuFormula{}, fmt.Errorf("data= expects actor, key, value")
+		}
+		actor, err := expectSymbol(items[1], "actor name")
+		if err != nil {
+			return MuFormula{}, err
+		}
+		key, err := expectSymbol(items[2], "data key")
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuAtomFormula(ActorDataEquals(actor, key, items[3])), nil
+	case "mailbox-has":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) != 3 {
+			return MuFormula{}, fmt.Errorf("mailbox-has expects actor and message")
+		}
+		actor, err := expectSymbol(items[1], "actor name")
+		if err != nil {
+			return MuFormula{}, err
+		}
+		return MuAtomFormula(MailboxHas(actor, items[2])), nil
+	default:
+		return MuFormula{}, fmt.Errorf("unsupported mu operator %q", head)
+	}
+}
+
 func (m *Model) HoldsAtInitial(formula CTLFormula) bool {
 	return m.Holds(m.InitialID, formula)
 }
@@ -898,8 +1131,33 @@ func (m *Model) Holds(stateID string, formula CTLFormula) bool {
 }
 
 func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
+	return m.SatisfyingMuStates(lowerCTL(formula))
+}
+
+func (m *Model) HoldsMuAtInitial(formula MuFormula) bool {
+	return m.HoldsMu(m.InitialID, formula)
+}
+
+func (m *Model) HoldsMu(stateID string, formula MuFormula) bool {
+	set := m.SatisfyingMuStates(formula)
+	return set[stateID]
+}
+
+func (m *Model) SatisfyingMuStates(formula MuFormula) map[string]bool {
+	return m.satisfyingMuStates(formula, map[string]map[string]bool{})
+}
+
+func (m *Model) satisfyingMuStates(formula MuFormula, env map[string]map[string]bool) map[string]bool {
 	switch formula.Op {
-	case CTLAtom:
+	case MuFalse:
+		return map[string]bool{}
+	case MuTrue:
+		out := map[string]bool{}
+		for id := range m.States {
+			out[id] = true
+		}
+		return out
+	case MuAtom:
 		out := map[string]bool{}
 		for id, state := range m.States {
 			if formula.Pred != nil && formula.Pred(state.Runtime) {
@@ -907,8 +1165,10 @@ func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 			}
 		}
 		return out
-	case CTLNot:
-		inner := m.SatisfyingStates(*formula.Left)
+	case MuVar:
+		return copyStateSet(env[formula.Name])
+	case MuNot:
+		inner := m.satisfyingMuStates(*formula.Left, env)
 		out := map[string]bool{}
 		for id := range m.States {
 			if !inner[id] {
@@ -916,9 +1176,9 @@ func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 			}
 		}
 		return out
-	case CTLAnd:
-		left := m.SatisfyingStates(*formula.Left)
-		right := m.SatisfyingStates(*formula.Right)
+	case MuAnd:
+		left := m.satisfyingMuStates(*formula.Left, env)
+		right := m.satisfyingMuStates(*formula.Right, env)
 		out := map[string]bool{}
 		for id := range m.States {
 			if left[id] && right[id] {
@@ -926,9 +1186,9 @@ func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 			}
 		}
 		return out
-	case CTLOr:
-		left := m.SatisfyingStates(*formula.Left)
-		right := m.SatisfyingStates(*formula.Right)
+	case MuOr:
+		left := m.satisfyingMuStates(*formula.Left, env)
+		right := m.satisfyingMuStates(*formula.Right, env)
 		out := map[string]bool{}
 		for id := range m.States {
 			if left[id] || right[id] {
@@ -936,18 +1196,8 @@ func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 			}
 		}
 		return out
-	case CTLImplies:
-		left := m.SatisfyingStates(*formula.Left)
-		right := m.SatisfyingStates(*formula.Right)
-		out := map[string]bool{}
-		for id := range m.States {
-			if !left[id] || right[id] {
-				out[id] = true
-			}
-		}
-		return out
-	case CTLEX:
-		inner := m.SatisfyingStates(*formula.Left)
+	case MuDiamond:
+		inner := m.satisfyingMuStates(*formula.Left, env)
 		out := map[string]bool{}
 		for id, succs := range m.Successors {
 			for _, succ := range succs {
@@ -958,8 +1208,8 @@ func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 			}
 		}
 		return out
-	case CTLAX:
-		inner := m.SatisfyingStates(*formula.Left)
+	case MuBox:
+		inner := m.satisfyingMuStates(*formula.Left, env)
 		out := map[string]bool{}
 		for id, succs := range m.Successors {
 			all := true
@@ -974,84 +1224,31 @@ func (m *Model) SatisfyingStates(formula CTLFormula) map[string]bool {
 			}
 		}
 		return out
-	case CTLEF:
-		return m.SatisfyingStates(EU(Atom(func(*Runtime) bool { return true }), *formula.Left))
-	case CTLAF:
-		return m.SatisfyingStates(AU(Atom(func(*Runtime) bool { return true }), *formula.Left))
-	case CTLEG:
-		inner := m.SatisfyingStates(*formula.Left)
-		out := copyStateSet(inner)
-		changed := true
-		for changed {
-			changed = false
-			for id := range out {
-				if !inner[id] {
-					delete(out, id)
-					changed = true
-					continue
-				}
-				ok := false
-				for _, succ := range m.Successors[id] {
-					if out[succ] {
-						ok = true
-						break
-					}
-				}
-				if !ok {
-					delete(out, id)
-					changed = true
-				}
+	case MuMu:
+		current := map[string]bool{}
+		for {
+			nextEnv := cloneStateEnv(env)
+			nextEnv[formula.Name] = copyStateSet(current)
+			next := m.satisfyingMuStates(*formula.Left, nextEnv)
+			if stateSetsEqual(current, next) {
+				return next
 			}
+			current = next
 		}
-		return out
-	case CTLAG:
-		return m.SatisfyingStates(Not(EF(Not(*formula.Left))))
-	case CTLEU:
-		left := m.SatisfyingStates(*formula.Left)
-		right := m.SatisfyingStates(*formula.Right)
-		out := copyStateSet(right)
-		changed := true
-		for changed {
-			changed = false
-			for id := range m.States {
-				if out[id] || !left[id] {
-					continue
-				}
-				for _, succ := range m.Successors[id] {
-					if out[succ] {
-						out[id] = true
-						changed = true
-						break
-					}
-				}
+	case MuNu:
+		current := map[string]bool{}
+		for id := range m.States {
+			current[id] = true
+		}
+		for {
+			nextEnv := cloneStateEnv(env)
+			nextEnv[formula.Name] = copyStateSet(current)
+			next := m.satisfyingMuStates(*formula.Left, nextEnv)
+			if stateSetsEqual(current, next) {
+				return next
 			}
+			current = next
 		}
-		return out
-	case CTLAU:
-		left := m.SatisfyingStates(*formula.Left)
-		right := m.SatisfyingStates(*formula.Right)
-		out := copyStateSet(right)
-		changed := true
-		for changed {
-			changed = false
-			for id := range m.States {
-				if out[id] || !left[id] {
-					continue
-				}
-				all := true
-				for _, succ := range m.Successors[id] {
-					if !out[succ] {
-						all = false
-						break
-					}
-				}
-				if all {
-					out[id] = true
-					changed = true
-				}
-			}
-		}
-		return out
 	default:
 		return map[string]bool{}
 	}
@@ -2210,6 +2407,26 @@ func copyStateSet(in map[string]bool) map[string]bool {
 	return out
 }
 
+func cloneStateEnv(in map[string]map[string]bool) map[string]map[string]bool {
+	out := make(map[string]map[string]bool, len(in))
+	for key, value := range in {
+		out[key] = copyStateSet(value)
+	}
+	return out
+}
+
+func stateSetsEqual(left, right map[string]bool) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftValue := range left {
+		if right[key] != leftValue {
+			return false
+		}
+	}
+	return true
+}
+
 func cloneValueSlice(in []Value) []Value {
 	out := make([]Value, len(in))
 	for i, value := range in {
@@ -2453,6 +2670,110 @@ func (f CTLFormula) String() string {
 	default:
 		return "<invalid-ctl>"
 	}
+}
+
+func (f MuFormula) String() string {
+	switch f.Op {
+	case MuFalse:
+		return "false"
+	case MuTrue:
+		return "true"
+	case MuAtom:
+		return "atom"
+	case MuVar:
+		return f.Name
+	case MuNot:
+		return fmt.Sprintf("(not %s)", f.Left.String())
+	case MuAnd:
+		return fmt.Sprintf("(and %s %s)", f.Left.String(), f.Right.String())
+	case MuOr:
+		return fmt.Sprintf("(or %s %s)", f.Left.String(), f.Right.String())
+	case MuDiamond:
+		return fmt.Sprintf("(diamond %s)", f.Left.String())
+	case MuBox:
+		return fmt.Sprintf("(box %s)", f.Left.String())
+	case MuMu:
+		return fmt.Sprintf("(mu %s %s)", f.Name, f.Left.String())
+	case MuNu:
+		return fmt.Sprintf("(nu %s %s)", f.Name, f.Left.String())
+	default:
+		return "<invalid-mu>"
+	}
+}
+
+func lowerCTL(formula CTLFormula) MuFormula {
+	return lowerCTLWithFresh(formula, 0).formula
+}
+
+type lowerResult struct {
+	formula MuFormula
+	nextID  int
+}
+
+func lowerCTLWithFresh(formula CTLFormula, nextID int) lowerResult {
+	switch formula.Op {
+	case CTLAtom:
+		return lowerResult{formula: MuAtomFormula(formula.Pred), nextID: nextID}
+	case CTLNot:
+		inner := lowerCTLWithFresh(*formula.Left, nextID)
+		return lowerResult{formula: MuNotFormula(inner.formula), nextID: inner.nextID}
+	case CTLAnd:
+		left := lowerCTLWithFresh(*formula.Left, nextID)
+		right := lowerCTLWithFresh(*formula.Right, left.nextID)
+		return lowerResult{formula: MuAndFormula(left.formula, right.formula), nextID: right.nextID}
+	case CTLOr:
+		left := lowerCTLWithFresh(*formula.Left, nextID)
+		right := lowerCTLWithFresh(*formula.Right, left.nextID)
+		return lowerResult{formula: MuOrFormula(left.formula, right.formula), nextID: right.nextID}
+	case CTLImplies:
+		left := lowerCTLWithFresh(*formula.Left, nextID)
+		right := lowerCTLWithFresh(*formula.Right, left.nextID)
+		return lowerResult{formula: MuOrFormula(MuNotFormula(left.formula), right.formula), nextID: right.nextID}
+	case CTLEX:
+		inner := lowerCTLWithFresh(*formula.Left, nextID)
+		return lowerResult{formula: MuDiamondFormula(inner.formula), nextID: inner.nextID}
+	case CTLAX:
+		inner := lowerCTLWithFresh(*formula.Left, nextID)
+		return lowerResult{formula: MuBoxFormula(inner.formula), nextID: inner.nextID}
+	case CTLEF:
+		name := freshMuVar(nextID)
+		inner := lowerCTLWithFresh(*formula.Left, nextID+1)
+		body := MuOrFormula(inner.formula, MuDiamondFormula(MuVarFormula(name)))
+		return lowerResult{formula: MuMuFormula(name, body), nextID: inner.nextID}
+	case CTLAF:
+		name := freshMuVar(nextID)
+		inner := lowerCTLWithFresh(*formula.Left, nextID+1)
+		body := MuOrFormula(inner.formula, MuBoxFormula(MuVarFormula(name)))
+		return lowerResult{formula: MuMuFormula(name, body), nextID: inner.nextID}
+	case CTLEG:
+		name := freshMuVar(nextID)
+		inner := lowerCTLWithFresh(*formula.Left, nextID+1)
+		body := MuAndFormula(inner.formula, MuDiamondFormula(MuVarFormula(name)))
+		return lowerResult{formula: MuNuFormula(name, body), nextID: inner.nextID}
+	case CTLAG:
+		name := freshMuVar(nextID)
+		inner := lowerCTLWithFresh(*formula.Left, nextID+1)
+		body := MuAndFormula(inner.formula, MuBoxFormula(MuVarFormula(name)))
+		return lowerResult{formula: MuNuFormula(name, body), nextID: inner.nextID}
+	case CTLEU:
+		name := freshMuVar(nextID)
+		left := lowerCTLWithFresh(*formula.Left, nextID+1)
+		right := lowerCTLWithFresh(*formula.Right, left.nextID)
+		body := MuOrFormula(right.formula, MuAndFormula(left.formula, MuDiamondFormula(MuVarFormula(name))))
+		return lowerResult{formula: MuMuFormula(name, body), nextID: right.nextID}
+	case CTLAU:
+		name := freshMuVar(nextID)
+		left := lowerCTLWithFresh(*formula.Left, nextID+1)
+		right := lowerCTLWithFresh(*formula.Right, left.nextID)
+		body := MuOrFormula(right.formula, MuAndFormula(left.formula, MuBoxFormula(MuVarFormula(name))))
+		return lowerResult{formula: MuMuFormula(name, body), nextID: right.nextID}
+	default:
+		return lowerResult{formula: MuFalseFormula(), nextID: nextID}
+	}
+}
+
+func freshMuVar(id int) string {
+	return fmt.Sprintf("$X%d", id)
 }
 
 func (v Value) String() string {

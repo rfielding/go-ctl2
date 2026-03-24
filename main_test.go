@@ -469,6 +469,38 @@ func TestCompileCTLRejectsUnknownOperator(t *testing.T) {
 	}
 }
 
+func TestMuCalculusReachabilityMatchesCTL(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+		`),
+	)
+	model, err := ExploreModel(runtime)
+	if err != nil {
+		t.Fatalf("ExploreModel returned error: %v", err)
+	}
+
+	mu, err := CompileMu("(mu X (or (in-state A done) (diamond X)))")
+	if err != nil {
+		t.Fatalf("CompileMu returned error: %v", err)
+	}
+	if !model.HoldsMuAtInitial(mu) {
+		t.Fatal("expected raw mu-calculus reachability formula to hold")
+	}
+
+	ctl, err := CompileCTL("(ef (in-state A done))")
+	if err != nil {
+		t.Fatalf("CompileCTL returned error: %v", err)
+	}
+	if model.HoldsAtInitial(ctl) != model.HoldsMuAtInitial(lowerCTL(ctl)) {
+		t.Fatal("expected CTL lowering to mu-calculus to preserve truth at the initial state")
+	}
+}
+
 func TestRuntimeErrorsOnUndeclaredSuccessor(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`
