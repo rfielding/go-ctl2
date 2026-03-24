@@ -101,6 +101,10 @@ The compiler walks the action block, collects reachable `become` targets, and us
 
 An `edge` must contain at least one `become`. Omitting `become` is a compile error; the language does not use implicit self-loops.
 
+The compiler also walks the action block for communication operations.
+If `send` or `recv` appear later in the body, the compiler inserts internal wait substates such as `wait__0`, `wait__1`, and rewrites the edge into a chain of explicit control states where each communication step appears at the front of its compiled substate.
+That keeps the user-facing source compact while still giving the runtime and the proof layer a clean explicit control graph.
+
 ## Why Derived Next States Matter
 
 The central compromise in this repository is that transitions still expose successor control states structurally through `become`, rather than leaving control flow hidden in simulation traces.
@@ -278,14 +282,36 @@ That means:
 
 This makes an atomic transition a real scheduler unit.
 
-The intended normalized form is:
+The compiler normalizes communication-heavy bodies into explicit wait substates.
 
-- boolean guard
-- optional leading `send` or `recv`
-- local atomic work
-- `become` / next-state update
+At the source level, the user can write local work and communication in one edge body.
+At the compiled level, the actor is split so that each `send` or `recv` sits at the front of a generated substate transition, with explicit `become` hops connecting the pieces.
 
-`send` or `recv` must be the first action after the guard. Compilation fails if either appears later in the transition body or inside nested action forms.
+Conceptually, something like this:
+
+```lisp
+(edge true
+  (set before 1)
+  (send B ping)
+  (set after 1)
+  (become done))
+```
+
+becomes an internal shape more like:
+
+```lisp
+(edge true
+  (set before 1)
+  (become start__wait_0))
+
+(state start__wait_0
+  (edge true
+    (send B ping)
+    (set after 1)
+    (become done)))
+```
+
+That removes a lot of source-language noise while preserving explicit compiled control flow.
 
 ## What Counts As A State Change
 

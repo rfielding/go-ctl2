@@ -1729,11 +1729,11 @@ func buildActor(form Value) (*Actor, error) {
 		Spec: form,
 	}
 	for _, item := range form.Items[2:] {
-		state, err := buildState(item)
+		states, err := buildState(item)
 		if err != nil {
 			return nil, fmt.Errorf("actor %s: %w", name, err)
 		}
-		actor.States = append(actor.States, state)
+		actor.States = append(actor.States, states...)
 	}
 	if len(actor.States) == 0 {
 		return nil, fmt.Errorf("actor %s: no states", name)
@@ -1742,13 +1742,13 @@ func buildActor(form Value) (*Actor, error) {
 	return actor, nil
 }
 
-func buildState(form Value) (State, error) {
+func buildState(form Value) ([]State, error) {
 	if !isListHead(form, "state") || len(form.Items) < 2 {
-		return State{}, fmt.Errorf("state form must be (state name ...)")
+		return nil, fmt.Errorf("state form must be (state name ...)")
 	}
 	name, err := expectSymbol(form.Items[1], "state name")
 	if err != nil {
-		return State{}, err
+		return nil, err
 	}
 
 	state := State{
@@ -1756,14 +1756,20 @@ func buildState(form Value) (State, error) {
 		Control: true,
 		Spec:    form,
 	}
+	var generated []State
+	waitCounter := 0
 	for _, item := range form.Items[2:] {
-		transition, err := buildTransition(item)
+		transitions, hiddenStates, normalized, err := buildTransitionChain(item, name, &waitCounter)
 		if err != nil {
-			return State{}, fmt.Errorf("state %s: %w", name, err)
+			return nil, fmt.Errorf("state %s: %w", name, err)
 		}
-		state.Transitions = append(state.Transitions, transition)
+		if normalized {
+			state.Spec = Value{}
+		}
+		state.Transitions = append(state.Transitions, transitions...)
+		generated = append(generated, hiddenStates...)
 	}
-	return state, nil
+	return append([]State{state}, generated...), nil
 }
 
 func buildTransition(form Value) (Transition, error) {
@@ -1775,9 +1781,6 @@ func buildTransition(form Value) (Transition, error) {
 		return Transition{}, err
 	}
 	actionSpec := seqForm(form.Items[2:])
-	if err := validateTransitionActionSpec(actionSpec); err != nil {
-		return Transition{}, err
-	}
 	nextStates, err := collectBecomeStates(actionSpec)
 	if err != nil {
 		return Transition{}, err
@@ -1794,6 +1797,116 @@ func buildTransition(form Value) (Transition, error) {
 		GuardSpec:  form.Items[1],
 		ActionSpec: actionSpec,
 	}, nil
+}
+
+func buildTransitionFromParts(guardSpec, actionSpec Value) (Transition, error) {
+	form := List(Symbol("edge"), guardSpec)
+	if isListHead(actionSpec, "do") {
+		form.Items = append(form.Items, actionSpec.Items[1:]...)
+	} else {
+		form.Items = append(form.Items, actionSpec)
+	}
+	return buildTransition(form)
+}
+
+func buildTransitionChain(form Value, stateName string, waitCounter *int) ([]Transition, []State, bool, error) {
+	base, err := buildTransition(form)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	items := actionItems(base.ActionSpec)
+	commIdxs := communicationIndices(items)
+	if len(commIdxs) == 0 || (len(commIdxs) == 1 && commIdxs[0] == 0) {
+		return []Transition{base}, nil, false, nil
+	}
+
+	var transitions []Transition
+	var hiddenStates []State
+	currentState := stateName
+	currentGuard := base.GuardSpec
+	start := 0
+	for i, idx := range commIdxs {
+		if idx > start {
+			waitName := generatedWaitName(stateName, *waitCounter)
+			*waitCounter++
+			preItems := append([]Value{}, items[start:idx]...)
+			preItems = append(preItems, List(Symbol("become"), Symbol(waitName)))
+			preAction := seqForm(preItems)
+			preTransition, err := buildTransitionFromParts(currentGuard, preAction)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			if currentState == stateName {
+				transitions = append(transitions, preTransition)
+			} else {
+				hiddenStates = append(hiddenStates, State{
+					Name:        currentState,
+					Control:     true,
+					Transitions: []Transition{preTransition},
+				})
+			}
+			currentState = waitName
+			currentGuard = Symbol("true")
+		}
+
+		end := len(items)
+		if i+1 < len(commIdxs) {
+			end = commIdxs[i+1]
+		}
+		segmentItems := append([]Value{}, items[idx:end]...)
+		if i+1 < len(commIdxs) {
+			waitName := generatedWaitName(stateName, *waitCounter)
+			*waitCounter++
+			segmentItems = append(segmentItems, List(Symbol("become"), Symbol(waitName)))
+			segmentAction := seqForm(segmentItems)
+			segmentTransition, err := buildTransitionFromParts(currentGuard, segmentAction)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			if currentState == stateName {
+				transitions = append(transitions, segmentTransition)
+			} else {
+				hiddenStates = append(hiddenStates, State{
+					Name:        currentState,
+					Control:     true,
+					Transitions: []Transition{segmentTransition},
+				})
+			}
+			currentState = waitName
+			currentGuard = Symbol("true")
+		} else {
+			segmentAction := seqForm(segmentItems)
+			segmentTransition, err := buildTransitionFromParts(currentGuard, segmentAction)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			if currentState == stateName {
+				transitions = append(transitions, segmentTransition)
+			} else {
+				hiddenStates = append(hiddenStates, State{
+					Name:        currentState,
+					Control:     true,
+					Transitions: []Transition{segmentTransition},
+				})
+			}
+		}
+		start = end
+	}
+	return transitions, hiddenStates, true, nil
+}
+
+func communicationIndices(items []Value) []int {
+	var out []int
+	for i, item := range items {
+		if isSendOrRecvForm(item) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func generatedWaitName(stateName string, idx int) string {
+	return fmt.Sprintf("%s__wait_%d", stateName, idx)
 }
 
 func collectBecomeStates(form Value) ([]string, error) {

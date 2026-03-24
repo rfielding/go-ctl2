@@ -594,8 +594,8 @@ func TestZeroCapacityMailboxDeadlocksWithoutReceiver(t *testing.T) {
 	}
 }
 
-func TestCompileActorRejectsSendAfterLeadingAction(t *testing.T) {
-	_, err := CompileActor(`
+func TestCompileActorNormalizesSendAfterLeadingAction(t *testing.T) {
+	actor, err := CompileActor(`
 		(actor A
 			(state start
 				(edge true
@@ -604,13 +604,23 @@ func TestCompileActorRejectsSendAfterLeadingAction(t *testing.T) {
 					(become done)))
 			(state done))
 	`)
-	if err == nil {
-		t.Fatal("expected compile error, got nil")
+	if err != nil {
+		t.Fatalf("CompileActor returned error: %v", err)
+	}
+	found := false
+	for _, state := range actor.States {
+		if state.Name == "start__wait_0" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected normalized wait state to be generated")
 	}
 }
 
-func TestCompileActorRejectsNestedRecvAfterGuard(t *testing.T) {
-	_, err := CompileActor(`
+func TestCompileActorAllowsNestedRecvAfterGuard(t *testing.T) {
+	actor, err := CompileActor(`
 		(actor A
 			(state start
 				(edge true
@@ -619,8 +629,11 @@ func TestCompileActorRejectsNestedRecvAfterGuard(t *testing.T) {
 						(become done))))
 			(state done))
 	`)
-	if err == nil {
-		t.Fatal("expected compile error, got nil")
+	if err != nil {
+		t.Fatalf("CompileActor returned error: %v", err)
+	}
+	if actor == nil {
+		t.Fatal("expected actor, got nil")
 	}
 }
 
