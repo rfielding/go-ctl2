@@ -3,11 +3,13 @@ package main
 import (
 	"crypto/md5"
 	crand "crypto/rand"
+	"encoding/json"
 	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
 	"math/rand"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -3259,4 +3261,107 @@ func isSymbolPart(ch rune) bool {
 	return unicode.IsLetter(ch) || unicode.IsDigit(ch) || strings.ContainsRune("+-*/<>=!?_", ch)
 }
 
-func main() {}
+type docPlotData struct {
+	Title    string        `json:"title"`
+	Subtitle string        `json:"subtitle"`
+	Steps    int           `json:"steps"`
+	Sends    []MetricPoint `json:"sends"`
+	Receives []MetricPoint `json:"receives"`
+}
+
+func docQueueRuntime(steps int) (*Runtime, error) {
+	rt := NewRuntime(
+		MustCompileActor(`
+			(actor Client
+				(state loop
+					(edge (dice-range 0.0 0.5)
+						(set last "sleep")
+						(become loop))
+					(edge (dice-range 0.5 1.0)
+						(send Queue req)
+						(set last "arrival")
+						(become loop))))
+		`),
+		MustCompileActor(`
+			(actor Queue
+				(state wait
+					(edge (and (mailbox req) (data= count 0))
+						(recv msg)
+						(add count 1)
+						(set elapsed 0)
+						(become wait))
+					(edge (and (mailbox req) (data> count 0) (not (data= count 5)))
+						(recv msg)
+						(add count 1)
+						(become wait))
+					(edge (and (mailbox req) (data= count 5))
+						(recv dropped)
+						(add dropped_count 1)
+						(become wait))
+					(edge (and (data> count 0) (dice-range 0.0 0.5))
+						(sub count 1)
+						(set last_departure "service-complete")
+						(become wait))
+					(edge (and (data> count 0) (dice-range 0.5 1.0))
+						(set last_departure "busy")
+						(become wait))))
+		`),
+	)
+	rt.Actors[1].Data["count"] = Number("0")
+	rt.Actors[1].Data["elapsed"] = Number("0")
+	rt.Actors[1].Data["dropped_count"] = Number("0")
+
+	rng := rand.New(rand.NewSource(7))
+	rt.Dice = rng.Float64
+
+	nextActor := 0
+	rt.ChooseActorFn = func(runtime *Runtime) int {
+		index := nextActor
+		nextActor = (nextActor + 1) % len(runtime.Actors)
+		return index
+	}
+
+	maxTicks := steps*8 + 64
+	for attempts := 0; rt.Step < steps && attempts < maxTicks; attempts++ {
+		if err := rt.Tick(); err != nil {
+			return nil, err
+		}
+	}
+	if rt.Step < steps {
+		return nil, fmt.Errorf("doc queue example reached only %d applied steps after %d ticks", rt.Step, maxTicks)
+	}
+	return rt, nil
+}
+
+func emitDocPlotData(steps int) error {
+	rt, err := docQueueRuntime(steps)
+	if err != nil {
+		return err
+	}
+	data := docPlotData{
+		Title:    "Message Counts By Step",
+		Subtitle: fmt.Sprintf("%d-step Runtime trace of the M/M/1/5-style queue example.", rt.Step),
+		Steps:    rt.Step,
+		Sends:    rt.EventCountSeries(EventSend, nil),
+		Receives: rt.EventCountSeries(EventReceive, nil),
+	}
+	return json.NewEncoder(os.Stdout).Encode(data)
+}
+
+func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "doc-xyplot-data" {
+		steps := 100
+		if len(os.Args) >= 3 {
+			value, err := strconv.Atoi(os.Args[2])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "invalid step count %q: %v\n", os.Args[2], err)
+				os.Exit(1)
+			}
+			steps = value
+		}
+		if err := emitDocPlotData(steps); err != nil {
+			fmt.Fprintf(os.Stderr, "doc-xyplot-data: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}

@@ -942,11 +942,11 @@ This example is deliberately small, but it is enough to show:
 
 # Message Plot
 
-Because transitions, sends, and receives are now logged as structured events, the same example can also drive simple XY plots.
+Because transitions, sends, and receives are now logged as structured events, the docs can render plots from an actual Runtime execution instead of from hand-written points.
 
 ![Message Counts By Step](../generated/message_xyplot.svg)
 
-The present plot is intentionally simple. It is showing the kind of visualization the structured event log can support, not claiming to be the final metrics UI.
+The current plot is a 100-step run of the M/M/1/5-style queue example above. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.
 
 Natural follow-on plots include:
 

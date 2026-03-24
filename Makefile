@@ -52,7 +52,7 @@ $(GENERATED_DIR)/%.svg: $(MERMAID_DIR)/%.mmd $(MERMAID_CONFIG) | $(GENERATED_DIR
 $(DIAGRAM_SNIPPETS): $(MERMAID_SRC) | $(GENERATED_DIR)
 	python3 scripts/generate_diagram_sections.py $(MERMAID_DIR) $(DIAGRAM_SNIPPETS)
 
-$(MESSAGE_XYPLOT): scripts/generate_xyplot.py | $(GENERATED_DIR)
+$(MESSAGE_XYPLOT): scripts/generate_xyplot.py $(wildcard *.go) | $(GENERATED_DIR)
 	python3 scripts/generate_xyplot.py $(MESSAGE_XYPLOT)
 
 $(BUILD_DIR):
