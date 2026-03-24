@@ -35,6 +35,21 @@ def circles(points, color, x0, y0, w, h, xmax, ymax):
     return "\n".join(out)
 
 
+def difference_series(sends, recvs, xmax):
+    send_map = {step: value for step, value in sends}
+    recv_map = {step: value for step, value in recvs}
+    out = []
+    last_send = 0.0
+    last_recv = 0.0
+    for step in range(1, xmax + 1):
+        if step in send_map:
+            last_send = send_map[step]
+        if step in recv_map:
+            last_recv = recv_map[step]
+        out.append((step, last_send - last_recv))
+    return out
+
+
 def axis_ticks(count):
     if count <= 10:
         return list(range(1, count + 1))
@@ -66,10 +81,8 @@ def main() -> int:
     sends = [(point["Step"], point["Value"]) for point in data["sends"]]
     recvs = [(point["Step"], point["Value"]) for point in data["receives"]]
     xmax = max(1, int(data["steps"]))
-    ymax = max(
-        1,
-        int(max([point[1] for point in sends] + [point[1] for point in recvs] + [1])),
-    )
+    backlog = difference_series(sends, recvs, xmax)
+    ymax = max(1, int(max([point[1] for point in backlog] + [1])))
 
     width = 960
     height = 420
@@ -107,7 +120,7 @@ def main() -> int:
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect width="100%" height="100%" fill="{BG}"/>
   <rect x="20" y="20" width="{width - 40}" height="{height - 40}" rx="14" fill="{PANEL}" stroke="{BORDER}"/>
-  <text x="{margin_left}" y="38" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="22">{data["title"]}</text>
+  <text x="{margin_left}" y="38" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="22">Outstanding Messages By Step</text>
   <text x="{margin_left}" y="58" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">{data["subtitle"]}</text>
 
   <line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{margin_top + plot_h}" stroke="{MUTED}" stroke-width="1.5"/>
@@ -117,17 +130,13 @@ def main() -> int:
 {chr(10).join(x_labels)}
 
   <text x="{margin_left + plot_w / 2}" y="{height - 20}" text-anchor="middle" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">applied runtime step</text>
-  <text x="26" y="{margin_top + plot_h / 2}" transform="rotate(-90 26 {margin_top + plot_h / 2})" text-anchor="middle" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">cumulative messages</text>
+  <text x="26" y="{margin_top + plot_h / 2}" transform="rotate(-90 26 {margin_top + plot_h / 2})" text-anchor="middle" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">sent - received</text>
 
-  <polyline fill="none" stroke="{SEND}" stroke-width="3" points="{polyline(sends, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}"/>
-  <polyline fill="none" stroke="{RECV}" stroke-width="3" points="{polyline(recvs, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}"/>
-{circles(sends, SEND, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}
-{circles(recvs, RECV, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}
+  <polyline fill="none" stroke="{SEND}" stroke-width="3" points="{polyline(backlog, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}"/>
+{circles(backlog, SEND, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}
 
   <line x1="{width - 220}" y1="78" x2="{width - 184}" y2="78" stroke="{SEND}" stroke-width="3"/>
-  <text x="{width - 174}" y="82" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">sends</text>
-  <line x1="{width - 220}" y1="102" x2="{width - 184}" y2="102" stroke="{RECV}" stroke-width="3"/>
-  <text x="{width - 174}" y="106" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">receives</text>
+  <text x="{width - 174}" y="82" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">outstanding = sends - receives</text>
 </svg>
 """
 

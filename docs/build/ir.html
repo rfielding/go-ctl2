@@ -871,9 +871,9 @@
 <h1 id="message-plot">Message Plot</h1>
 <p>Because transitions, sends, and receives are now logged as structured events, the docs can render plots from an actual Runtime execution instead of from hand-written points.</p>
 <figure>
-<img src="../generated/message_xyplot.svg" alt="Message Counts By Step" /><figcaption aria-hidden="true">Message Counts By Step</figcaption>
+<img src="../generated/message_xyplot.svg" alt="Outstanding Messages By Step" /><figcaption aria-hidden="true">Outstanding Messages By Step</figcaption>
 </figure>
-<p>The current plot is a 100-step run of the M/M/1/5-style queue example above. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.</p>
+<p>The current plot is a 100-step run of the M/M/1/5-style queue example above, showing outstanding messages as <code>sent - received</code>. It is still intentionally simple, but it now comes from the same executable model rather than from a static sketch.</p>
 <p>Natural follow-on plots include:</p>
 <ul>
 <li>sends per step</li>
