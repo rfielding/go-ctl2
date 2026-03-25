@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -473,7 +476,7 @@ func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 					(edge true
 						(become done)))
 				(state done))
-			(instance A Worker)
+			(instance A Worker (queue 1))
 			(assert (ef (in-state A done)))
 			(assert (ag (in-state A start))))
 	`)
@@ -491,7 +494,7 @@ func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 	if results[1].Holds {
 		t.Fatal("expected second embedded assertion to fail")
 	}
-	want := `(model (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker) (assert (ef (in-state A done))) (assert (ag (in-state A start))))`
+	want := `(model (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker (queue 1)) (assert (ef (in-state A done))) (assert (ag (in-state A start))))`
 	if got := spec.Lisp().String(); got != want {
 		t.Fatalf("unexpected model serialization: %s", got)
 	}
@@ -507,7 +510,7 @@ func TestCompileModelCapturesXYPlot(t *testing.T) {
 				(state loop
 					(edge true
 						(become loop))))
-			(instance A LoopingWorker)
+			(instance A LoopingWorker (queue 1))
 			(xyplot outstanding
 				(title "Outstanding Messages By Step")
 				(steps 100)
@@ -546,12 +549,12 @@ func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
 					(edge true
 						(recv msg)
 						(become sink))))
-			(instance A Sender (Receiver B))
-			(instance B Receiver)
+			(instance A Sender (queue 1) (Receiver B))
+			(instance B Receiver (queue 1))
 			(xyplot sent
-				(title "Sends")
+				(title "Send Rate")
 				(steps 1)
-				(metric send-count)))
+				(metric send-rate)))
 	`)
 
 	got, err := renderRequirementsMarkdown(spec)
@@ -561,6 +564,7 @@ func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
 	for _, want := range []string{
 		"# Requirements Model",
 		"## Line Graphs",
+		"## Channel Sizes",
 		"## State Diagram",
 		"## Message Diagram",
 		"## Class Diagram",
@@ -573,10 +577,270 @@ func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
 	}
 }
 
+func TestServerServesEmbeddedIndex(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	newServerMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / returned status %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "go-ctl2") {
+		t.Fatalf("expected embedded index html, got %q", rec.Body.String())
+	}
+}
+
+func TestServerServesEmbeddedDocs(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/docs", nil)
+	rec := httptest.NewRecorder()
+	newServerMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /docs returned status %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Actor IR, CTL, and Diagram Strategy") {
+		t.Fatalf("expected embedded docs html, got %q", rec.Body.String())
+	}
+}
+
+func TestServerRenderAPI(t *testing.T) {
+	body := `{"source":"(model (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker (queue 1)))"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/render", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	newServerMux().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/render returned status %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Requirements Model") {
+		t.Fatalf("expected rendered interpretation payload, got %s", rec.Body.String())
+	}
+}
+
+func TestProviderCatalogIncludesBuiltin(t *testing.T) {
+	catalog := buildProviderCatalog(t.Context())
+	if catalog.Default == "" {
+		t.Fatal("expected default provider")
+	}
+	found := false
+	for _, provider := range catalog.Providers {
+		if provider.ID == "builtin" && provider.Available {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected builtin provider in %+v", catalog.Providers)
+	}
+}
+
+func TestChatSystemPromptMentionsDocs(t *testing.T) {
+	prompt := chatSystemPrompt("(model)")
+	for _, want := range []string{"/docs", "/docs/ir.generated.md"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to mention %q, got %s", want, prompt)
+		}
+	}
+}
+
+func TestChatSystemPromptIncludesLispAndRenderedInterpretation(t *testing.T) {
+	source := `
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker (queue 1)))
+	`
+	prompt := chatSystemPrompt(source)
+	for _, want := range []string{"Current Lisp model:", "```lisp", "(instance A Worker (queue 1))", "Current rendered interpretation:", "```markdown", "# Requirements Model"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q, got %s", want, prompt)
+		}
+	}
+}
+
+func TestChatSystemPromptIncludesCompilerErrorsWhenModelIsInvalid(t *testing.T) {
+	prompt := chatSystemPrompt("(model (instance A MissingRole (queue 1)))")
+	for _, want := range []string{"Current compiler result:", "```text", "unknown actor role"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected prompt to contain %q, got %s", want, prompt)
+		}
+	}
+}
+
+func TestLookupEnvLoggedReportsHowToSet(t *testing.T) {
+	old := envLog
+	defer func() { envLog = old }()
+	var buf bytes.Buffer
+	envLog = &buf
+	t.Setenv("OPENAI_API_KEY", "")
+	lookupEnvLogged("OPENAI_API_KEY")
+	got := buf.String()
+	if !strings.Contains(got, "env lookup OPENAI_API_KEY: unset") {
+		t.Fatalf("expected unset log, got %q", got)
+	}
+	if !strings.Contains(got, "export OPENAI_API_KEY=...") {
+		t.Fatalf("expected set hint, got %q", got)
+	}
+}
+
+func TestBuiltinChatDrawCircleReturnsSVG(t *testing.T) {
+	out, err := builtinChatReply("explain", "(model)", []chatTurn{{Role: "user", Content: "draw a circle"}})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	if !strings.Contains(out, "```svg") || !strings.Contains(out, "<circle") {
+		t.Fatalf("expected svg circle response, got %s", out)
+	}
+}
+
+func TestBuiltinChatDrawDiamondReturnsSVG(t *testing.T) {
+	out, err := builtinChatReply("explain", "(model)", []chatTurn{{Role: "user", Content: "draw a diamond"}})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	if !strings.Contains(out, "```svg") || !strings.Contains(out, "<polygon") {
+		t.Fatalf("expected svg diamond response, got %s", out)
+	}
+}
+
+func TestBuiltinChatCTLExplainerReturnsDiagrams(t *testing.T) {
+	out, err := builtinChatReply("explain", "(model)", []chatTurn{{Role: "user", Content: "what is CTL? can you draw me some diagrams of how it works?"}})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	for _, want := range []string{"Computation Tree Logic", "```svg", "```mermaid", "`EX p`"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected CTL explainer to contain %q, got %s", want, out)
+		}
+	}
+}
+
+func TestBuiltinChatCTLClarificationStaysOnTopic(t *testing.T) {
+	out, err := builtinChatReply("explain", "(model (actor A (state start)))", []chatTurn{
+		{Role: "user", Content: "what is CTL? can you draw me some diagrams of how it works?"},
+		{Role: "assistant", Content: "CTL is branching-time logic."},
+		{Role: "user", Content: "i am confused by the nodes t1, t2, t3. it should be more like... every state has a set of propositions that are true or false; the same set in every one."},
+	})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	if strings.Contains(out, "The current requirement compiles") {
+		t.Fatalf("expected conversational clarification, got %s", out)
+	}
+	for _, want := range []string{"Kripke semantics", "states are worlds", "```svg"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected clarification to contain %q, got %s", want, out)
+		}
+	}
+}
+
+func TestBuiltinChatConversationSequenceReturnsMermaid(t *testing.T) {
+	out, err := builtinChatReply("explain", "(model)", []chatTurn{
+		{Role: "user", Content: "what is CTL?"},
+		{Role: "assistant", Content: "CTL is branching-time logic."},
+		{Role: "user", Content: "draw a sequence diagram of what we just talked about"},
+	})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	if !strings.Contains(out, "```mermaid") || !strings.Contains(out, "sequenceDiagram") {
+		t.Fatalf("expected conversation sequence diagram, got %s", out)
+	}
+}
+
+func TestBuiltinChatFallsBackToConfiguredLLMNotice(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	out, err := chatWithProvider(t.Context(), "builtin", "explain", "(model)", []chatTurn{
+		{Role: "user", Content: "tell me a joke about distributed systems"},
+	})
+	if err != nil {
+		t.Fatalf("chatWithProvider returned error: %v", err)
+	}
+	if !strings.Contains(out, "No external LLM is configured for open-ended chat.") {
+		t.Fatalf("expected fallback setup note, got %s", out)
+	}
+	if strings.Contains(out, "switch into model mode") {
+		t.Fatalf("expected no mode speech, got %s", out)
+	}
+}
+
+func TestFallbackLLMProviderPrefersOpenAIThenClaude(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	if got := fallbackLLMProvider(); got != "" {
+		t.Fatalf("expected no fallback provider, got %q", got)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "claude-key")
+	if got := fallbackLLMProvider(); got != "claude" {
+		t.Fatalf("expected claude fallback, got %q", got)
+	}
+	t.Setenv("OPENAI_API_KEY", "openai-key")
+	if got := fallbackLLMProvider(); got != "openai" {
+		t.Fatalf("expected openai fallback, got %q", got)
+	}
+}
+
+func TestImageSubjectRecognizesPictureRequests(t *testing.T) {
+	got := imageSubject("show me a picture of t-pain", "show me a picture of T-Pain")
+	if got != "T-Pain" {
+		t.Fatalf("expected T-Pain, got %q", got)
+	}
+}
+
+func TestMailboxSizeSeriesTracksQueuedMessages(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(actor Sender
+				(state start
+					(edge true
+						(send Receiver ping)
+						(become sent)))
+				(state sent
+					(edge true
+						(send Receiver pong)
+						(become done)))
+				(state done))
+			(actor Receiver
+				(state wait
+					(edge true
+						(recv msg)
+						(become got-one)))
+				(state got-one
+					(edge true
+						(recv msg)
+						(become done)))
+				(state done))
+			(instance A Sender (queue 1) (Receiver B))
+			(instance B Receiver (queue 2)))
+	`)
+
+	rt, err := runModelForPlot(spec, 4)
+	if err != nil {
+		t.Fatalf("runModelForPlot returned error: %v", err)
+	}
+	got := rt.MailboxSizeSeries("B")
+	want := []MetricPoint{
+		{Step: 0, Value: 0},
+		{Step: 1, Value: 1},
+		{Step: 2, Value: 0},
+		{Step: 3, Value: 1},
+		{Step: 4, Value: 0},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d mailbox points, got %d", len(want), len(got))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("mailbox point %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestCompileModelRejectsUnknownActorRole(t *testing.T) {
 	_, err := CompileModel(`
 		(model
-			(instance A MissingRole))
+			(instance A MissingRole (queue 1)))
 	`)
 	if err == nil {
 		t.Fatal("expected unknown actor role error, got nil")
@@ -606,6 +870,50 @@ func TestCompileModelRequiresActorDeclarations(t *testing.T) {
 	}
 }
 
+func TestCompileModelRequiresInstanceQueueLength(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker))
+	`)
+	if err == nil {
+		t.Fatal("expected missing queue length error, got nil")
+	}
+	if !strings.Contains(err.Error(), "instance has the wrong shape") && !strings.Contains(err.Error(), "instance queue has the wrong shape") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestModelRuntimeUsesInstanceQueueLength(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(actor Sender
+				(state start
+					(edge true
+						(send Receiver ping)
+						(become done)))
+				(state done))
+			(actor Receiver
+				(state idle
+					(edge true
+						(become idle))))
+			(instance A Sender (queue 2) (Receiver B))
+			(instance B Receiver (queue 0)))
+	`)
+
+	runtime := spec.Runtime()
+	if got := runtime.MailboxCaps["A"]; got != 2 {
+		t.Fatalf("expected A queue length 2, got %d", got)
+	}
+	if got := runtime.MailboxCaps["B"]; got != 0 {
+		t.Fatalf("expected B queue length 0, got %d", got)
+	}
+}
+
 func TestRenderClassDiagramMermaidShowsActorVariableReadsAndWrites(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
@@ -623,8 +931,8 @@ func TestRenderClassDiagramMermaidShowsActorVariableReadsAndWrites(t *testing.T)
 					(edge true
 						(recv msg)
 						(become idle))))
-			(instance A Worker (Sink B))
-			(instance B Sink))
+			(instance A Worker (queue 1) (Sink B))
+			(instance B Sink (queue 1)))
 	`)
 
 	got := renderClassDiagramMermaid(spec)
@@ -703,8 +1011,8 @@ func TestCompileModelRequiresPeerRoleFill(t *testing.T) {
 				(state done
 					(edge true
 						(become done))))
-			(instance A Sender)
-			(instance B ReceiverRole))
+			(instance A Sender (queue 1))
+			(instance B ReceiverRole (queue 1)))
 	`)
 	if err == nil {
 		t.Fatal("expected missing peer role fill error, got nil")
@@ -731,8 +1039,8 @@ func TestCompileModelRejectsPeerRoleFillToWrongRole(t *testing.T) {
 				(state done
 					(edge true
 						(become done))))
-			(instance A Sender (ReceiverRole C))
-			(instance C OtherRole))
+			(instance A Sender (queue 1) (ReceiverRole C))
+			(instance C OtherRole (queue 1)))
 	`)
 	if err == nil {
 		t.Fatal("expected wrong-role fill error, got nil")
@@ -755,8 +1063,8 @@ func TestCompileModelAllowsCircularPeerRoleFills(t *testing.T) {
 					(edge true
 						(send PingRole pong)
 						(become loop))))
-			(instance Ping PingRole (PongRole Pong))
-			(instance Pong PongRole (PingRole Ping)))
+			(instance Ping PingRole (queue 1) (PongRole Pong))
+			(instance Pong PongRole (queue 1) (PingRole Ping)))
 	`)
 	if len(spec.Actors) != 2 {
 		t.Fatalf("expected 2 actors, got %d", len(spec.Actors))
@@ -774,9 +1082,9 @@ func TestCompileModelRejectsSendToMultiBoundRole(t *testing.T) {
 				(state done))
 			(actor ReceiverRole
 				(state ready))
-			(instance Sender SenderRole (ReceiverRole ReceiverA ReceiverB))
-			(instance ReceiverA ReceiverRole)
-			(instance ReceiverB ReceiverRole))
+			(instance Sender SenderRole (queue 1) (ReceiverRole ReceiverA ReceiverB))
+			(instance ReceiverA ReceiverRole (queue 1))
+			(instance ReceiverB ReceiverRole (queue 1)))
 	`)
 	if err == nil {
 		t.Fatal("expected ambiguous send error, got nil")
@@ -805,9 +1113,9 @@ func TestSendAnyUsesRoleSetAndRecvSetsSender(t *testing.T) {
 						(recv msg)
 						(set last msg)
 						(become ready))))
-			(instance Bakery BakeryRole (TruckRole TruckA TruckB))
-			(instance TruckA TruckRole)
-			(instance TruckB TruckRole))
+			(instance Bakery BakeryRole (queue 1) (TruckRole TruckA TruckB))
+			(instance TruckA TruckRole (queue 1))
+			(instance TruckB TruckRole (queue 1)))
 	`)
 
 	runtime := spec.Runtime()
@@ -889,15 +1197,15 @@ func TestMultipleRoleInstancesKeepLocalVariablesIndependent(t *testing.T) {
 						(recv sale)
 						(add served 1)
 						(become ready))))
-			(instance Production ProductionRole (TruckRole TruckNorth))
-			(instance TruckNorth TruckRole (StoreRole StoreA))
-			(instance TruckSouth TruckRole (StoreRole StoreB))
-			(instance StoreA StoreRole (CustomerBaseRole CustomerA))
-			(instance StoreB StoreRole (CustomerBaseRole CustomerB))
-			(instance StoreC StoreRole (CustomerBaseRole CustomerC))
-			(instance CustomerA CustomerBaseRole)
-			(instance CustomerB CustomerBaseRole)
-			(instance CustomerC CustomerBaseRole))
+			(instance Production ProductionRole (queue 1) (TruckRole TruckNorth))
+			(instance TruckNorth TruckRole (queue 1) (StoreRole StoreA))
+			(instance TruckSouth TruckRole (queue 1) (StoreRole StoreB))
+			(instance StoreA StoreRole (queue 1) (CustomerBaseRole CustomerA))
+			(instance StoreB StoreRole (queue 1) (CustomerBaseRole CustomerB))
+			(instance StoreC StoreRole (queue 1) (CustomerBaseRole CustomerC))
+			(instance CustomerA CustomerBaseRole (queue 1))
+			(instance CustomerB CustomerBaseRole (queue 1))
+			(instance CustomerC CustomerBaseRole (queue 1)))
 	`)
 
 	runtime := spec.Runtime()

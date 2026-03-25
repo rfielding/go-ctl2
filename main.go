@@ -217,6 +217,7 @@ type RequirementsModel struct {
 type ActorDeclaration struct {
 	Name         string
 	Role         string
+	QueueLen     int
 	RoleBindings map[string][]string
 	Spec         Value
 }
@@ -560,6 +561,29 @@ func (rt *Runtime) EventRateSeries(kind EventKind, filter func(Event) bool, wind
 		}
 		span := float64(step - start + 1)
 		out = append(out, MetricPoint{Step: step, Value: sum / span})
+	}
+	return out
+}
+
+func (rt *Runtime) MailboxSizeSeries(actorName string) []MetricPoint {
+	counts := map[int]float64{}
+	for _, event := range rt.Events {
+		switch event.Kind {
+		case EventSend:
+			if event.PeerName == actorName && rt.mailboxCap(actorName) != 0 {
+				counts[event.Step]++
+			}
+		case EventReceive:
+			if event.ActorName == actorName && rt.mailboxCap(actorName) != 0 {
+				counts[event.Step]--
+			}
+		}
+	}
+	out := []MetricPoint{{Step: 0, Value: 0}}
+	size := 0.0
+	for step := 1; step <= rt.Step; step++ {
+		size += counts[step]
+		out = append(out, MetricPoint{Step: step, Value: size})
 	}
 	return out
 }
@@ -1241,7 +1265,11 @@ func (m *RequirementsModel) Runtime() *Runtime {
 	for i, actor := range m.Actors {
 		actors[i] = cloneActor(actor)
 	}
-	return NewRuntime(actors...)
+	rt := NewRuntime(actors...)
+	for _, decl := range m.Declarations {
+		rt.MailboxCaps[decl.Name] = decl.QueueLen
+	}
+	return rt
 }
 
 func (m *RequirementsModel) CheckAssertions() ([]AssertionResult, error) {
@@ -1986,13 +2014,13 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 		}
 	}
 	if len(model.Declarations) == 0 {
-		return nil, adviceError("model has no actor instances", "add at least one `(instance Name Role ...)` so the runtime has concrete actors to explore")
+		return nil, adviceError("model has no actor instances", "add at least one `(instance Name Role (queue n) ...)` so the runtime has concrete actors to explore")
 	}
 	seenNames := map[string]bool{}
 	declarationsByName := map[string]ActorDeclaration{}
 	for _, decl := range model.Declarations {
 		if seenNames[decl.Name] {
-			return nil, adviceError(fmt.Sprintf("duplicate actor name %s", decl.Name), "give each `(instance ...)` a unique concrete name")
+			return nil, adviceError(fmt.Sprintf("duplicate actor name %s", decl.Name), "give each `(instance Name Role (queue n) ...)` a unique concrete name")
 		}
 		seenNames[decl.Name] = true
 		declarationsByName[decl.Name] = decl
@@ -2000,7 +2028,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 	for _, decl := range model.Declarations {
 		actorType, ok := actorTypes[decl.Role]
 		if !ok {
-			return nil, adviceError(fmt.Sprintf("instance %s references unknown actor role %s", decl.Name, decl.Role), "declare that role with `(actor RoleName ...)` before using it in `(instance ...)`")
+			return nil, adviceError(fmt.Sprintf("instance %s references unknown actor role %s", decl.Name, decl.Role), "declare that role with `(actor RoleName ...)` before using it in `(instance Name Role (queue n) ...)`")
 		}
 		requiredPeerRoles, err := collectActorPeerRoles(actorType)
 		if err != nil {
@@ -2020,7 +2048,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 		model.Actors = append(model.Actors, actor)
 	}
 	if len(model.Actors) == 0 {
-		return nil, adviceError("model produced no runtime actors", "check that each `(instance Name Role ...)` references a declared role and survived validation")
+		return nil, adviceError("model produced no runtime actors", "check that each `(instance Name Role (queue n) ...)` references a declared role and survived validation")
 	}
 	return model, nil
 }
@@ -2091,12 +2119,12 @@ func validateActorRoleBindings(decl ActorDeclaration, actorType *Actor, actorTyp
 		}
 		targetInstances, ok := decl.RoleBindings[role]
 		if !ok || len(targetInstances) == 0 {
-			return adviceError(fmt.Sprintf("instance %s must fill peer role %s", decl.Name, role), fmt.Sprintf("add a binding like `(%s TargetInstance)` inside that `(instance %s ...)` form", role, decl.Name))
+			return adviceError(fmt.Sprintf("instance %s must fill peer role %s", decl.Name, role), fmt.Sprintf("add a binding like `(%s TargetInstance)` inside that `(instance %s %s (queue %d) ...)` form", role, decl.Name, decl.Role, decl.QueueLen))
 		}
 		for _, targetInstance := range targetInstances {
 			targetDecl, ok := declarations[targetInstance]
 			if !ok {
-				return adviceError(fmt.Sprintf("instance %s fills peer role %s with unknown instance %s", decl.Name, role, targetInstance), "declare that target with its own `(instance Name Role ...)` form")
+				return adviceError(fmt.Sprintf("instance %s fills peer role %s with unknown instance %s", decl.Name, role, targetInstance), "declare that target with its own `(instance Name Role (queue n) ...)` form")
 			}
 			if targetDecl.Role != role {
 				return adviceError(fmt.Sprintf("instance %s fills peer role %s with instance %s playing role %s", decl.Name, role, targetInstance, targetDecl.Role), fmt.Sprintf("bind `%s` to an instance whose declared role is `%s`", role, role))
@@ -2149,7 +2177,7 @@ func resolveSendTargets(form Value, bindings map[string][]string) (Value, error)
 		}
 		targets, ok := bindings[role]
 		if !ok || len(targets) == 0 {
-			return Value{}, adviceError(fmt.Sprintf("unresolved peer role %s", role), "add that role to the enclosing `(instance ...)` bindings")
+			return Value{}, adviceError(fmt.Sprintf("unresolved peer role %s", role), "add that role to the enclosing `(instance Name Role (queue n) ...)` bindings")
 		}
 		if len(targets) != 1 {
 			return Value{}, adviceError(fmt.Sprintf("peer role %s resolves to %d instances", role, len(targets)), "replace `send` with `send-any` when a role can map to multiple concrete actors")
@@ -2165,7 +2193,7 @@ func resolveSendTargets(form Value, bindings map[string][]string) (Value, error)
 		}
 		targets, ok := bindings[role]
 		if !ok || len(targets) == 0 {
-			return Value{}, adviceError(fmt.Sprintf("unresolved peer role %s", role), "add that role to the enclosing `(instance ...)` bindings")
+			return Value{}, adviceError(fmt.Sprintf("unresolved peer role %s", role), "add that role to the enclosing `(instance Name Role (queue n) ...)` bindings")
 		}
 		items := []Value{Symbol("send-any")}
 		for _, target := range targets {
@@ -2190,8 +2218,8 @@ func resolveSendTargets(form Value, bindings map[string][]string) (Value, error)
 }
 
 func buildActorDeclaration(form Value) (ActorDeclaration, error) {
-	if !isListHead(form, "instance") || len(form.Items) < 3 {
-		return ActorDeclaration{}, syntaxError("instance", "(instance Name Role (PeerRole Target...)...)")
+	if !isListHead(form, "instance") || len(form.Items) < 4 {
+		return ActorDeclaration{}, syntaxError("instance", "(instance Name Role (queue n) (PeerRole Target...)...)")
 	}
 	name, err := expectSymbol(form.Items[1], "actor name")
 	if err != nil {
@@ -2201,8 +2229,18 @@ func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 	if err != nil {
 		return ActorDeclaration{}, err
 	}
+	if !isListHead(form.Items[3], "queue") || len(form.Items[3].Items) != 2 {
+		return ActorDeclaration{}, syntaxError("instance queue", "(queue n)")
+	}
+	queueLen, err := valueInt(form.Items[3].Items[1])
+	if err != nil {
+		return ActorDeclaration{}, err
+	}
+	if queueLen < 0 {
+		return ActorDeclaration{}, adviceError("instance queue length must be non-negative", "use `0` for rendezvous mailboxes or a positive integer for buffered mailboxes")
+	}
 	bindings := map[string][]string{}
-	for _, item := range form.Items[3:] {
+	for _, item := range form.Items[4:] {
 		if !isList(item) || len(item.Items) < 2 {
 			return ActorDeclaration{}, syntaxError("instance binding", "(PeerRole InstanceName...)")
 		}
@@ -2231,6 +2269,7 @@ func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 	return ActorDeclaration{
 		Name:         name,
 		Role:         role,
+		QueueLen:     queueLen,
 		RoleBindings: bindings,
 		Spec:         form,
 	}, nil
@@ -2294,9 +2333,9 @@ func buildXYPlot(form Value) (XYPlot, error) {
 				return XYPlot{}, err
 			}
 			switch metric {
-			case "sent-minus-received", "send-count", "receive-count":
+			case "sent-minus-received", "send-count", "receive-count", "send-rate", "receive-rate":
 			default:
-				return XYPlot{}, unsupportedFormError("xyplot metric", metric, []string{"`sent-minus-received`", "`send-count`", "`receive-count`"})
+				return XYPlot{}, unsupportedFormError("xyplot metric", metric, []string{"`sent-minus-received`", "`send-rate`", "`receive-rate`", "`send-count`", "`receive-count`"})
 			}
 			plot.Metric = metric
 		default:
@@ -3678,7 +3717,7 @@ func (d ActorDeclaration) Lisp() Value {
 	if d.Spec.Kind != KindInvalid {
 		return d.Spec
 	}
-	items := []Value{Symbol("instance"), Symbol(d.Name), Symbol(d.Role)}
+	items := []Value{Symbol("instance"), Symbol(d.Name), Symbol(d.Role), List(Symbol("queue"), Number(strconv.Itoa(d.QueueLen)))}
 	for _, role := range sortedStringKeys(d.RoleBindings) {
 		binding := []Value{Symbol(role)}
 		for _, target := range d.RoleBindings[role] {
@@ -4083,11 +4122,11 @@ const docQueueModelSource = `
 					(set last_departure "busy")
 					(become wait))))
 
-		(instance Client ClientRole (QueueRole Queue))
-		(instance Queue QueueRole)
+		(instance Client ClientRole (queue 1) (QueueRole Queue))
+		(instance Queue QueueRole (queue 5))
 
 		(xyplot queue_outstanding
-			(title "Outstanding Messages By Step")
+			(title "Queue Backlog By Step")
 			(steps 100)
 			(metric sent-minus-received)))
 `
@@ -4116,25 +4155,25 @@ const docMessageModelSource = `
 					(become done)))
 			(state done))
 
-		(instance Client ClientRole (RelayRole Relay))
-		(instance Relay RelayRole (ServerRole Server))
-		(instance Server ServerRole)
+		(instance Client ClientRole (queue 1) (RelayRole Relay))
+		(instance Relay RelayRole (queue 1) (ServerRole Server))
+		(instance Server ServerRole (queue 1))
 
 		(assert (ef (data= Server received '(message (type ping)))))
 		(assert (af (data= Server received '(message (type ping)))))
 
 		(xyplot message_outstanding
-			(title "Message Chain Outstanding Messages")
+			(title "Message Chain Backlog By Step")
 			(steps 4)
 			(metric sent-minus-received))
 		(xyplot message_sends
-			(title "Message Chain Sends By Step")
+			(title "Message Chain Send Rate")
 			(steps 4)
-			(metric send-count))
+			(metric send-rate))
 		(xyplot message_receives
-			(title "Message Chain Receives By Step")
+			(title "Message Chain Receive Rate")
 			(steps 4)
-			(metric receive-count)))
+			(metric receive-rate)))
 `
 
 const docBakeryModelSource = `
@@ -4181,15 +4220,15 @@ const docBakeryModelSource = `
 					(add served 1)
 					(become ready))))
 
-		(instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
-		(instance TruckNorth TruckRole (StoreRole StoreA))
-		(instance TruckSouth TruckRole (StoreRole StoreB))
-		(instance StoreA StoreRole (CustomerBaseRole CustomerA))
-		(instance StoreB StoreRole (CustomerBaseRole CustomerB))
-		(instance StoreC StoreRole (CustomerBaseRole CustomerC))
-		(instance CustomerA CustomerBaseRole)
-		(instance CustomerB CustomerBaseRole)
-		(instance CustomerC CustomerBaseRole))
+		(instance Production ProductionRole (queue 1) (TruckRole TruckNorth TruckSouth))
+		(instance TruckNorth TruckRole (queue 1) (StoreRole StoreA))
+		(instance TruckSouth TruckRole (queue 1) (StoreRole StoreB))
+		(instance StoreA StoreRole (queue 1) (CustomerBaseRole CustomerA))
+		(instance StoreB StoreRole (queue 1) (CustomerBaseRole CustomerB))
+		(instance StoreC StoreRole (queue 1) (CustomerBaseRole CustomerC))
+		(instance CustomerA CustomerBaseRole (queue 1))
+		(instance CustomerB CustomerBaseRole (queue 1))
+		(instance CustomerC CustomerBaseRole (queue 1)))
 `
 
 func docQueueModel() (*RequirementsModel, error) {
@@ -4292,9 +4331,9 @@ func renderDocLanguageSections() (string, error) {
 		{Form: "`(data $key:symbol $value:value)`", Params: "`$key` actor-local name", Semantics: "Initializes actor-local data before execution starts."},
 		{Form: "`(state $name:symbol $edge:form...)`", Params: "`$name` control-state name", Semantics: "Declares one named control location. The first state is initial."},
 		{Form: "`(edge $guard:guard $action:action...)`", Params: "`$guard` readiness condition", Semantics: "One atomic transition. Every branch must reach a `become`."},
-		{Form: "`(instance $name:symbol $role:symbol ($peerRole:symbol $target:symbol...)...)`", Params: "`$target` concrete actor instance", Semantics: "Creates one runtime actor and fills its peer-role bindings."},
+		{Form: "`(instance $name:symbol $role:symbol (queue $n:int) ($peerRole:symbol $target:symbol...)...)`", Params: "`$n` mailbox capacity; `0` means rendezvous", Semantics: "Creates one runtime actor, sets its mailbox length, and fills its peer-role bindings."},
 		{Form: "`(assert $p:ctl)`", Params: "`$p` CTL formula", Semantics: "Checks a branching-time requirement over the explored model."},
-		{Form: "`(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))`", Params: "`$m := send-count | receive-count | sent-minus-received`", Semantics: "Requests a runtime-derived line chart."},
+		{Form: "`(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))`", Params: "`$m := sent-minus-received | send-rate | receive-rate`", Semantics: "Requests a runtime-derived line chart. Use rate-style metrics for monotone event counts."},
 	}
 	guardForms := []languageFormDoc{
 		{Form: "`true`", Params: "none", Semantics: "Always enabled."},
@@ -4353,7 +4392,8 @@ func renderDocLanguageSections() (string, error) {
 	b.WriteString("Write a go-ctl2 model as Lisp.\n")
 	b.WriteString("Use exactly one top-level (model ...).\n")
 	b.WriteString("Declare reusable behavior with (actor RoleName ...).\n")
-	b.WriteString("Declare concrete runtime actors with (instance Name Role (PeerRole Target...)...).\n")
+	b.WriteString("Declare concrete runtime actors with (instance Name Role (queue n) (PeerRole Target...)...).\n")
+	b.WriteString("Every instance must declare its mailbox length with `(queue n)`. Use `0` for rendezvous and a positive integer for buffered mailboxes.\n")
 	b.WriteString("There is no implicit actor creation, implicit topology, or implicit next state.\n")
 	b.WriteString("Model the situation as a state machine, not as loose propositions.\n")
 	b.WriteString("For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.\n")
@@ -4449,6 +4489,17 @@ func renderDocExampleMarkdown(item docExample) (string, error) {
 			fmt.Fprintf(&b, "##### %s\n\n```lisp\n%s\n```\n\n```mermaid\n%s```\n\n", plot.Title, plot.Lisp().String(), renderPlotMermaid(data))
 		}
 	}
+
+	channelPlots, err := mailboxPlotDataForModel(item.Spec)
+	if err != nil {
+		return "", err
+	}
+	if len(channelPlots) > 0 {
+		b.WriteString("#### Channel Sizes\n\n")
+		for _, data := range channelPlots {
+			fmt.Fprintf(&b, "##### %s\n\n```mermaid\n%s```\n\n", data.Title, renderPlotMermaid(data))
+		}
+	}
 	return strings.TrimSpace(b.String()), nil
 }
 
@@ -4480,6 +4531,10 @@ func docPlotSeries(rt *Runtime, metric string) ([]MetricPoint, string, string, e
 	case "receive-count":
 		series := append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventCountSeries(EventReceive, nil)...)
 		return series, "cumulative receives", "receives", nil
+	case "send-rate":
+		return append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventRateSeries(EventSend, nil, 1)...), "sends per step", "send rate", nil
+	case "receive-rate":
+		return append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventRateSeries(EventReceive, nil, 1)...), "receives per step", "receive rate", nil
 	case "sent-minus-received":
 		sendSeries := rt.EventCountSeries(EventSend, nil)
 		receiveSeries := rt.EventCountSeries(EventReceive, nil)
@@ -4507,6 +4562,34 @@ func docPlotSeries(rt *Runtime, metric string) ([]MetricPoint, string, string, e
 	default:
 		return nil, "", "", fmt.Errorf("unsupported doc plot metric %q", metric)
 	}
+}
+
+func mailboxPlotDataForModel(spec *RequirementsModel) ([]docPlotData, error) {
+	steps := 32
+	for _, plot := range spec.Plots {
+		if plot.Steps > steps {
+			steps = plot.Steps
+		}
+	}
+	rt, err := runModelForPlotUpTo(spec, steps)
+	if err != nil {
+		return nil, err
+	}
+	var out []docPlotData
+	for _, actor := range rt.Actors {
+		out = append(out, docPlotData{
+			Name:      diagramID(actor.Name) + "_channel_size",
+			Title:     fmt.Sprintf("%s Channel Size", actor.Name),
+			Subtitle:  fmt.Sprintf("%d-step runtime trace.", rt.Step),
+			Steps:     rt.Step,
+			Metric:    "mailbox-size",
+			YLabel:    "queued messages",
+			Legend:    actor.Name + " mailbox size",
+			Series:    rt.MailboxSizeSeries(actor.Name),
+			ImageName: diagramID(actor.Name) + "_channel_size.svg",
+		})
+	}
+	return out, nil
 }
 
 func emitDocPlotManifest() error {
@@ -4568,6 +4651,28 @@ func runModelForPlot(spec *RequirementsModel, steps int) (*Runtime, error) {
 	}
 	if rt.Step < steps {
 		return nil, fmt.Errorf("model reached only %d applied steps after %d ticks", rt.Step, maxTicks)
+	}
+	return rt, nil
+}
+
+func runModelForPlotUpTo(spec *RequirementsModel, steps int) (*Runtime, error) {
+	rt := spec.Runtime()
+	rng := rand.New(rand.NewSource(7))
+	rt.Dice = rng.Float64
+	nextActor := 0
+	rt.ChooseActorFn = func(runtime *Runtime) int {
+		index := nextActor % len(runtime.Actors)
+		nextActor++
+		return index
+	}
+	maxTicks := steps*len(rt.Actors)*4 + 64
+	for attempts := 0; rt.Step < steps && attempts < maxTicks; attempts++ {
+		if !rt.HasReadyStep() {
+			break
+		}
+		if err := rt.Tick(); err != nil {
+			return nil, err
+		}
 	}
 	return rt, nil
 }
@@ -5096,6 +5201,16 @@ func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
 			fmt.Fprintf(&b, "### %s\n\n```lisp\n%s\n```\n\n```mermaid\n%s```\n\n", plot.Title, plot.Lisp().String(), renderPlotMermaid(data))
 		}
 	}
+	channelPlots, err := mailboxPlotDataForModel(spec)
+	if err != nil {
+		return "", err
+	}
+	if len(channelPlots) > 0 {
+		b.WriteString("## Channel Sizes\n\n")
+		for _, data := range channelPlots {
+			fmt.Fprintf(&b, "### %s\n\n```mermaid\n%s```\n\n", data.Title, renderPlotMermaid(data))
+		}
+	}
 	return b.String(), nil
 }
 
@@ -5132,6 +5247,16 @@ func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
 				return "", err
 			}
 			fmt.Fprintf(&b, "<h3>%s</h3><pre><code>%s</code></pre><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(plot.Title), html.EscapeString(plot.Lisp().String()), html.EscapeString(renderPlotMermaid(data)))
+		}
+	}
+	channelPlots, err := mailboxPlotDataForModel(spec)
+	if err != nil {
+		return "", err
+	}
+	if len(channelPlots) > 0 {
+		b.WriteString("<h2>Channel Sizes</h2>")
+		for _, data := range channelPlots {
+			fmt.Fprintf(&b, "<h3>%s</h3><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(data.Title), html.EscapeString(renderPlotMermaid(data)))
 		}
 	}
 	b.WriteString("</body></html>")
@@ -5174,8 +5299,24 @@ func docPlotDataByName(name string, steps int) (docPlotData, error) {
 }
 
 func main() {
+	if handled, code := runFlagMode(os.Args[1:]); handled {
+		if code != 0 {
+			os.Exit(code)
+		}
+		return
+	}
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "serve":
+			addr := "127.0.0.1:8080"
+			if len(os.Args) >= 3 {
+				addr = os.Args[2]
+			}
+			fmt.Fprintf(os.Stderr, "serving go-ctl2 on http://%s\n", addr)
+			if err := serveWeb(addr); err != nil {
+				fmt.Fprintf(os.Stderr, "serve: %v\n", err)
+				os.Exit(1)
+			}
 		case "render-markdown", "render-html":
 			src, err := io.ReadAll(os.Stdin)
 			if err != nil {
@@ -5198,6 +5339,18 @@ func main() {
 				os.Exit(1)
 			}
 			fmt.Print(out)
+		case "interpret":
+			src, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "interpret: %v\n", err)
+				os.Exit(1)
+			}
+			markdown, _, err := renderInterpretation(string(src))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "interpret: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Print(markdown)
 		case "doc-xyplots-manifest":
 			if err := emitDocPlotManifest(); err != nil {
 				fmt.Fprintf(os.Stderr, "doc-xyplots-manifest: %v\n", err)

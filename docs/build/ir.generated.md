@@ -50,7 +50,8 @@ The exact information an LLM needs to author models is also the information a hu
 Write a go-ctl2 model as Lisp.
 Use exactly one top-level (model ...).
 Declare reusable behavior with (actor RoleName ...).
-Declare concrete runtime actors with (instance Name Role (PeerRole Target...)...).
+Declare concrete runtime actors with (instance Name Role (queue n) (PeerRole Target...)...).
+Every instance must declare its mailbox length with `(queue n)`. Use `0` for rendezvous and a positive integer for buffered mailboxes.
 There is no implicit actor creation, implicit topology, or implicit next state.
 Model the situation as a state machine, not as loose propositions.
 For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.
@@ -81,9 +82,9 @@ Documentation metavariables start with `$` and include a type tag, for example `
 | `(data $key:symbol $value:value)` | `$key` actor-local name | Initializes actor-local data before execution starts. |
 | `(state $name:symbol $edge:form...)` | `$name` control-state name | Declares one named control location. The first state is initial. |
 | `(edge $guard:guard $action:action...)` | `$guard` readiness condition | One atomic transition. Every branch must reach a `become`. |
-| `(instance $name:symbol $role:symbol ($peerRole:symbol $target:symbol...)...)` | `$target` concrete actor instance | Creates one runtime actor and fills its peer-role bindings. |
+| `(instance $name:symbol $role:symbol (queue $n:int) ($peerRole:symbol $target:symbol...)...)` | `$n` mailbox capacity; `0` means rendezvous | Creates one runtime actor, sets its mailbox length, and fills its peer-role bindings. |
 | `(assert $p:ctl)` | `$p` CTL formula | Checks a branching-time requirement over the explored model. |
-| `(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))` | `$m := send-count | receive-count | sent-minus-received` | Requests a runtime-derived line chart. |
+| `(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))` | `$m := sent-minus-received | send-rate | receive-rate` | Requests a runtime-derived line chart. Use rate-style metrics for monotone event counts. |
 
 ## Guard Forms
 
@@ -188,7 +189,8 @@ An actor role has:
 - local data
 - a set of named states
 
-Each runtime actor is created explicitly with `(instance ActorName RoleName (PeerRole InstanceName...)...)`.
+Each runtime actor is created explicitly with `(instance ActorName RoleName (queue N) (PeerRole InstanceName...)...)`.
+`N` is the mailbox length for that concrete actor.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
 
 ## State
@@ -329,8 +331,8 @@ Full M/M/1/5-style example:
         (set last_departure "busy")
         (become wait))))
 
-  (instance Client ClientRole (QueueRole Queue))
-  (instance Queue QueueRole)
+  (instance Client ClientRole (queue 1) (QueueRole Queue))
+  (instance Queue QueueRole (queue 5))
 
   (xyplot outstanding
     (title "Outstanding Messages By Step")
@@ -713,25 +715,25 @@ The canonical examples are generated as exact input/output pairs: the literal Li
 					(become done)))
 			(state done))
 
-		(instance Client ClientRole (RelayRole Relay))
-		(instance Relay RelayRole (ServerRole Server))
-		(instance Server ServerRole)
+		(instance Client ClientRole (queue 1) (RelayRole Relay))
+		(instance Relay RelayRole (queue 1) (ServerRole Server))
+		(instance Server ServerRole (queue 1))
 
 		(assert (ef (data= Server received '(message (type ping)))))
 		(assert (af (data= Server received '(message (type ping)))))
 
 		(xyplot message_outstanding
-			(title "Message Chain Outstanding Messages")
+			(title "Message Chain Backlog By Step")
 			(steps 4)
 			(metric sent-minus-received))
 		(xyplot message_sends
-			(title "Message Chain Sends By Step")
+			(title "Message Chain Send Rate")
 			(steps 4)
-			(metric send-count))
+			(metric send-rate))
 		(xyplot message_receives
-			(title "Message Chain Receives By Step")
+			(title "Message Chain Receive Rate")
 			(steps 4)
-			(metric receive-count)))
+			(metric receive-rate)))
 ```
 
 ### Rendered Output
@@ -802,46 +804,78 @@ classDiagram
 
 #### Line Graphs
 
-##### Message Chain Outstanding Messages
+##### Message Chain Backlog By Step
 
 ```lisp
-(xyplot message_outstanding (title "Message Chain Outstanding Messages") (steps 4) (metric sent-minus-received))
+(xyplot message_outstanding (title "Message Chain Backlog By Step") (steps 4) (metric sent-minus-received))
 ```
 
 ```mermaid
 xychart-beta
-    title "Message Chain Outstanding Messages"
+    title "Message Chain Backlog By Step"
     x-axis "applied runtime step" [0, 1, 2, 3, 4]
     y-axis "sent - received" 0 --> 1
     line [0, 1, 0, 1, 0]
 ```
 
-##### Message Chain Sends By Step
+##### Message Chain Send Rate
 
 ```lisp
-(xyplot message_sends (title "Message Chain Sends By Step") (steps 4) (metric send-count))
+(xyplot message_sends (title "Message Chain Send Rate") (steps 4) (metric send-rate))
 ```
 
 ```mermaid
 xychart-beta
-    title "Message Chain Sends By Step"
-    x-axis "applied runtime step" [0, 1, 3]
-    y-axis "cumulative sends" 0 --> 2
-    line [0, 1, 2]
+    title "Message Chain Send Rate"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "sends per step" 0 --> 1
+    line [0, 1, 0, 1, 0]
 ```
 
-##### Message Chain Receives By Step
+##### Message Chain Receive Rate
 
 ```lisp
-(xyplot message_receives (title "Message Chain Receives By Step") (steps 4) (metric receive-count))
+(xyplot message_receives (title "Message Chain Receive Rate") (steps 4) (metric receive-rate))
 ```
 
 ```mermaid
 xychart-beta
-    title "Message Chain Receives By Step"
-    x-axis "applied runtime step" [0, 2, 4]
-    y-axis "cumulative receives" 0 --> 2
-    line [0, 1, 2]
+    title "Message Chain Receive Rate"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "receives per step" 0 --> 1
+    line [0, 0, 1, 0, 1]
+```
+
+#### Channel Sizes
+
+##### Client Channel Size
+
+```mermaid
+xychart-beta
+    title "Client Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0]
+```
+
+##### Relay Channel Size
+
+```mermaid
+xychart-beta
+    title "Relay Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "queued messages" 0 --> 1
+    line [0, 1, 0, 0, 0]
+```
+
+##### Server Channel Size
+
+```mermaid
+xychart-beta
+    title "Server Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 1, 0]
 ```
 
 ## Queue Example
@@ -883,11 +917,11 @@ xychart-beta
 					(set last_departure "busy")
 					(become wait))))
 
-		(instance Client ClientRole (QueueRole Queue))
-		(instance Queue QueueRole)
+		(instance Client ClientRole (queue 1) (QueueRole Queue))
+		(instance Queue QueueRole (queue 5))
 
 		(xyplot queue_outstanding
-			(title "Outstanding Messages By Step")
+			(title "Queue Backlog By Step")
 			(steps 100)
 			(metric sent-minus-received)))
 ```
@@ -948,18 +982,40 @@ classDiagram
 
 #### Line Graphs
 
-##### Outstanding Messages By Step
+##### Queue Backlog By Step
 
 ```lisp
-(xyplot queue_outstanding (title "Outstanding Messages By Step") (steps 100) (metric sent-minus-received))
+(xyplot queue_outstanding (title "Queue Backlog By Step") (steps 100) (metric sent-minus-received))
 ```
 
 ```mermaid
 xychart-beta
-    title "Outstanding Messages By Step"
+    title "Queue Backlog By Step"
     x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
-    y-axis "sent - received" 0 --> 57
-    line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5, 6, 6, 6, 7, 8, 9, 10, 10, 10, 11, 12, 12, 12, 13, 14, 14, 14, 15, 16, 17, 18, 19, 20, 20, 20, 21, 21, 22, 22, 23, 23, 24, 25, 26, 27, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35, 35, 35, 35, 35, 36, 37, 38, 39, 40, 40, 41, 41, 41, 41, 42, 42, 42, 43, 44, 44, 44, 44, 45, 46, 46, 47, 48, 48, 48, 48, 49, 49, 49, 49, 50, 50, 51, 52, 53, 54, 55, 56, 57, 57]
+    y-axis "sent - received" 0 --> 5
+    line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+```
+
+#### Channel Sizes
+
+##### Client Channel Size
+
+```mermaid
+xychart-beta
+    title "Client Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### Queue Channel Size
+
+```mermaid
+xychart-beta
+    title "Queue Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    y-axis "queued messages" 0 --> 5
+    line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5]
 ```
 
 ## Bakery Role-Reuse Example
@@ -1010,15 +1066,15 @@ xychart-beta
 					(add served 1)
 					(become ready))))
 
-		(instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
-		(instance TruckNorth TruckRole (StoreRole StoreA))
-		(instance TruckSouth TruckRole (StoreRole StoreB))
-		(instance StoreA StoreRole (CustomerBaseRole CustomerA))
-		(instance StoreB StoreRole (CustomerBaseRole CustomerB))
-		(instance StoreC StoreRole (CustomerBaseRole CustomerC))
-		(instance CustomerA CustomerBaseRole)
-		(instance CustomerB CustomerBaseRole)
-		(instance CustomerC CustomerBaseRole))
+		(instance Production ProductionRole (queue 1) (TruckRole TruckNorth TruckSouth))
+		(instance TruckNorth TruckRole (queue 1) (StoreRole StoreA))
+		(instance TruckSouth TruckRole (queue 1) (StoreRole StoreB))
+		(instance StoreA StoreRole (queue 1) (CustomerBaseRole CustomerA))
+		(instance StoreB StoreRole (queue 1) (CustomerBaseRole CustomerB))
+		(instance StoreC StoreRole (queue 1) (CustomerBaseRole CustomerC))
+		(instance CustomerA CustomerBaseRole (queue 1))
+		(instance CustomerB CustomerBaseRole (queue 1))
+		(instance CustomerC CustomerBaseRole (queue 1)))
 ```
 
 ### Rendered Output
@@ -1179,6 +1235,98 @@ classDiagram
     <<CustomerBaseRole>> CustomerC
 ```
 
+#### Channel Sizes
+
+##### Production Channel Size
+
+```mermaid
+xychart-beta
+    title "Production Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### TruckNorth Channel Size
+
+```mermaid
+xychart-beta
+    title "TruckNorth Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### TruckSouth Channel Size
+
+```mermaid
+xychart-beta
+    title "TruckSouth Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### StoreA Channel Size
+
+```mermaid
+xychart-beta
+    title "StoreA Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### StoreB Channel Size
+
+```mermaid
+xychart-beta
+    title "StoreB Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### StoreC Channel Size
+
+```mermaid
+xychart-beta
+    title "StoreC Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### CustomerA Channel Size
+
+```mermaid
+xychart-beta
+    title "CustomerA Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+```
+
+##### CustomerB Channel Size
+
+```mermaid
+xychart-beta
+    title "CustomerB Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+##### CustomerC Channel Size
+
+```mermaid
+xychart-beta
+    title "CustomerC Channel Size"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    y-axis "queued messages" 0 --> 1
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
 
 # Message Plot
 
@@ -1188,18 +1336,18 @@ One such plot is declared in the model itself with:
 
 ```lisp
 (xyplot queue_outstanding
-  (title "Outstanding Messages By Step")
+  (title "Queue Backlog By Step")
   (steps 100)
   (metric sent-minus-received))
 ```
 
-The line charts below are rendered from every `xyplot` declaration in the example models. The queue plot is a 100-step run of the M/M/1/5-style queue example above. It starts at `0`, and the `sent-minus-received` line is positive exactly when sends are ahead of receives. It does not force the run to end at `0`, because this queue model can still have accepted work in service even after mailbox traffic has balanced out.
+The line charts below are rendered from every `xyplot` declaration in the example models. Monotone counters are shown as rates, not just cumulative totals. Backlog-style charts use `sent-minus-received`. The generated example sections also include one channel-size plot per actor so mailbox occupancy is visible directly.
 
 ### Message Outstanding
 
 ```mermaid
 xychart-beta
-    title "Message Chain Outstanding Messages"
+    title "Message Chain Backlog By Step"
     x-axis "applied runtime step" [0, 1, 2, 3, 4]
     y-axis "sent - received" 0 --> 1
     line [0, 1, 0, 1, 0]
@@ -1209,7 +1357,7 @@ xychart-beta
 <summary>XY Plot Source: <code>message_outstanding</code></summary>
 <pre><code class="language-lisp">
 (xyplot message_outstanding
-  (title "Message Chain Outstanding Messages")
+  (title "Message Chain Backlog By Step")
   (steps 4)
   (metric sent-minus-received))
 </code></pre>
@@ -1219,19 +1367,19 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "Message Chain Receives By Step"
-    x-axis "applied runtime step" [0, 2, 4]
-    y-axis "cumulative receives" 0 --> 2
-    line [0, 1, 2]
+    title "Message Chain Receive Rate"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "receives per step" 0 --> 1
+    line [0, 0, 1, 0, 1]
 ```
 
 <details>
 <summary>XY Plot Source: <code>message_receives</code></summary>
 <pre><code class="language-lisp">
 (xyplot message_receives
-  (title "Message Chain Receives By Step")
+  (title "Message Chain Receive Rate")
   (steps 4)
-  (metric receive-count))
+  (metric receive-rate))
 </code></pre>
 </details>
 
@@ -1239,19 +1387,19 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "Message Chain Sends By Step"
-    x-axis "applied runtime step" [0, 1, 3]
-    y-axis "cumulative sends" 0 --> 2
-    line [0, 1, 2]
+    title "Message Chain Send Rate"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "sends per step" 0 --> 1
+    line [0, 1, 0, 1, 0]
 ```
 
 <details>
 <summary>XY Plot Source: <code>message_sends</code></summary>
 <pre><code class="language-lisp">
 (xyplot message_sends
-  (title "Message Chain Sends By Step")
+  (title "Message Chain Send Rate")
   (steps 4)
-  (metric send-count))
+  (metric send-rate))
 </code></pre>
 </details>
 
@@ -1259,7 +1407,7 @@ xychart-beta
 
 ```mermaid
 xychart-beta
-    title "Outstanding Messages By Step"
+    title "Queue Backlog By Step"
     x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "sent - received" 0 --> 1
     line [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0]
@@ -1269,7 +1417,7 @@ xychart-beta
 <summary>XY Plot Source: <code>queue_outstanding</code></summary>
 <pre><code class="language-lisp">
 (xyplot queue_outstanding
-  (title "Outstanding Messages By Step")
+  (title "Queue Backlog By Step")
   (steps 100)
   (metric sent-minus-received))
 </code></pre>
@@ -1279,8 +1427,8 @@ xychart-beta
 
 Natural follow-on plots include:
 
-- sends per step
-- receives per step
+- send rate
+- receive rate
 - moving-average throughput
 - queue length by actor
 - service latency between matching send and receive events

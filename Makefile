@@ -75,4 +75,4 @@ clean:
 	rm -rf $(BUILD_DIR) $(GENERATED_DIR)
 
 serve-docs: docs
-	cd $(BUILD_DIR) && python3 -m http.server 8000
+	$(GO_CMD) run . serve 127.0.0.1:8000

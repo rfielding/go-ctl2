@@ -80,7 +80,8 @@ An actor role has:
 - local data
 - a set of named states
 
-Each runtime actor is created explicitly with `(instance ActorName RoleName (PeerRole InstanceName...)...)`.
+Each runtime actor is created explicitly with `(instance ActorName RoleName (queue N) (PeerRole InstanceName...)...)`.
+`N` is the mailbox length for that concrete actor.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
 
 ## State
@@ -221,8 +222,8 @@ Full M/M/1/5-style example:
         (set last_departure "busy")
         (become wait))))
 
-  (instance Client ClientRole (QueueRole Queue))
-  (instance Queue QueueRole)
+  (instance Client ClientRole (queue 1) (QueueRole Queue))
+  (instance Queue QueueRole (queue 5))
 
   (xyplot outstanding
     (title "Outstanding Messages By Step")
@@ -587,19 +588,19 @@ One such plot is declared in the model itself with:
 
 ```lisp
 (xyplot queue_outstanding
-  (title "Outstanding Messages By Step")
+  (title "Queue Backlog By Step")
   (steps 100)
   (metric sent-minus-received))
 ```
 
-The line charts below are rendered from every `xyplot` declaration in the example models. The queue plot is a 100-step run of the M/M/1/5-style queue example above. It starts at `0`, and the `sent-minus-received` line is positive exactly when sends are ahead of receives. It does not force the run to end at `0`, because this queue model can still have accepted work in service even after mailbox traffic has balanced out.
+The line charts below are rendered from every `xyplot` declaration in the example models. Monotone counters are shown as rates, not just cumulative totals. Backlog-style charts use `sent-minus-received`. The generated example sections also include one channel-size plot per actor so mailbox occupancy is visible directly.
 
 {{PLOT_SECTIONS}}
 
 Natural follow-on plots include:
 
-- sends per step
-- receives per step
+- send rate
+- receive rate
 - moving-average throughput
 - queue length by actor
 - service latency between matching send and receive events
