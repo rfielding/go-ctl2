@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>go-ctl2 Chat</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>go-ctl2</h1>
+        <button id="newConversation">New</button>
+      </div>
+      <div class="sidebar-copy">Requirements, conversations, and renderings stay in one place.</div>
+      <div id="conversationList" class="conversation-list"></div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">Kripke Philosophy Calculator</div>
+          <h2 id="conversationTitle">Conversation</h2>
+        </div>
+        <div class="doc-links">
+          <a href="/docs" target="_blank" rel="noopener noreferrer">Docs</a>
+          <a href="/docs/ir.generated.md" target="_blank" rel="noopener noreferrer">Markdown</a>
+        </div>
+        <div class="selectors">
+          <label>
+            Provider
+            <select id="providerSelect"></select>
+          </label>
+          <label>
+            Model
+            <select id="modelSelect"></select>
+          </label>
+        </div>
+      </header>
+
+      <nav class="tabs">
+        <button class="tab is-active" data-tab="chat">Chat</button>
+        <button class="tab" data-tab="editor">Model</button>
+      </nav>
+
+      <section id="chatTab" class="tab-panel is-active">
+        <div id="messages" class="messages"></div>
+        <form id="chatForm" class="composer">
+          <textarea id="chatInput" rows="3" placeholder="Ask questions, argue with the model, or ask for diagrams. Example: show me this as TLA"></textarea>
+          <div class="composer-actions">
+            <button type="submit">Send</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="editorTab" class="tab-panel">
+        <div class="editor-toolbar">
+          <label>
+            Example
+            <select id="exampleSelect"></select>
+          </label>
+          <button id="loadExample">Load Example</button>
+          <div id="renderStatus" class="render-status">Waiting for source changes.</div>
+        </div>
+        <div class="editor-layout">
+          <textarea id="sourceEditor" class="source-editor" spellcheck="false"></textarea>
+          <div id="renderOutput" class="render-output"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <template id="messageTemplate">
+    <article class="message">
+      <div class="message-role"></div>
+      <div class="message-body"></div>
+    </article>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>
