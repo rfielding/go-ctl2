@@ -40,6 +40,115 @@ The important constraint is inspectability. The user should be able to reject a 
 - one semantic source feeding execution, proof, plots, and diagrams
 - a small enough core language that the generated output is reviewable line by line
 
+# Authoring Prompt And Language Reference
+
+The exact information an LLM needs to author models is also the information a human reviewer needs. The documentation therefore includes the literal authoring prompt plus a generated reference for every core form, guard, action, value helper, and branching-time logic form:
+
+# LLM Authoring Prompt
+
+```text
+Write a go-ctl2 model as Lisp.
+Use exactly one top-level (model ...).
+Declare reusable behavior with (actor RoleName ...).
+Declare runtime actors explicitly with (instance Name Role (PeerRole Target...)...).
+There is no implicit actor creation.
+Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.
+Use (send Role msg) only when that role resolves to exactly one concrete actor.
+Use (send-any Role msg) when a role may resolve to several concrete actors.
+State is actor-local. The only cross-actor effect is messaging.
+Each transition is (edge guard action...) inside a declared (state ...).
+Every edge must eventually reach at least one (become State).
+Use (recv var) to consume a message. recv also writes the sender name into local variable sender.
+Use quoted literals for structured messages, for example '(message (type ping)).
+Keep control flow explicit with named states and become transitions.
+Put CTL requirements in (assert ...).
+Use only the builtins and forms documented below.
+```
+
+# Language Reference
+
+## Core Model Forms
+
+| Form | Parameters | Operational Semantics |
+| --- | --- | --- |
+| `(model item...)` | `item := actor | instance | assert | xyplot` | Top-level container. No actors are created implicitly. |
+| `(actor RoleName item...)` | `item := data | state` | Declares a reusable actor-role template. |
+| `(data key value)` | `key` symbol, `value` literal/value form | Introduces actor-local data with an initial value. |
+| `(state Name edge...)` | `Name` symbol | Declares a named control state. The first declared state is the initial control location. |
+| `(edge guard action...)` | `guard` guard form | Declares one guarded atomic transition. At least one reachable `become` is required. |
+| `(instance Name Role (PeerRole Target...)...)` | `Target...` concrete actor names | Creates one runtime actor and binds each referenced peer role to one or more concrete instances. |
+| `(assert ctl-formula)` | CTL formula | Adds a branching-time requirement checked over the explored model. |
+| `(xyplot name (title s) (steps n) (metric m))` | `metric := send-count | receive-count | sent-minus-received` | Requests a runtime-derived plot for the model example. |
+
+## Guard Forms
+
+| Form | Parameters | Operational Semantics |
+| --- | --- | --- |
+| `true` | none | Always enabled. |
+| `(mailbox msg)` | `msg` message literal/value | True when the actor mailbox currently contains a matching message. |
+| `(data= key value)` | `key` local variable, `value` literal/value form | True when the actor-local value equals the resolved right-hand side. |
+| `(data> key value)` | numeric comparison | True when the actor-local numeric value is greater than the resolved right-hand side. |
+| `(dice-range lo hi)` | floating-point bounds | True when the sampled `Dice` value satisfies `lo ≤ Dice < hi`. |
+| `(dice< x)` | floating-point threshold | True when `Dice < x`. |
+| `(dice>= x)` | floating-point threshold | True when `Dice ≥ x`. |
+| `(dice)` | none | Resolves to the sampled floating-point value in `[0,1]`. |
+| `(and g...)`, `(or g...)`, `(not g)`, `(implies p q)` | guard forms | Boolean composition over guard predicates. |
+
+## Action Forms
+
+| Form | Parameters | Operational Semantics |
+| --- | --- | --- |
+| `(send Role msg)` | `Role` peer role with exactly one bound target | Sends `msg` to the single bound instance. Compile-time error if the role resolves to multiple instances. |
+| `(send-any Role msg)` | `Role` peer role with one or more bound targets | Sends to the first ready concrete target in that role set. |
+| `(recv var)` | `var` local name | Consumes one incoming message into `var` and also writes the sending actor name into local `sender`. |
+| `(become State)` | `State` declared control state | Moves the actor into the next control location. |
+| `(set key value)` | local name and value form | Stores the resolved value into actor-local data. |
+| `(add key delta)`, `(sub key delta)` | numeric local name and numeric value form | Applies integer arithmetic to actor-local data. |
+| `(if guard then [else])` | guard and action blocks | Conditional action execution inside an atomic transition. |
+| `(do action...)` | action list | Explicit sequencing when a nested action block is needed. |
+| `(def name (p...) body)` | actor-local pure helper | Defines a value-level helper callable from `set`, `send`, and other value positions. |
+| `(md5 out source)` | destination variable and value form | Computes the MD5 digest of the resolved value and stores its hex string. |
+| `(rsa-raw out modulus exponent message)` | numeric value forms | Computes raw modular exponentiation `message^exponent mod modulus` and stores the numeric result. |
+| `(cryptorandom out bytes)` | destination variable and byte count | Generates cryptographic randomness and stores a hex string. |
+| `(sample-exponential out rate)` | destination variable and positive rate | Samples an exponential variate and stores the floating-point value. |
+
+## Value Forms
+
+| Form | Parameters | Operational Semantics |
+| --- | --- | --- |
+| symbols | local variable names | Resolve to actor-local data when present; otherwise remain symbols. |
+| `'x`, `'(a b)` | quoted literal | Prevents evaluation and injects a literal symbol/list value. |
+| `(cons a b)` | value forms | Prepends `a` onto list `b`. |
+| `(car xs)` | list value form | Returns the first list element, or invalid/empty when absent. |
+| `(cdr xs)` | list value form | Returns the tail of a list. |
+
+## Branching-Time Logic Forms
+
+### CTL Surface Forms
+
+| Form | Parameters | Operational Semantics |
+| --- | --- | --- |
+| `(in-state A s)` | actor and state | Atomic predicate `A.state = s`. |
+| `(data= A key value)` | actor, local name, value | Atomic predicate over actor-local data. |
+| `(mailbox-has A msg)` | actor and message | Atomic predicate over queued messages. |
+| `(ex p)`, `(ax p)` | CTL formula | Next-step possibility and necessity. |
+| `(ef p)`, `(af p)` | CTL formula | Future possibility and inevitability. |
+| `(eg p)`, `(ag p)` | CTL formula | Existential and universal invariance. |
+| `(eu p q)`, `(au p q)` | CTL formulas | Existential and universal until. |
+| `(not p)`, `(and p q)`, `(or p q)`, `(implies p q)` | CTL formulas | Boolean composition over CTL formulas. |
+
+### Raw Modal μ-Calculus Forms
+
+| Form | Parameters | Operational Semantics |
+| --- | --- | --- |
+| `true`, `false` | none | Boolean constants for the raw modal μ-calculus layer. |
+| `(diamond p)`, `(box p)` | μ-calculus formula | Existential and universal next-step modalities. |
+| `(mu X body)`, `(nu X body)` | fixpoint variable and body | Least and greatest fixpoints. |
+| `(not p)`, `(and p q)`, `(or p q)` | μ-calculus formulas | Boolean composition over formulas. |
+| `(in-state A s)`, `(data= A key value)`, `(mailbox-has A msg)` | same atoms as CTL | State predicates shared with the CTL surface syntax. |
+
+
+
 # Terminology
 
 The document uses the following terms consistently:
@@ -356,7 +465,7 @@ The intended structured control tools are:
 
 This is closer to a small structured machine IR than to an arbitrary scripting language.
 
-# CTL Strategy
+# Branching-Time Logic
 
 CTL needs an exact successor relation. In this design, the successor relation is derived from `become` calls in each transition body.
 
@@ -367,9 +476,24 @@ Runtime execution exists to validate that:
 
 This means CTL does not need to wait for simulation to discover the control graph.
 
-## What CTL Means
+## CTL And μ-Calculus
 
-CTL is Computation Tree Logic.
+CTL is Computation Tree Logic, and the implementation lowers it into the modal μ-calculus.
+
+The explored graph is a transition system with runtime states `S` and successor relation `→ ⊆ S × S`. We write `s ⊨ φ` when state `s` satisfies formula `φ`.
+
+The mathematical reading is:
+
+- `EX p` means `∃t. s → t ∧ t ⊨ p`
+- `AX p` means `∀t. s → t ⇒ t ⊨ p`
+- `EF p` means `μX.(p ∨ ◇X)`
+- `AF p` means `μX.(p ∨ □X)`
+- `EG p` means `νX.(p ∧ ◇X)`
+- `AG p` means `νX.(p ∧ □X)`
+- `E[p U q]` means `μX.(q ∨ (p ∧ ◇X))`
+- `A[p U q]` means `μX.(q ∨ (p ∧ □X))`
+
+So the user-facing CTL layer and the underlying μ-calculus layer are two views of the same branching-time semantics.
 
 The important idea is that execution does not produce one future. It produces a tree of possible futures:
 
@@ -448,7 +572,7 @@ Examples:
 `AF` is stronger: it means no matter how scheduling and randomness resolve, the desired state is unavoidable.
 That difference is exactly why users need the quantifier explanation up front.
 
-## Mu-Calculus Tutorial
+## Raw μ-Calculus
 
 The modal mu-calculus is the lower-level fixpoint logic underneath this checker.
 CTL is now treated as a readable special case of that more general logic.
@@ -754,58 +878,7 @@ This is the beginning of the metrics side of the tool. The goal is that message 
 
 # Built-ins
 
-The language needs protocol-oriented built-ins so examples like authentication and key exchange do not require embedding large arithmetic sublanguages.
-
-Current built-ins:
-
-- `(md5 out source)`
-  - computes an MD5 digest of the resolved source value
-  - stores a hex string in `out`
-
-- `(rsa-raw out modulus exponent message)`
-  - performs raw modular exponentiation
-  - stores the numeric result in `out`
-
-- `(cryptorandom out bytes)`
-  - generates cryptographic randomness
-  - stores a hex string in `out`
-
-- `(sample-exponential out rate)`
-  - samples from an exponential distribution with the given positive rate
-  - stores the sampled floating-point value in `out`
-
-Pure value-level helpers:
-
-- `(cons a b)`
-  - builds a simple list by prepending `a` to `b`
-- `(car xs)`
-  - returns the first element of a list
-- `(cdr xs)`
-  - returns the tail of a list
-- `(def name (params...) body)`
-  - defines an actor-local pure helper function whose body can be used inside value positions such as `set` and `send`
-
-These are intentionally low-level. They are not safe protocol APIs. They are protocol-modeling primitives.
-
-Planned built-ins:
-
-- SHA families
-- keyed MAC constructions
-- raw RSA decrypt/sign variants
-- byte concatenation and parsing helpers
-- comparison helpers for protocol checks
-
-## Protocol Modeling Direction
-
-The current crypto built-ins are intentionally raw. The purpose of the built-ins is not to provide production-safe cryptographic APIs. The purpose is to let protocol examples express byte-level and arithmetic-level steps without bloating the core language.
-
-The long-term direction is to support examples such as:
-
-- challenge-response protocols
-- request/acknowledgement handshakes
-- key transport and key confirmation flows
-- message authentication checks
-- timeout and retry logic
+The canonical builtin inventory now lives in the generated authoring reference near the top of this document so the human-facing documentation and the LLM-facing prompt share one source of truth.
 
 # Why This IR Is Sensible
 
@@ -883,105 +956,140 @@ The current repository is intentionally small. The most important files are:
 
 The tests are not secondary. They are the clearest executable specification currently in the repository.
 
-# Example Model
+# Worked Examples
 
-The document example should not be a single actor in isolation. The intended workflow is to describe a set of interacting actors, generate diagrams from that same input, and check temporal requirements over the same derived control graph.
-
-This small message-chain example is intentionally simple, but it already exercises:
-
-- multiple actors
-- message passing
-- explicit control states
-- successor states derived from `become`
-- CTL predicates over the resulting model
-
-```lisp
-(model
-  (actor ClientRole
-    (state start
-      (edge true
-        (send RelayRole '(message (type ping)))
-        (become done)))
-    (state done))
-
-  (actor RelayRole
-    (state relay
-      (edge true
-        (recv msg)
-        (send ServerRole msg)
-        (become done)))
-    (state done))
-
-  (actor ServerRole
-    (state idle
-      (edge true
-        (recv received)
-        (become done)))
-    (state done))
-
-  (instance Client ClientRole (RelayRole Relay))
-  (instance Relay RelayRole (ServerRole Server))
-  (instance Server ServerRole)
-
-  (assert (ef (data= Server received '(message (type ping)) "possibly server records the ping message")))
-  (assert (af (data= Server received '(message (type ping)) "eventually server records the ping message")))
-  (assert (ag (not (mailbox-has Relay '(message (type ping)) "relay still holds ping")) "always relay mailbox is empty of ping"))
-
-  (xyplot message_outstanding
-    (title "Message Chain Outstanding Messages")
-    (steps 4)
-    (metric sent-minus-received))
-  (xyplot message_sends
-    (title "Message Chain Sends By Step")
-    (steps 4)
-    (metric send-count))
-  (xyplot message_receives
-    (title "Message Chain Receives By Step")
-    (steps 4)
-    (metric receive-count)))
-```
-
-The first two embedded assertions are intended to hold for the example model.
-
-The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where `Relay` is holding a `ping` message before it forwards it.
-
-The operational intent is:
-
-- the client declares a message value whose `type` is `ping`
-- the relay forwards that value unchanged to the server
-- if a `recv` has no message available, that edge is simply not ready
-
-From that same model, the documentation keeps the rendered diagrams adjacent to the source:
-
-![Message Chain State Diagram](/home/rfielding/code/go-ctl2/docs/generated/a_to_b_state.svg)
-
-![Message Chain Sequence Diagram](/home/rfielding/code/go-ctl2/docs/generated/a_to_b_sequence.svg)
-
-# Executed CTL Outcomes
-
-These results are generated by compiling the example models in this repository and running their embedded CTL assertions against the explored initial state.
+The canonical examples are generated as exact input/output pairs: the literal Lisp source first, then the literal Markdown emitted from that same source. That keeps the diagrams, CTL outcomes, and plot references adjacent to the example instead of scattering them across later sections.
 
 ## Message Chain Example
 
-- `PASS` `(ef (data= Server received (quote (message (type ping)))))`
-- `PASS` `(af (data= Server received (quote (message (type ping)))))`
+### Input Lisp
 
-## Queue Example
+```lisp
+(model
+		(actor ClientRole
+			(state start
+				(edge true
+					(send RelayRole '(message (type ping)))
+					(become done)))
+			(state done))
 
-No embedded CTL assertions.
+		(actor RelayRole
+			(state relay
+				(edge true
+					(recv msg)
+					(send ServerRole msg)
+					(become done)))
+			(state done))
 
+		(actor ServerRole
+			(state idle
+				(edge true
+					(recv received)
+					(become done)))
+			(state done))
 
+		(instance Client ClientRole (RelayRole Relay))
+		(instance Relay RelayRole (ServerRole Server))
+		(instance Server ServerRole)
 
-## Example Rendered Class Data
+		(assert (ef (data= Server received '(message (type ping)))))
+		(assert (af (data= Server received '(message (type ping)))))
 
-From that same model, the documentation renderer can emit a Mermaid class diagram that exposes:
+		(xyplot message_outstanding
+			(title "Message Chain Outstanding Messages")
+			(steps 4)
+			(metric sent-minus-received))
+		(xyplot message_sends
+			(title "Message Chain Sends By Step")
+			(steps 4)
+			(metric send-count))
+		(xyplot message_receives
+			(title "Message Chain Receives By Step")
+			(steps 4)
+			(metric receive-count)))
+```
 
-- the runtime actor name
-- the bound actor role
-- the actor-local control states
-- the actor-local variables inferred from declared data and transition effects
+### Output Markdown
 
-Example:
+````markdown
+# Requirements Model
+
+```lisp
+(model
+		(actor ClientRole
+			(state start
+				(edge true
+					(send RelayRole '(message (type ping)))
+					(become done)))
+			(state done))
+
+		(actor RelayRole
+			(state relay
+				(edge true
+					(recv msg)
+					(send ServerRole msg)
+					(become done)))
+			(state done))
+
+		(actor ServerRole
+			(state idle
+				(edge true
+					(recv received)
+					(become done)))
+			(state done))
+
+		(instance Client ClientRole (RelayRole Relay))
+		(instance Relay RelayRole (ServerRole Server))
+		(instance Server ServerRole)
+
+		(assert (ef (data= Server received '(message (type ping)))))
+		(assert (af (data= Server received '(message (type ping)))))
+
+		(xyplot message_outstanding
+			(title "Message Chain Outstanding Messages")
+			(steps 4)
+			(metric sent-minus-received))
+		(xyplot message_sends
+			(title "Message Chain Sends By Step")
+			(steps 4)
+			(metric send-count))
+		(xyplot message_receives
+			(title "Message Chain Receives By Step")
+			(steps 4)
+			(metric receive-count)))
+```
+
+## State Diagram
+
+```mermaid
+flowchart TD
+    subgraph Client
+        direction TB
+        Clientstart([start]) -->|"(send Relay (quote (message (type ping))))"| Clientdone([done])
+    end
+    subgraph Relay
+        direction TB
+        Relayrelay([relay]) -->|"(recv msg)"| Relayrelay__wait([relay__wait])
+        Relayrelay__wait([relay__wait]) -->|"(send Server msg)"| Relaydone([done])
+    end
+    subgraph Server
+        direction TB
+        Serveridle([idle]) -->|"(recv received)"| Serverdone([done])
+    end
+```
+
+## Message Diagram
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Relay
+    participant Server
+    Client-->>Relay: (quote (message (type ping)))
+    Relay-->>Server: msg
+```
+
+## Class Diagram
 
 ```mermaid
 classDiagram
@@ -991,16 +1099,15 @@ classDiagram
         +state : data
     }
     <<ClientRole>> Client
-
     class Relay {
         +relay : state
+        +relay__wait : state
         +done : state
         +msg : data
         +sender : data
         +state : data
     }
     <<RelayRole>> Relay
-
     class Server {
         +idle : state
         +done : state
@@ -1011,124 +1118,474 @@ classDiagram
     <<ServerRole>> Server
 ```
 
-This is intentionally actor-local.
-The class view does not try to infer hidden shared memory because the language does not have any.
-It instead makes actor-owned variables legible enough that a human reviewer can quickly see which names are introduced and which ones participate in local control logic.
+## CTL Outcomes
 
-## Role Reuse Example
+- `PASS` `(ef (data= Server received (quote (message (type ping)))))`
+- `PASS` `(af (data= Server received (quote (message (type ping)))))`
 
-The same role can be instantiated multiple times without sharing variables.
-This bakery sketch uses:
+## Line Graphs
 
-- one `ProductionRole`
-- two `TruckRole` instances
-- three `StoreRole` instances
-- one `CustomerBaseRole` per store
+### Message Chain Outstanding Messages
+
+```lisp
+(xyplot message_outstanding (title "Message Chain Outstanding Messages") (steps 4) (metric sent-minus-received))
+```
+
+![Message Chain Outstanding Messages](generated/message_outstanding.svg)
+
+### Message Chain Sends By Step
+
+```lisp
+(xyplot message_sends (title "Message Chain Sends By Step") (steps 4) (metric send-count))
+```
+
+![Message Chain Sends By Step](generated/message_sends.svg)
+
+### Message Chain Receives By Step
+
+```lisp
+(xyplot message_receives (title "Message Chain Receives By Step") (steps 4) (metric receive-count))
+```
+
+![Message Chain Receives By Step](generated/message_receives.svg)
+````
+
+## Queue Example
+
+### Input Lisp
 
 ```lisp
 (model
-  (actor ProductionRole
-    (data baked 0)
-    (state start
-      (edge true
-        (send-any TruckRole batch)
-        (add baked 1)
-        (become done)))
-    (state done))
+		(actor ClientRole
+			(state loop
+				(edge (dice-range 0.0 0.5)
+					(set last "sleep")
+					(become loop))
+				(edge (dice-range 0.5 1.0)
+					(send QueueRole req)
+					(set last "arrival")
+					(become loop))))
 
-  (actor TruckRole
-    (data deliveries 0)
-    (state wait
-      (edge true
-        (recv cargo)
-        (add deliveries 1)
-        (send StoreRole cargo)
-        (become done)))
-    (state done))
+		(actor QueueRole
+			(state wait
+				(edge (and (mailbox req) (data= count 0))
+					(recv msg)
+					(add count 1)
+					(set elapsed 0)
+					(become wait))
+				(edge (and (mailbox req) (data> count 0) (not (data= count 5)))
+					(recv msg)
+					(add count 1)
+					(become wait))
+				(edge (and (mailbox req) (data= count 5))
+					(recv dropped)
+					(add dropped_count 1)
+					(become wait))
+				(edge (and (data> count 0) (dice-range 0.0 0.5))
+					(sub count 1)
+					(set last_departure "service-complete")
+					(become wait))
+				(edge (and (data> count 0) (dice-range 0.5 1.0))
+					(set last_departure "busy")
+					(become wait))))
 
-  (actor StoreRole
-    (data inventory 0)
-    (data sold 0)
-    (state idle
-      (edge true
-        (recv shipment)
-        (add inventory 1)
-        (become stocked)))
-    (state stocked
-      (edge true
-        (send CustomerBaseRole sale)
-        (sub inventory 1)
-        (add sold 1)
-        (become stocked))))
+		(instance Client ClientRole (QueueRole Queue))
+		(instance Queue QueueRole)
 
-  (actor CustomerBaseRole
-    (data served 0)
-    (state ready
-      (edge true
-        (recv sale)
-        (add served 1)
-        (become ready))))
-
-  (instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
-  (instance TruckNorth TruckRole (StoreRole StoreA))
-  (instance TruckSouth TruckRole (StoreRole StoreB))
-  (instance StoreA StoreRole (CustomerBaseRole CustomerA))
-  (instance StoreB StoreRole (CustomerBaseRole CustomerB))
-  (instance StoreC StoreRole (CustomerBaseRole CustomerC))
-  (instance CustomerA CustomerBaseRole)
-  (instance CustomerB CustomerBaseRole)
-  (instance CustomerC CustomerBaseRole))
+		(xyplot queue_outstanding
+			(title "Outstanding Messages By Step")
+			(steps 100)
+			(metric sent-minus-received)))
 ```
 
-If you step `Production`, then `TruckNorth`, then `TruckNorth` again, then `StoreA`, then `StoreA` again, and finally `CustomerA`, the local data stays instance-specific:
+### Output Markdown
 
-- `Production.baked = 1`
-- `TruckNorth.deliveries = 1`
-- `TruckSouth.deliveries = 0`
-- `StoreA.sold = 1`
-- `StoreB.sold = 0`
-- `StoreC.sold = 0`
-- `CustomerA.served = 1`
-- `CustomerB.served = 0`
-- `CustomerC.served = 0`
+````markdown
+# Requirements Model
 
-That is the intended semantics: roles are reusable templates, but every instantiated actor carries its own data map and current control state.
+```lisp
+(model
+		(actor ClientRole
+			(state loop
+				(edge (dice-range 0.0 0.5)
+					(set last "sleep")
+					(become loop))
+				(edge (dice-range 0.5 1.0)
+					(send QueueRole req)
+					(set last "arrival")
+					(become loop))))
 
-The repeated actor names are real control-flow steps, not a documentation trick:
+		(actor QueueRole
+			(state wait
+				(edge (and (mailbox req) (data= count 0))
+					(recv msg)
+					(add count 1)
+					(set elapsed 0)
+					(become wait))
+				(edge (and (mailbox req) (data> count 0) (not (data= count 5)))
+					(recv msg)
+					(add count 1)
+					(become wait))
+				(edge (and (mailbox req) (data= count 5))
+					(recv dropped)
+					(add dropped_count 1)
+					(become wait))
+				(edge (and (data> count 0) (dice-range 0.0 0.5))
+					(sub count 1)
+					(set last_departure "service-complete")
+					(become wait))
+				(edge (and (data> count 0) (dice-range 0.5 1.0))
+					(set last_departure "busy")
+					(become wait))))
 
-- `Production` can target either truck because its `TruckRole` fill names both `TruckNorth` and `TruckSouth`, and `send-any` chooses one concrete truck.
-- `TruckNorth` first receives the batch, then sends it to `StoreA`.
-- `StoreA` first receives the shipment, then sends a sale to `CustomerA`.
+		(instance Client ClientRole (QueueRole Queue))
+		(instance Queue QueueRole)
 
-## Walkthrough Of The Example
+		(xyplot queue_outstanding
+			(title "Outstanding Messages By Step")
+			(steps 100)
+			(metric sent-minus-received)))
+```
 
-The example should be read as a top-level `model` containing three small control machines plus CTL assertions that are checked against the explored graph.
+## State Diagram
 
-`Client`
+```mermaid
+flowchart TD
+    subgraph Client
+        direction TB
+        Clientloop([loop]) -->|"(dice-range 0.0 0.5)<br/>(set last "sleep")"| Clientloop([loop])
+        Clientloop([loop]) -->|"(dice-range 0.5 1.0)<br/>(send Queue req)<br/>(set last "arrival")"| Clientloop([loop])
+    end
+    subgraph Queue
+        direction TB
+        Queuewait([wait]) -->|"(and (mailbox req) (data= count 0))<br/>(recv msg)<br/>(add count 1)<br/>(set elapsed 0)"| Queuewait([wait])
+        Queuewait([wait]) -->|"(and (mailbox req) (data> count 0) (not (data= count 5)))<br/>(recv msg)<br/>(add count 1)"| Queuewait([wait])
+        Queuewait([wait]) -->|"(and (mailbox req) (data= count 5))<br/>(recv dropped)<br/>(add dropped_count 1)"| Queuewait([wait])
+        Queuewait([wait]) -->|"(and (data> count 0) (dice-range 0.0 0.5))<br/>(sub count 1)<br/>(set last_departure "service-complete")"| Queuewait([wait])
+        Queuewait([wait]) -->|"(and (data> count 0) (dice-range 0.5 1.0))<br/>(set last_departure "busy")"| Queuewait([wait])
+    end
+```
 
-- starts in `start`
-- sends one `ping`-typed message to `Relay`
-- becomes `done`
+## Message Diagram
 
-`Relay`
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Queue
+    Client-->>Queue: req
+```
 
-- has one explicit source state, `relay`
-- when a message is available, it consumes it, forwards it to `Server`, and becomes `done`
-- the compiler inserts an internal wait substate so the compiled control graph still begins each communication step with `recv` or `send`
+## Class Diagram
 
-`Server`
+```mermaid
+classDiagram
+    class Client {
+        +loop : state
+        +last : data
+        +state : data
+    }
+    <<ClientRole>> Client
+    class Queue {
+        +wait : state
+        +count : data
+        +dropped : data
+        +dropped_count : data
+        +elapsed : data
+        +last_departure : data
+        +msg : data
+        +sender : data
+        +state : data
+    }
+    <<QueueRole>> Queue
+```
 
-- waits in `idle`
-- when a message is available, it consumes it, records it, and becomes `done`
+## Line Graphs
 
-This example is deliberately small, but it is enough to show:
+### Outstanding Messages By Step
 
-- explicit control states
-- successor extraction from `become`
-- queued communication
-- CTL assertions embedded in the same IR
-- generated state and sequence diagrams
-- generated metric plots from runtime events
+```lisp
+(xyplot queue_outstanding (title "Outstanding Messages By Step") (steps 100) (metric sent-minus-received))
+```
+
+![Outstanding Messages By Step](generated/queue_outstanding.svg)
+````
+
+## Bakery Role-Reuse Example
+
+### Input Lisp
+
+```lisp
+(model
+		(actor ProductionRole
+			(data baked 0)
+			(state start
+				(edge true
+					(send-any TruckRole batch)
+					(add baked 1)
+					(become done)))
+			(state done))
+
+		(actor TruckRole
+			(data deliveries 0)
+			(state wait
+				(edge true
+					(recv cargo)
+					(add deliveries 1)
+					(send StoreRole cargo)
+					(become done)))
+			(state done))
+
+		(actor StoreRole
+			(data inventory 0)
+			(data sold 0)
+			(state idle
+				(edge true
+					(recv shipment)
+					(add inventory 1)
+					(become stocked)))
+			(state stocked
+				(edge true
+					(send CustomerBaseRole sale)
+					(sub inventory 1)
+					(add sold 1)
+					(become stocked))))
+
+		(actor CustomerBaseRole
+			(data served 0)
+			(state ready
+				(edge true
+					(recv sale)
+					(add served 1)
+					(become ready))))
+
+		(instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
+		(instance TruckNorth TruckRole (StoreRole StoreA))
+		(instance TruckSouth TruckRole (StoreRole StoreB))
+		(instance StoreA StoreRole (CustomerBaseRole CustomerA))
+		(instance StoreB StoreRole (CustomerBaseRole CustomerB))
+		(instance StoreC StoreRole (CustomerBaseRole CustomerC))
+		(instance CustomerA CustomerBaseRole)
+		(instance CustomerB CustomerBaseRole)
+		(instance CustomerC CustomerBaseRole))
+```
+
+### Output Markdown
+
+````markdown
+# Requirements Model
+
+```lisp
+(model
+		(actor ProductionRole
+			(data baked 0)
+			(state start
+				(edge true
+					(send-any TruckRole batch)
+					(add baked 1)
+					(become done)))
+			(state done))
+
+		(actor TruckRole
+			(data deliveries 0)
+			(state wait
+				(edge true
+					(recv cargo)
+					(add deliveries 1)
+					(send StoreRole cargo)
+					(become done)))
+			(state done))
+
+		(actor StoreRole
+			(data inventory 0)
+			(data sold 0)
+			(state idle
+				(edge true
+					(recv shipment)
+					(add inventory 1)
+					(become stocked)))
+			(state stocked
+				(edge true
+					(send CustomerBaseRole sale)
+					(sub inventory 1)
+					(add sold 1)
+					(become stocked))))
+
+		(actor CustomerBaseRole
+			(data served 0)
+			(state ready
+				(edge true
+					(recv sale)
+					(add served 1)
+					(become ready))))
+
+		(instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
+		(instance TruckNorth TruckRole (StoreRole StoreA))
+		(instance TruckSouth TruckRole (StoreRole StoreB))
+		(instance StoreA StoreRole (CustomerBaseRole CustomerA))
+		(instance StoreB StoreRole (CustomerBaseRole CustomerB))
+		(instance StoreC StoreRole (CustomerBaseRole CustomerC))
+		(instance CustomerA CustomerBaseRole)
+		(instance CustomerB CustomerBaseRole)
+		(instance CustomerC CustomerBaseRole))
+```
+
+## State Diagram
+
+```mermaid
+flowchart TD
+    subgraph Production
+        direction TB
+        Productionstart([start]) -->|"(send-any TruckNorth TruckSouth batch)<br/>(add baked 1)"| Productiondone([done])
+    end
+    subgraph TruckNorth
+        direction TB
+        TruckNorthwait([wait]) -->|"(recv cargo)<br/>(add deliveries 1)"| TruckNorthwait__wait([wait__wait])
+        TruckNorthwait__wait([wait__wait]) -->|"(send StoreA cargo)"| TruckNorthdone([done])
+    end
+    subgraph TruckSouth
+        direction TB
+        TruckSouthwait([wait]) -->|"(recv cargo)<br/>(add deliveries 1)"| TruckSouthwait__wait([wait__wait])
+        TruckSouthwait__wait([wait__wait]) -->|"(send StoreB cargo)"| TruckSouthdone([done])
+    end
+    subgraph StoreA
+        direction TB
+        StoreAidle([idle]) -->|"(recv shipment)<br/>(add inventory 1)"| StoreAstocked([stocked])
+        StoreAstocked([stocked]) -->|"(send CustomerA sale)<br/>(sub inventory 1)<br/>(add sold 1)"| StoreAstocked([stocked])
+    end
+    subgraph StoreB
+        direction TB
+        StoreBidle([idle]) -->|"(recv shipment)<br/>(add inventory 1)"| StoreBstocked([stocked])
+        StoreBstocked([stocked]) -->|"(send CustomerB sale)<br/>(sub inventory 1)<br/>(add sold 1)"| StoreBstocked([stocked])
+    end
+    subgraph StoreC
+        direction TB
+        StoreCidle([idle]) -->|"(recv shipment)<br/>(add inventory 1)"| StoreCstocked([stocked])
+        StoreCstocked([stocked]) -->|"(send CustomerC sale)<br/>(sub inventory 1)<br/>(add sold 1)"| StoreCstocked([stocked])
+    end
+    subgraph CustomerA
+        direction TB
+        CustomerAready([ready]) -->|"(recv sale)<br/>(add served 1)"| CustomerAready([ready])
+    end
+    subgraph CustomerB
+        direction TB
+        CustomerBready([ready]) -->|"(recv sale)<br/>(add served 1)"| CustomerBready([ready])
+    end
+    subgraph CustomerC
+        direction TB
+        CustomerCready([ready]) -->|"(recv sale)<br/>(add served 1)"| CustomerCready([ready])
+    end
+```
+
+## Message Diagram
+
+```mermaid
+sequenceDiagram
+    participant Production
+    participant TruckNorth
+    participant TruckSouth
+    participant StoreA
+    participant StoreB
+    participant StoreC
+    participant CustomerA
+    participant CustomerB
+    participant CustomerC
+    Production-->>TruckNorth: batch
+    Production-->>TruckSouth: batch
+    TruckNorth-->>StoreA: cargo
+    TruckSouth-->>StoreB: cargo
+    StoreA-->>CustomerA: sale
+    StoreB-->>CustomerB: sale
+    StoreC-->>CustomerC: sale
+```
+
+## Class Diagram
+
+```mermaid
+classDiagram
+    class Production {
+        +start : state
+        +done : state
+        +baked : data
+        +state : data
+    }
+    <<ProductionRole>> Production
+    class TruckNorth {
+        +wait : state
+        +wait__wait : state
+        +done : state
+        +cargo : data
+        +deliveries : data
+        +sender : data
+        +state : data
+    }
+    <<TruckRole>> TruckNorth
+    class TruckSouth {
+        +wait : state
+        +wait__wait : state
+        +done : state
+        +cargo : data
+        +deliveries : data
+        +sender : data
+        +state : data
+    }
+    <<TruckRole>> TruckSouth
+    class StoreA {
+        +idle : state
+        +stocked : state
+        +inventory : data
+        +sender : data
+        +shipment : data
+        +sold : data
+        +state : data
+    }
+    <<StoreRole>> StoreA
+    class StoreB {
+        +idle : state
+        +stocked : state
+        +inventory : data
+        +sender : data
+        +shipment : data
+        +sold : data
+        +state : data
+    }
+    <<StoreRole>> StoreB
+    class StoreC {
+        +idle : state
+        +stocked : state
+        +inventory : data
+        +sender : data
+        +shipment : data
+        +sold : data
+        +state : data
+    }
+    <<StoreRole>> StoreC
+    class CustomerA {
+        +ready : state
+        +sale : data
+        +sender : data
+        +served : data
+        +state : data
+    }
+    <<CustomerBaseRole>> CustomerA
+    class CustomerB {
+        +ready : state
+        +sale : data
+        +sender : data
+        +served : data
+        +state : data
+    }
+    <<CustomerBaseRole>> CustomerB
+    class CustomerC {
+        +ready : state
+        +sale : data
+        +sender : data
+        +served : data
+        +state : data
+    }
+    <<CustomerBaseRole>> CustomerC
+```
+````
+
 
 # Message Plot
 

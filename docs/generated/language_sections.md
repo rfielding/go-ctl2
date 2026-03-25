@@ -76,7 +76,9 @@ Use only the builtins and forms documented below.
 | `(car xs)` | list value form | Returns the first list element, or invalid/empty when absent. |
 | `(cdr xs)` | list value form | Returns the tail of a list. |
 
-## CTL Surface Forms
+## Branching-Time Logic Forms
+
+### CTL Surface Forms
 
 | Form | Parameters | Operational Semantics |
 | --- | --- | --- |
@@ -89,7 +91,7 @@ Use only the builtins and forms documented below.
 | `(eu p q)`, `(au p q)` | CTL formulas | Existential and universal until. |
 | `(not p)`, `(and p q)`, `(or p q)`, `(implies p q)` | CTL formulas | Boolean composition over CTL formulas. |
 
-## Raw Modal μ-Calculus Forms
+### Raw Modal μ-Calculus Forms
 
 | Form | Parameters | Operational Semantics |
 | --- | --- | --- |

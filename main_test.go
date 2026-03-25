@@ -658,12 +658,31 @@ func TestRenderDocExampleSectionsReturns(t *testing.T) {
 	for _, want := range []string{
 		"## Message Chain Example",
 		"### Input Lisp",
-		"### Rendered Output",
+		"### Output Markdown",
+		"````markdown",
+		"## State Diagram",
+		"## CTL Outcomes",
 		"generated/message_outstanding.svg",
 		"## Bakery Role-Reuse Example",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected generated example sections to contain %q", want)
+		}
+	}
+}
+
+func TestRenderDocLanguageSectionsGroupsCTLAndMu(t *testing.T) {
+	out, err := renderDocLanguageSections()
+	if err != nil {
+		t.Fatalf("renderDocLanguageSections returned error: %v", err)
+	}
+	for _, want := range []string{
+		"## Branching-Time Logic Forms",
+		"### CTL Surface Forms",
+		"### Raw Modal μ-Calculus Forms",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected generated language sections to contain %q", want)
 		}
 	}
 }

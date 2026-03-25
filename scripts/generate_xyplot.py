@@ -6,6 +6,7 @@ import json
 import os
 from html import escape
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,16 @@ TEXT = "#e7edf5"
 MUTED = "#a9b7c8"
 BORDER = "#2a3140"
 LINE = "#8bc3ff"
+
+
+def go_binary() -> str:
+    direct_snap = Path("/snap/go/current/bin/go")
+    if direct_snap.exists() and os.access(direct_snap, os.X_OK):
+        return str(direct_snap)
+    candidate = shutil.which("go")
+    if candidate is None:
+        raise RuntimeError("go executable not found")
+    return candidate
 
 
 def polyline(points, x0, y0, w, h, xmax, ymax):
@@ -48,10 +59,11 @@ def axis_ticks(count):
 
 
 def load_manifest():
+    go = go_binary()
     with tempfile.NamedTemporaryFile() as tmp:
         subprocess.run(
             [
-                "go",
+                go,
                 "test",
                 "./...",
                 "-run",
@@ -70,10 +82,11 @@ def load_manifest():
 
 
 def load_plot_data(name: str):
+    go = go_binary()
     with tempfile.NamedTemporaryFile() as tmp:
         subprocess.run(
             [
-                "go",
+                go,
                 "test",
                 "./...",
                 "-run",
