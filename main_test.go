@@ -748,6 +748,44 @@ func TestBuiltinChatConversationSequenceReturnsMermaid(t *testing.T) {
 	}
 }
 
+func TestBuiltinChatRecognizesSimpleSequencePrompt(t *testing.T) {
+	out, err := builtinChatReply("explain", "(model)", []chatTurn{
+		{Role: "user", Content: "A sends a message to B: ping"},
+	})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	for _, want := range []string{"```mermaid", "sequenceDiagram", "A->>B: ping"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected simple sequence output to contain %q, got %s", want, out)
+		}
+	}
+}
+
+func TestSimpleSequencePromptParsesNaturalLanguage(t *testing.T) {
+	got := simpleSequencePrompt("Client sends a message to Server: quote request")
+	if got == nil {
+		t.Fatal("expected simple sequence prompt to parse")
+	}
+	if got.From != "Client" || got.To != "Server" || got.Message != "quote request" {
+		t.Fatalf("unexpected parsed sequence: %+v", got)
+	}
+}
+
+func TestBuiltinChatAsksClarifyingQuestionForAmbiguousSequencePrompt(t *testing.T) {
+	out, err := builtinChatReply("explain", "(model)", []chatTurn{
+		{Role: "user", Content: "draw a sequence diagram"},
+	})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	for _, want := range []string{"I think you may be asking for an interaction diagram", "A sends a message to B: ping"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected clarification to contain %q, got %s", want, out)
+		}
+	}
+}
+
 func TestBuiltinChatFallsBackToConfiguredLLMNotice(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")

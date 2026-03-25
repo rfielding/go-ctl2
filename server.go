@@ -409,6 +409,12 @@ func builtinChatReply(model, source string, messages []chatTurn) (string, error)
 	if strings.Contains(lower, "sequence diagram") && strings.Contains(lower, "just talked about") {
 		return renderConversationSequence(messages), nil
 	}
+	if sequence := simpleSequencePrompt(last); sequence != nil {
+		return renderSimpleSequence(sequence), nil
+	}
+	if sequenceClarificationPrompt(lower) {
+		return renderSequenceClarificationQuestion(), nil
+	}
 	if isCTLClarificationRequest(lower) {
 		return renderCTLClarification(), nil
 	}
@@ -435,6 +441,12 @@ func builtinChatReply(model, source string, messages []chatTurn) (string, error)
 	return "", errBuiltinPassThrough
 }
 
+type simpleSequence struct {
+	From    string
+	To      string
+	Message string
+}
+
 func fallbackLLMProvider() string {
 	if _, ok := lookupEnvLogged("OPENAI_API_KEY"); ok {
 		return "openai"
@@ -443,6 +455,140 @@ func fallbackLLMProvider() string {
 		return "claude"
 	}
 	return ""
+}
+
+func simpleSequencePrompt(original string) *simpleSequence {
+	text := strings.TrimSpace(original)
+	if text == "" {
+		return nil
+	}
+	lower := strings.ToLower(text)
+	markers := []string{" sends a message to ", " sends to ", " send a message to ", " send to "}
+	for _, marker := range markers {
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		from := strings.TrimSpace(text[:idx])
+		rest := strings.TrimSpace(text[idx+len(marker):])
+		if from == "" || rest == "" {
+			return nil
+		}
+		to := rest
+		message := "message"
+		for _, separator := range []string{":", "\n"} {
+			if split := strings.Index(rest, separator); split >= 0 {
+				to = strings.TrimSpace(rest[:split])
+				message = strings.TrimSpace(rest[split+1:])
+				break
+			}
+		}
+		if to == "" {
+			return nil
+		}
+		if message == "" {
+			message = "message"
+		}
+		return &simpleSequence{
+			From:    cleanSequenceActor(from),
+			To:      cleanSequenceActor(to),
+			Message: cleanSequenceLabel(message),
+		}
+	}
+	return nil
+}
+
+func sequenceClarificationPrompt(lower string) bool {
+	if strings.Contains(lower, "sequence diagram") {
+		return true
+	}
+	if strings.Contains(lower, " sends ") || strings.Contains(lower, " send ") {
+		return true
+	}
+	if strings.Contains(lower, "message to") || strings.Contains(lower, "messages to") {
+		return true
+	}
+	return false
+}
+
+func cleanSequenceActor(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.Trim(name, "\"'`.,;:!?()[]{}")
+	if name == "" {
+		return "Actor"
+	}
+	return name
+}
+
+func cleanSequenceLabel(label string) string {
+	label = strings.TrimSpace(label)
+	label = strings.Trim(label, "\"'`")
+	label = strings.ReplaceAll(label, "\n", " ")
+	label = strings.Join(strings.Fields(label), " ")
+	if label == "" {
+		return "message"
+	}
+	return label
+}
+
+func renderSimpleSequence(seq *simpleSequence) string {
+	var b strings.Builder
+	b.WriteString("Here is that interaction as a sequence diagram:\n\n")
+	b.WriteString("```mermaid\n")
+	b.WriteString("sequenceDiagram\n")
+	fmt.Fprintf(&b, "    participant %s\n", chatMermaidIdentifier(seq.From))
+	fmt.Fprintf(&b, "    participant %s\n", chatMermaidIdentifier(seq.To))
+	fmt.Fprintf(&b, "    %s->>%s: %s\n", chatMermaidIdentifier(seq.From), chatMermaidIdentifier(seq.To), chatMermaidLabel(seq.Message))
+	b.WriteString("```\n\n")
+	fmt.Fprintf(&b, "%s sends %s to %s.", seq.From, chatMermaidInlineLabel(seq.Message), seq.To)
+	return b.String()
+}
+
+func renderSequenceClarificationQuestion() string {
+	var b strings.Builder
+	b.WriteString("I think you may be asking for an interaction diagram, but I am not confident about the participants or message labels.\n\n")
+	b.WriteString("Please restate it in one of these shapes:\n\n")
+	b.WriteString("- `A sends a message to B: ping`\n")
+	b.WriteString("- `draw a sequence diagram where Client asks Server for quote`\n")
+	b.WriteString("- `A -> B: ping, then B -> C: relay`\n\n")
+	b.WriteString("If you want, give me the participants and the messages in plain English and I will draw it.")
+	return b.String()
+}
+
+func chatMermaidIdentifier(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "Actor"
+	}
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r - 32)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "Actor"
+	}
+	return b.String()
+}
+
+func chatMermaidLabel(text string) string {
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.ReplaceAll(text, "\"", "'")
+	return text
+}
+
+func chatMermaidInlineLabel(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "a message"
+	}
+	return "`" + chatMermaidLabel(text) + "`"
 }
 
 func isCTLClarificationRequest(lower string) bool {
