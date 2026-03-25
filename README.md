@@ -4,6 +4,8 @@
 
 It uses a small Lisp-based IR to describe actor behavior, state machines, messages, and temporal requirements. The point is not just to generate models. The point is to argue with an LLM over requirements that can actually be checked.
 
+![Dark branching history with p, q, r valuations](docs/static/readme_branching_history.svg)
+
 Workflow:
 
 1. the LLM writes a Lisp model

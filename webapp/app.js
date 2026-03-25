@@ -221,10 +221,12 @@ function renderProviderSelectors(conversation) {
 function renderMessages(messages, pending = false) {
   els.messages.innerHTML = "";
   messages.forEach((message) => els.messages.appendChild(renderMessageNode(message)));
+  let pendingNode = null;
   if (pending) {
-    els.messages.appendChild(renderPendingMessageNode(messages));
+    pendingNode = renderPendingMessageNode(messages);
+    els.messages.appendChild(pendingNode);
   }
-  scrollMessagesToBottom();
+  scrollMessagesToBottom(pendingNode);
 }
 
 function renderMessageNode(message) {
@@ -252,8 +254,12 @@ function renderPendingMessageNode(messages) {
   return node;
 }
 
-function scrollMessagesToBottom() {
+function scrollMessagesToBottom(targetNode = null) {
   requestAnimationFrame(() => {
+    if (targetNode?.isConnected) {
+      targetNode.scrollIntoView({ block: "end", behavior: "auto" });
+      return;
+    }
     els.messages.scrollTop = els.messages.scrollHeight;
   });
 }

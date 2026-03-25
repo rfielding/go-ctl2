@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" role="img" aria-labelledby="title desc">
+  <title id="title">Branching history with p, q, r valuations</title>
+  <desc id="desc">A dark-mode Kripke-style branching history where each state box lists truth values for propositions p, q, and r.</desc>
+  <rect width="900" height="420" fill="#0b1017"/>
+  <g stroke="#8bc3ff" stroke-width="4" fill="none" stroke-linecap="round">
+    <path d="M450 68 L250 162"/>
+    <path d="M450 68 L450 162"/>
+    <path d="M450 68 L650 162"/>
+    <path d="M250 162 L150 290"/>
+    <path d="M250 162 L350 290"/>
+    <path d="M450 162 L450 290"/>
+    <path d="M650 162 L550 290"/>
+    <path d="M650 162 L750 290"/>
+  </g>
+  <g fill="#172132" stroke="#ffb347" stroke-width="3">
+    <rect x="388" y="28" width="124" height="74" rx="14"/>
+    <rect x="188" y="126" width="124" height="74" rx="14"/>
+    <rect x="388" y="126" width="124" height="74" rx="14"/>
+    <rect x="588" y="126" width="124" height="74" rx="14"/>
+    <rect x="88" y="254" width="124" height="74" rx="14"/>
+    <rect x="288" y="254" width="124" height="74" rx="14"/>
+    <rect x="388" y="254" width="124" height="74" rx="14"/>
+    <rect x="488" y="254" width="124" height="74" rx="14"/>
+    <rect x="688" y="254" width="124" height="74" rx="14"/>
+  </g>
+  <g fill="#edf3fb" font-family="IBM Plex Sans, Segoe UI, sans-serif" text-anchor="middle">
+    <text x="450" y="54" font-size="22" font-weight="700">s0</text>
+    <text x="450" y="78" font-size="18">p=F q=F r=F</text>
+
+    <text x="250" y="152" font-size="22" font-weight="700">s1</text>
+    <text x="250" y="176" font-size="18">p=T q=F r=F</text>
+
+    <text x="450" y="152" font-size="22" font-weight="700">s2</text>
+    <text x="450" y="176" font-size="18">p=F q=T r=F</text>
+
+    <text x="650" y="152" font-size="22" font-weight="700">s3</text>
+    <text x="650" y="176" font-size="18">p=F q=F r=T</text>
+
+    <text x="150" y="280" font-size="22" font-weight="700">s4</text>
+    <text x="150" y="304" font-size="18">p=T q=T r=F</text>
+
+    <text x="350" y="280" font-size="22" font-weight="700">s5</text>
+    <text x="350" y="304" font-size="18">p=T q=F r=T</text>
+
+    <text x="450" y="280" font-size="22" font-weight="700">s6</text>
+    <text x="450" y="304" font-size="18">p=F q=T r=T</text>
+
+    <text x="550" y="280" font-size="22" font-weight="700">s7</text>
+    <text x="550" y="304" font-size="18">p=T q=T r=T</text>
+
+    <text x="750" y="280" font-size="22" font-weight="700">s8</text>
+    <text x="750" y="304" font-size="18">p=F q=T r=F</text>
+  </g>
+  <g fill="#93a4bb" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="18">
+    <text x="34" y="392">Each state is a world. The box lists the valuation of propositions p, q, r at that point in the branching history.</text>
+  </g>
+</svg>
