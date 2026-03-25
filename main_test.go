@@ -629,6 +629,42 @@ func TestServerRenderAPI(t *testing.T) {
 	}
 }
 
+func TestServerHistoryAPI(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	putBody := `{"conversations":[{"id":"c1","title":"Saved"}],"activeId":"c1"}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/history", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	newServerMux().ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT /api/history returned status %d: %s", putRec.Code, putRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+	getRec := httptest.NewRecorder()
+	newServerMux().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/history returned status %d: %s", getRec.Code, getRec.Body.String())
+	}
+	if !strings.Contains(getRec.Body.String(), `"activeId":"c1"`) {
+		t.Fatalf("expected stored history payload, got %s", getRec.Body.String())
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/history", nil)
+	deleteRec := httptest.NewRecorder()
+	newServerMux().ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/history returned status %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	getAfterDelete := httptest.NewRequest(http.MethodGet, "/api/history", nil)
+	getAfterDeleteRec := httptest.NewRecorder()
+	newServerMux().ServeHTTP(getAfterDeleteRec, getAfterDelete)
+	if !strings.Contains(getAfterDeleteRec.Body.String(), `"conversations":null`) && !strings.Contains(getAfterDeleteRec.Body.String(), `"conversations":[]`) {
+		t.Fatalf("expected cleared history payload, got %s", getAfterDeleteRec.Body.String())
+	}
+}
+
 func TestProviderCatalogIncludesBuiltin(t *testing.T) {
 	catalog := buildProviderCatalog(t.Context())
 	if catalog.Default == "" {

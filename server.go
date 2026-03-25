@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +71,11 @@ type chatResponse struct {
 	Content  string `json:"content"`
 }
 
+type historyState struct {
+	Conversations []map[string]interface{} `json:"conversations"`
+	ActiveID      string                   `json:"activeId"`
+}
+
 type anthropicMessageResponse struct {
 	Content []struct {
 		Type string `json:"type"`
@@ -122,6 +128,7 @@ func newServerMux() http.Handler {
 	mux.HandleFunc("/docs/static/ctl_tree.svg", handleAsset("docs/static/ctl_tree.svg", "image/svg+xml"))
 	mux.HandleFunc("/api/examples", handleExamples)
 	mux.HandleFunc("/api/providers", handleProviders)
+	mux.HandleFunc("/api/history", handleHistory)
 	mux.HandleFunc("/api/render", handleRender)
 	mux.HandleFunc("/api/chat", handleChat)
 	return mux
@@ -178,6 +185,37 @@ func handleProviders(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, buildProviderCatalog(context.Background()))
 }
 
+func handleHistory(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		state, err := readHistoryState()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, state)
+	case http.MethodPut:
+		var state historyState
+		if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := writeHistoryState(state); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	case http.MethodDelete:
+		if err := clearHistoryState(); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func handleRender(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -224,6 +262,53 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, chatResponse{Provider: provider, Model: model, Content: content})
+}
+
+func historyFilePath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, "go-ctl2", "history.json")
+}
+
+func readHistoryState() (historyState, error) {
+	path := historyFilePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return historyState{}, nil
+		}
+		return historyState{}, err
+	}
+	var state historyState
+	if len(data) == 0 {
+		return historyState{}, nil
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return historyState{}, err
+	}
+	return state, nil
+}
+
+func writeHistoryState(state historyState) error {
+	path := historyFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func clearHistoryState() error {
+	path := historyFilePath()
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func renderInterpretation(source string) (string, string, error) {

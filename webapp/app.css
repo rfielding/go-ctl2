@@ -46,6 +46,11 @@ button, select, textarea {
   gap: 12px;
 }
 
+.sidebar-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .sidebar h1, .topbar h2 {
   margin: 0;
   font-family: Georgia, "Times New Roman", serif;

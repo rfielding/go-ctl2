@@ -18,6 +18,7 @@ const els = {
   chatForm: document.getElementById("chatForm"),
   chatInput: document.getElementById("chatInput"),
   newConversation: document.getElementById("newConversation"),
+  wipeHistory: document.getElementById("wipeHistory"),
   exampleSelect: document.getElementById("exampleSelect"),
   loadExample: document.getElementById("loadExample"),
   renderStatus: document.getElementById("renderStatus"),
@@ -35,7 +36,7 @@ async function init() {
   bindTabs();
   bindActions();
   await Promise.all([loadProviders(), loadExamples()]);
-  loadConversations();
+  await loadConversations();
   if (!state.conversations.length) {
     addConversation();
   }
@@ -56,6 +57,13 @@ function bindTabs() {
 
 function bindActions() {
   els.newConversation.addEventListener("click", () => {
+    addConversation();
+    renderConversations();
+    renderActiveConversation();
+  });
+
+  els.wipeHistory.addEventListener("click", async () => {
+    await wipeHistory();
     addConversation();
     renderConversations();
     renderActiveConversation();
@@ -117,19 +125,46 @@ async function loadExamples() {
   els.exampleSelect.innerHTML = state.examples.map((item) => `<option>${escapeHTML(item.title)}</option>`).join("");
 }
 
-function loadConversations() {
+async function loadConversations() {
   try {
-    state.conversations = JSON.parse(localStorage.getItem("goctl2.conversations") || "[]");
+    const response = await fetch("/api/history");
+    if (!response.ok) {
+      throw new Error("could not load stored history");
+    }
+    const payload = await response.json();
+    state.conversations = payload.conversations || [];
+    state.activeId = payload.activeId || "";
   } catch {
     state.conversations = [];
+    state.activeId = "";
   }
+  localStorage.removeItem("goctl2.conversations");
+  localStorage.removeItem("goctl2.activeId");
   state.conversations.forEach(normalizeConversationTurns);
-  state.activeId = localStorage.getItem("goctl2.activeId");
 }
 
 function saveConversations() {
-  localStorage.setItem("goctl2.conversations", JSON.stringify(state.conversations));
-  localStorage.setItem("goctl2.activeId", state.activeId || "");
+  void persistConversations();
+}
+
+async function persistConversations() {
+  await fetch("/api/history", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      conversations: state.conversations,
+      activeId: state.activeId || "",
+    }),
+  });
+}
+
+async function wipeHistory() {
+  state.pendingChat.clear();
+  state.conversations = [];
+  state.activeId = null;
+  await fetch("/api/history", { method: "DELETE" });
+  localStorage.removeItem("goctl2.conversations");
+  localStorage.removeItem("goctl2.activeId");
 }
 
 function addConversation() {

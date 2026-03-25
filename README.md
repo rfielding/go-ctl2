@@ -13,4 +13,4 @@ Workflow:
 3. you inspect the states, diagrams, and CTL claims
 4. you reject or refine the model until the requirements are precise enough to check
 
-Start with [docs/build/ir.generated.md](/home/rfielding/code/go-ctl2/docs/build/ir.generated.md).
+Start with [docs/build/ir.generated.md](docs/build/ir.generated.md).
