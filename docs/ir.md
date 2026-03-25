@@ -14,7 +14,7 @@ The central idea is:
   - runtime execution
   - CTL checking
   - Mermaid generation
-  - SVG diagrams
+  - rendered Markdown diagrams
   - event logs and plots
 
 The design goal is not to infer hidden control flow from simulation alone. Instead, transitions expose control flow through explicit `become` calls, and the compiler walks those action trees to recover possible successor control states.
@@ -273,9 +273,49 @@ The Mermaid artifacts below are a useful companion view for this example:
 - a queue state rendition showing explicit self-loops
 - a queue message/service rendition showing arrival and service-completion flows
 
-![M/M/1/5 Queue State Diagram](/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_state.svg)
+```mermaid
+flowchart TD
+    subgraph Client
+        direction TB
+        C_loop([loop]) -->|"dice&lt;0.5<br/>last = sleep"| C_loop
+        C_loop -->|"dice&gt;=0.5<br/>send req<br/>last = arrival"| C_loop
+    end
 
-![M/M/1/5 Queue Flow Diagram](/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_flow.svg)
+    subgraph Queue
+        direction TB
+        Q_wait([wait]) -->|"req and count = 0<br/>count += 1<br/>elapsed = 0"| Q_wait
+        Q_wait -->|"req and 0 &lt; count &lt; 5<br/>count += 1"| Q_wait
+        Q_wait -->|"req and count = 5<br/>dropped_count += 1"| Q_wait
+        Q_wait -->|"count &gt; 0 and dice&lt;0.5<br/>count -= 1<br/>last_departure = service-complete"| Q_wait
+        Q_wait -->|"count &gt; 0 and dice&gt;=0.5<br/>last_departure = busy"| Q_wait
+    end
+
+    C_loop -. arrival req .-> Q_wait
+```
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Queue
+    Note over Client: dice branch
+    alt arrival
+        Client-->>Queue: req
+        alt count < 5
+            Queue->>Queue: count += 1
+        else count = 5
+            Queue->>Queue: dropped_count += 1
+        end
+    else sleep
+        Client->>Client: last = sleep
+    end
+    Note over Queue: service branch when count > 0
+    alt service-complete
+        Queue->>Queue: count -= 1
+        Queue->>Queue: last_departure = service-complete
+    else busy
+        Queue->>Queue: last_departure = busy
+    end
+```
 
 ## Decision Processes
 
@@ -824,8 +864,8 @@ The intended future workflow is:
 1. LLM emits actor Lisp
 2. the tool serializes the runtime/model as Lisp
 3. a single Mermaid generator reads that Lisp
-4. the same generated Mermaid source is rendered into SVG
-5. the document embeds those SVGs
+4. the generated Markdown embeds Mermaid directly
+5. GitHub or the local HTML renderer turns that Mermaid into diagrams
 
 This allows:
 
@@ -845,9 +885,9 @@ The current repository is intentionally small. The most important files are:
 - `docs/ir.md`
   this document
 - `docs/mermaid/`
-  Mermaid sources rendered into SVG for publication
+  optional local Mermaid sources for preview diagrams
 - `docs/generated/`
-  generated diagrams and plots
+  ignored local build intermediates
 - `scripts/`
   helper scripts used by the documentation pipeline
 
@@ -887,7 +927,7 @@ Natural follow-on plots include:
 
 # Mermaid Artifacts
 
-The build expects Mermaid sources under `docs/mermaid/` and renders SVGs into `docs/generated/`.
+The committed Markdown keeps Mermaid inline so GitHub can render the diagrams directly from the source document.
 
 The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure, and the examples above keep those diagrams next to the Lisp that generated them.
 
@@ -904,7 +944,7 @@ The `Makefile` provides:
 Current assumptions:
 
 - `pandoc` is installed for document generation
-- `mmdc` is installed for Mermaid-to-SVG generation
+- `mmdc` is optional and only needed for `make diagrams`
 
 The document and Mermaid build are intentionally kept separate so the same generated Mermaid source can be inspected directly.
 
@@ -918,7 +958,7 @@ For local review, the repository also provides a simple static server target:
 
 - `make serve-docs`
 
-That serves `docs/build/` over a local HTTP server so the generated HTML, SVG diagrams, and plots can be reviewed together in a browser.
+That serves `docs/build/` over a local HTTP server so the generated HTML can be reviewed together in a browser.
 
 # Current Limits
 

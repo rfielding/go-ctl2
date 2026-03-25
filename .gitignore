@@ -1,1 +1,4 @@
 .tools/node_modules
+docs/generated/
+docs/build/generated/
+docs/build/ir.html

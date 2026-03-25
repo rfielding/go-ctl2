@@ -658,11 +658,11 @@ func TestRenderDocExampleSectionsReturns(t *testing.T) {
 	for _, want := range []string{
 		"## Message Chain Example",
 		"### Input Lisp",
-		"### Output Markdown",
-		"````markdown",
-		"## State Diagram",
-		"## CTL Outcomes",
-		"generated/message_outstanding.svg",
+		"### Rendered Output",
+		"#### State Diagram",
+		"#### CTL Outcomes",
+		"```mermaid",
+		"xychart-beta",
 		"## Bakery Role-Reuse Example",
 	} {
 		if !strings.Contains(out, want) {

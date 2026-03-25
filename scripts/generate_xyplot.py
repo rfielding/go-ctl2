@@ -4,21 +4,11 @@ from __future__ import annotations
 
 import json
 import os
-from html import escape
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
-
-
-BG = "#0f1115"
-PANEL = "#151922"
-TEXT = "#e7edf5"
-MUTED = "#a9b7c8"
-BORDER = "#2a3140"
-LINE = "#8bc3ff"
-
 
 def go_binary() -> str:
     direct_snap = Path("/snap/go/current/bin/go")
@@ -30,32 +20,10 @@ def go_binary() -> str:
     return candidate
 
 
-def polyline(points, x0, y0, w, h, xmax, ymax):
-    coords = []
-    for x, y in points:
-        px = x0 + (x / xmax) * w
-        py = y0 + h - (y / ymax) * h
-        coords.append(f"{px:.1f},{py:.1f}")
-    return " ".join(coords)
-
-
-def circles(points, color, x0, y0, w, h, xmax, ymax):
-    out = []
-    for x, y in points:
-        cx = x0 + (x / xmax) * w
-        cy = y0 + h - (y / ymax) * h
-        out.append(f'  <circle cx="{cx:.1f}" cy="{cy:.1f}" r="3.2" fill="{color}"/>')
-    return "\n".join(out)
-
-
-def axis_ticks(count):
-    if count <= 10:
-        return list(range(0, count + 1))
-    step = max(10, count // 10)
-    ticks = list(range(0, count + 1, step))
-    if ticks[-1] != count:
-        ticks.append(count)
-    return ticks
+def go_env() -> dict[str, str]:
+    env = dict(os.environ)
+    env.setdefault("GOCACHE", "/tmp/go-ctl2-gocache")
+    return env
 
 
 def load_manifest():
@@ -76,7 +44,7 @@ def load_manifest():
             check=True,
             capture_output=True,
             text=True,
-            env=os.environ,
+            env=go_env(),
         )
         return json.loads(Path(tmp.name).read_text())
 
@@ -100,72 +68,40 @@ def load_plot_data(name: str):
             check=True,
             capture_output=True,
             text=True,
-            env=os.environ,
+            env=go_env(),
         )
         return json.loads(Path(tmp.name).read_text())
 
 
-def render_plot_svg(data: dict) -> str:
-    series = [(point["Step"], point["Value"]) for point in data["series"]]
-    xmax = max(1, int(data["steps"]))
-    ymax = max(1, int(max([point[1] for point in series] + [1])))
+def format_number(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return str(int(round(value)))
+    return format(value, "g")
 
-    width = 960
-    height = 420
-    margin_left = 84
-    margin_right = 24
-    margin_top = 56
-    margin_bottom = 54
-    plot_w = width - margin_left - margin_right
-    plot_h = height - margin_top - margin_bottom
 
-    grid_lines = []
-    for y in range(0, ymax + 1):
-        py = margin_top + plot_h - (y / ymax) * plot_h
-        grid_lines.append(
-            f'  <line x1="{margin_left}" y1="{py:.1f}" x2="{margin_left + plot_w}" y2="{py:.1f}" stroke="{BORDER}" stroke-width="1"/>'
-        )
+def render_plot_mermaid(data: dict) -> str:
+    values = [point["Value"] for point in data["series"]]
+    steps = ", ".join(str(point["Step"]) for point in data["series"])
+    min_value = min([0.0] + values)
+    max_value = max([0.0] + values)
+    if min_value == max_value:
+        if min_value == 0:
+            max_value = 1.0
+        elif min_value > 0:
+            min_value = 0.0
+        else:
+            max_value = 0.0
 
-    x_labels = []
-    for tick in axis_ticks(xmax):
-        px = margin_left + (tick / xmax) * plot_w
-        grid_lines.append(
-            f'  <line x1="{px:.1f}" y1="{margin_top}" x2="{px:.1f}" y2="{margin_top + plot_h}" stroke="{BORDER}" stroke-width="1"/>'
-        )
-        x_labels.append(
-            f'  <text x="{px:.1f}" y="{margin_top + plot_h + 28}" text-anchor="middle" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">{tick}</text>'
-        )
-
-    y_labels = []
-    tick_step = max(1, ymax // 5)
-    for y in range(0, ymax + 1, tick_step):
-        py = margin_top + plot_h - (y / ymax) * plot_h
-        y_labels.append(
-            f'  <text x="{margin_left - 18}" y="{py + 6:.1f}" text-anchor="end" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">{y}</text>'
-        )
-
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
-  <rect width="100%" height="100%" fill="{BG}"/>
-  <rect x="20" y="20" width="{width - 40}" height="{height - 40}" rx="14" fill="{PANEL}" stroke="{BORDER}"/>
-  <text x="{margin_left}" y="38" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="22">{escape(data["title"])}</text>
-  <text x="{margin_left}" y="58" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">{escape(data["subtitle"])}</text>
-
-  <line x1="{margin_left}" y1="{margin_top}" x2="{margin_left}" y2="{margin_top + plot_h}" stroke="{MUTED}" stroke-width="1.5"/>
-  <line x1="{margin_left}" y1="{margin_top + plot_h}" x2="{margin_left + plot_w}" y2="{margin_top + plot_h}" stroke="{MUTED}" stroke-width="1.5"/>
-{chr(10).join(grid_lines)}
-{chr(10).join(y_labels)}
-{chr(10).join(x_labels)}
-
-  <text x="{margin_left + plot_w / 2}" y="{height - 20}" text-anchor="middle" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">applied runtime step</text>
-  <text x="26" y="{margin_top + plot_h / 2}" transform="rotate(-90 26 {margin_top + plot_h / 2})" text-anchor="middle" fill="{MUTED}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">{escape(data["ylabel"])}</text>
-
-  <polyline fill="none" stroke="{LINE}" stroke-width="3" points="{polyline(series, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}"/>
-{circles(series, LINE, margin_left, margin_top, plot_w, plot_h, xmax, ymax)}
-
-  <line x1="{width - 260}" y1="78" x2="{width - 224}" y2="78" stroke="{LINE}" stroke-width="3"/>
-  <text x="{width - 214}" y="82" fill="{TEXT}" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">{escape(data["legend"])}</text>
-</svg>
-"""
+    series = ", ".join(format_number(point["Value"]) for point in data["series"])
+    return "\n".join(
+        [
+            "xychart-beta",
+            f'    title "{data["title"]}"',
+            f'    x-axis "applied runtime step" [{steps}]',
+            f'    y-axis "{data["ylabel"]}" {format_number(min_value)} --> {format_number(max_value)}',
+            f"    line [{series}]",
+        ]
+    )
 
 
 def title(name: str) -> str:
@@ -184,21 +120,21 @@ def main() -> int:
     parts: list[str] = []
     for entry in manifest:
         data = load_plot_data(entry["name"])
-        svg_path = generated_dir / data["image_name"]
-        svg_path.write_text(render_plot_svg(data))
 
         parts.append(f"### {title(entry['name'])}\n")
-        parts.append(f"![{escape(data['title'])}](../generated/{data['image_name']})\n")
+        parts.append("```mermaid")
+        parts.append(render_plot_mermaid(data))
+        parts.append("```\n")
         parts.append("<details>")
         parts.append(f"<summary>XY Plot Source: <code>{entry['name']}</code></summary>")
         parts.append('<pre><code class="language-lisp">')
         parts.append(
-            escape(
+            (
                 f'(xyplot {entry["name"]}\n'
                 f'  (title "{data["title"]}")\n'
                 f'  (steps {entry["steps"]})\n'
                 f'  (metric {entry.get("metric", "unknown")}))'
-            )
+            ).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
         parts.append("</code></pre>")
         parts.append("</details>\n")

@@ -4349,12 +4349,11 @@ func docExamples() ([]docExample, error) {
 
 func renderDocExampleMarkdown(item docExample) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Requirements Model\n\n```lisp\n%s\n```\n\n", item.Source)
-	b.WriteString("## State Diagram\n\n```mermaid\n")
+	b.WriteString("#### State Diagram\n\n```mermaid\n")
 	b.WriteString(renderStateDiagramMermaid(item.Spec))
-	b.WriteString("```\n\n## Message Diagram\n\n```mermaid\n")
+	b.WriteString("```\n\n#### Message Diagram\n\n```mermaid\n")
 	b.WriteString(renderSequenceDiagramMermaid(item.Spec))
-	b.WriteString("```\n\n## Class Diagram\n\n```mermaid\n")
+	b.WriteString("```\n\n#### Class Diagram\n\n```mermaid\n")
 	b.WriteString(renderClassDiagramMermaid(item.Spec))
 	b.WriteString("```\n\n")
 
@@ -4364,7 +4363,7 @@ func renderDocExampleMarkdown(item docExample) (string, error) {
 			return "", err
 		}
 		if len(results) > 0 {
-			b.WriteString("## CTL Outcomes\n\n")
+			b.WriteString("#### CTL Outcomes\n\n")
 			for _, result := range results {
 				status := "FAIL"
 				if result.Holds {
@@ -4377,9 +4376,13 @@ func renderDocExampleMarkdown(item docExample) (string, error) {
 	}
 
 	if len(item.Spec.Plots) > 0 {
-		b.WriteString("## Line Graphs\n\n")
+		b.WriteString("#### Line Graphs\n\n")
 		for _, plot := range item.Spec.Plots {
-			fmt.Fprintf(&b, "### %s\n\n```lisp\n%s\n```\n\n![%s](generated/%s.svg)\n\n", plot.Title, plot.Lisp().String(), plot.Title, plot.Name)
+			data, err := plotDataForModel(item.Spec, plot)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "##### %s\n\n```lisp\n%s\n```\n\n```mermaid\n%s```\n\n", plot.Title, plot.Lisp().String(), renderPlotMermaid(data))
 		}
 	}
 	return strings.TrimSpace(b.String()), nil
@@ -4398,9 +4401,9 @@ func renderDocExampleSections() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		b.WriteString("### Output Markdown\n\n````markdown\n")
+		b.WriteString("### Rendered Output\n\n")
 		b.WriteString(markdown)
-		b.WriteString("\n````\n\n")
+		b.WriteString("\n\n")
 	}
 	return strings.TrimSpace(b.String()) + "\n", nil
 }
@@ -4948,7 +4951,48 @@ func transitionLabel(transition Transition) string {
 }
 
 func mermaidLabel(text string) string {
-	return strings.ReplaceAll(text, "\n", "<br/>")
+	return strings.ReplaceAll(html.EscapeString(text), "\n", "<br/>")
+}
+
+func formatPlotMermaidNumber(value float64) string {
+	if math.Abs(value-math.Round(value)) < 1e-9 {
+		return strconv.FormatInt(int64(math.Round(value)), 10)
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func renderPlotMermaid(data docPlotData) string {
+	minValue := 0.0
+	maxValue := 0.0
+	steps := make([]string, 0, len(data.Series))
+	values := make([]string, 0, len(data.Series))
+	for _, point := range data.Series {
+		if point.Value < minValue {
+			minValue = point.Value
+		}
+		if point.Value > maxValue {
+			maxValue = point.Value
+		}
+		steps = append(steps, strconv.Itoa(point.Step))
+		values = append(values, formatPlotMermaidNumber(point.Value))
+	}
+	if minValue == maxValue {
+		if minValue == 0 {
+			maxValue = 1
+		} else if minValue > 0 {
+			minValue = 0
+		} else {
+			maxValue = 0
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("xychart-beta\n")
+	fmt.Fprintf(&b, "    title %q\n", data.Title)
+	fmt.Fprintf(&b, "    x-axis %q [%s]\n", "applied runtime step", strings.Join(steps, ", "))
+	fmt.Fprintf(&b, "    y-axis %q %s --> %s\n", data.YLabel, formatPlotMermaidNumber(minValue), formatPlotMermaidNumber(maxValue))
+	fmt.Fprintf(&b, "    line [%s]\n", strings.Join(values, ", "))
+	return b.String()
 }
 
 func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
@@ -4985,7 +5029,7 @@ func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			fmt.Fprintf(&b, "### %s\n\n```lisp\n%s\n```\n\n%s\n\n", plot.Title, plot.Lisp().String(), renderPlotSVG(data))
+			fmt.Fprintf(&b, "### %s\n\n```lisp\n%s\n```\n\n```mermaid\n%s```\n\n", plot.Title, plot.Lisp().String(), renderPlotMermaid(data))
 		}
 	}
 	return b.String(), nil
@@ -5023,7 +5067,7 @@ func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			fmt.Fprintf(&b, "<h3>%s</h3><pre><code>%s</code></pre>%s", html.EscapeString(plot.Title), html.EscapeString(plot.Lisp().String()), renderPlotSVG(data))
+			fmt.Fprintf(&b, "<h3>%s</h3><pre><code>%s</code></pre><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(plot.Title), html.EscapeString(plot.Lisp().String()), html.EscapeString(renderPlotMermaid(data)))
 		}
 	}
 	b.WriteString("</body></html>")

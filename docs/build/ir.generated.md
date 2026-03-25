@@ -14,7 +14,7 @@ The central idea is:
   - runtime execution
   - CTL checking
   - Mermaid generation
-  - SVG diagrams
+  - rendered Markdown diagrams
   - event logs and plots
 
 The design goal is not to infer hidden control flow from simulation alone. Instead, transitions expose control flow through explicit `become` calls, and the compiler walks those action trees to recover possible successor control states.
@@ -376,9 +376,49 @@ The Mermaid artifacts below are a useful companion view for this example:
 - a queue state rendition showing explicit self-loops
 - a queue message/service rendition showing arrival and service-completion flows
 
-![M/M/1/5 Queue State Diagram](/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_state.svg)
+```mermaid
+flowchart TD
+    subgraph Client
+        direction TB
+        C_loop([loop]) -->|"dice&lt;0.5<br/>last = sleep"| C_loop
+        C_loop -->|"dice&gt;=0.5<br/>send req<br/>last = arrival"| C_loop
+    end
 
-![M/M/1/5 Queue Flow Diagram](/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_flow.svg)
+    subgraph Queue
+        direction TB
+        Q_wait([wait]) -->|"req and count = 0<br/>count += 1<br/>elapsed = 0"| Q_wait
+        Q_wait -->|"req and 0 &lt; count &lt; 5<br/>count += 1"| Q_wait
+        Q_wait -->|"req and count = 5<br/>dropped_count += 1"| Q_wait
+        Q_wait -->|"count &gt; 0 and dice&lt;0.5<br/>count -= 1<br/>last_departure = service-complete"| Q_wait
+        Q_wait -->|"count &gt; 0 and dice&gt;=0.5<br/>last_departure = busy"| Q_wait
+    end
+
+    C_loop -. arrival req .-> Q_wait
+```
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Queue
+    Note over Client: dice branch
+    alt arrival
+        Client-->>Queue: req
+        alt count < 5
+            Queue->>Queue: count += 1
+        else count = 5
+            Queue->>Queue: dropped_count += 1
+        end
+    else sleep
+        Client->>Client: last = sleep
+    end
+    Note over Queue: service branch when count > 0
+    alt service-complete
+        Queue->>Queue: count -= 1
+        Queue->>Queue: last_departure = service-complete
+    else busy
+        Queue->>Queue: last_departure = busy
+    end
+```
 
 ## Decision Processes
 
@@ -927,8 +967,8 @@ The intended future workflow is:
 1. LLM emits actor Lisp
 2. the tool serializes the runtime/model as Lisp
 3. a single Mermaid generator reads that Lisp
-4. the same generated Mermaid source is rendered into SVG
-5. the document embeds those SVGs
+4. the generated Markdown embeds Mermaid directly
+5. GitHub or the local HTML renderer turns that Mermaid into diagrams
 
 This allows:
 
@@ -948,9 +988,9 @@ The current repository is intentionally small. The most important files are:
 - `docs/ir.md`
   this document
 - `docs/mermaid/`
-  Mermaid sources rendered into SVG for publication
+  optional local Mermaid sources for preview diagrams
 - `docs/generated/`
-  generated diagrams and plots
+  ignored local build intermediates
 - `scripts/`
   helper scripts used by the documentation pipeline
 
@@ -1009,57 +1049,9 @@ The canonical examples are generated as exact input/output pairs: the literal Li
 			(metric receive-count)))
 ```
 
-### Output Markdown
+### Rendered Output
 
-````markdown
-# Requirements Model
-
-```lisp
-(model
-		(actor ClientRole
-			(state start
-				(edge true
-					(send RelayRole '(message (type ping)))
-					(become done)))
-			(state done))
-
-		(actor RelayRole
-			(state relay
-				(edge true
-					(recv msg)
-					(send ServerRole msg)
-					(become done)))
-			(state done))
-
-		(actor ServerRole
-			(state idle
-				(edge true
-					(recv received)
-					(become done)))
-			(state done))
-
-		(instance Client ClientRole (RelayRole Relay))
-		(instance Relay RelayRole (ServerRole Server))
-		(instance Server ServerRole)
-
-		(assert (ef (data= Server received '(message (type ping)))))
-		(assert (af (data= Server received '(message (type ping)))))
-
-		(xyplot message_outstanding
-			(title "Message Chain Outstanding Messages")
-			(steps 4)
-			(metric sent-minus-received))
-		(xyplot message_sends
-			(title "Message Chain Sends By Step")
-			(steps 4)
-			(metric send-count))
-		(xyplot message_receives
-			(title "Message Chain Receives By Step")
-			(steps 4)
-			(metric receive-count)))
-```
-
-## State Diagram
+#### State Diagram
 
 ```mermaid
 flowchart TD
@@ -1078,7 +1070,7 @@ flowchart TD
     end
 ```
 
-## Message Diagram
+#### Message Diagram
 
 ```mermaid
 sequenceDiagram
@@ -1089,7 +1081,7 @@ sequenceDiagram
     Relay-->>Server: msg
 ```
 
-## Class Diagram
+#### Class Diagram
 
 ```mermaid
 classDiagram
@@ -1118,37 +1110,54 @@ classDiagram
     <<ServerRole>> Server
 ```
 
-## CTL Outcomes
+#### CTL Outcomes
 
 - `PASS` `(ef (data= Server received (quote (message (type ping)))))`
 - `PASS` `(af (data= Server received (quote (message (type ping)))))`
 
-## Line Graphs
+#### Line Graphs
 
-### Message Chain Outstanding Messages
+##### Message Chain Outstanding Messages
 
 ```lisp
 (xyplot message_outstanding (title "Message Chain Outstanding Messages") (steps 4) (metric sent-minus-received))
 ```
 
-![Message Chain Outstanding Messages](generated/message_outstanding.svg)
+```mermaid
+xychart-beta
+    title "Message Chain Outstanding Messages"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "sent - received" 0 --> 1
+    line [0, 1, 0, 1, 0]
+```
 
-### Message Chain Sends By Step
+##### Message Chain Sends By Step
 
 ```lisp
 (xyplot message_sends (title "Message Chain Sends By Step") (steps 4) (metric send-count))
 ```
 
-![Message Chain Sends By Step](generated/message_sends.svg)
+```mermaid
+xychart-beta
+    title "Message Chain Sends By Step"
+    x-axis "applied runtime step" [0, 1, 3]
+    y-axis "cumulative sends" 0 --> 2
+    line [0, 1, 2]
+```
 
-### Message Chain Receives By Step
+##### Message Chain Receives By Step
 
 ```lisp
 (xyplot message_receives (title "Message Chain Receives By Step") (steps 4) (metric receive-count))
 ```
 
-![Message Chain Receives By Step](generated/message_receives.svg)
-````
+```mermaid
+xychart-beta
+    title "Message Chain Receives By Step"
+    x-axis "applied runtime step" [0, 2, 4]
+    y-axis "cumulative receives" 0 --> 2
+    line [0, 1, 2]
+```
 
 ## Queue Example
 
@@ -1198,75 +1207,28 @@ classDiagram
 			(metric sent-minus-received)))
 ```
 
-### Output Markdown
+### Rendered Output
 
-````markdown
-# Requirements Model
-
-```lisp
-(model
-		(actor ClientRole
-			(state loop
-				(edge (dice-range 0.0 0.5)
-					(set last "sleep")
-					(become loop))
-				(edge (dice-range 0.5 1.0)
-					(send QueueRole req)
-					(set last "arrival")
-					(become loop))))
-
-		(actor QueueRole
-			(state wait
-				(edge (and (mailbox req) (data= count 0))
-					(recv msg)
-					(add count 1)
-					(set elapsed 0)
-					(become wait))
-				(edge (and (mailbox req) (data> count 0) (not (data= count 5)))
-					(recv msg)
-					(add count 1)
-					(become wait))
-				(edge (and (mailbox req) (data= count 5))
-					(recv dropped)
-					(add dropped_count 1)
-					(become wait))
-				(edge (and (data> count 0) (dice-range 0.0 0.5))
-					(sub count 1)
-					(set last_departure "service-complete")
-					(become wait))
-				(edge (and (data> count 0) (dice-range 0.5 1.0))
-					(set last_departure "busy")
-					(become wait))))
-
-		(instance Client ClientRole (QueueRole Queue))
-		(instance Queue QueueRole)
-
-		(xyplot queue_outstanding
-			(title "Outstanding Messages By Step")
-			(steps 100)
-			(metric sent-minus-received)))
-```
-
-## State Diagram
+#### State Diagram
 
 ```mermaid
 flowchart TD
     subgraph Client
         direction TB
-        Clientloop([loop]) -->|"(dice-range 0.0 0.5)<br/>(set last "sleep")"| Clientloop([loop])
-        Clientloop([loop]) -->|"(dice-range 0.5 1.0)<br/>(send Queue req)<br/>(set last "arrival")"| Clientloop([loop])
+        Clientloop([loop]) -->|"(dice-range 0.0 0.5)<br/>(set last &#34;sleep&#34;)"| Clientloop([loop])
+        Clientloop([loop]) -->|"(dice-range 0.5 1.0)<br/>(send Queue req)<br/>(set last &#34;arrival&#34;)"| Clientloop([loop])
     end
     subgraph Queue
         direction TB
         Queuewait([wait]) -->|"(and (mailbox req) (data= count 0))<br/>(recv msg)<br/>(add count 1)<br/>(set elapsed 0)"| Queuewait([wait])
-        Queuewait([wait]) -->|"(and (mailbox req) (data> count 0) (not (data= count 5)))<br/>(recv msg)<br/>(add count 1)"| Queuewait([wait])
+        Queuewait([wait]) -->|"(and (mailbox req) (data&gt; count 0) (not (data= count 5)))<br/>(recv msg)<br/>(add count 1)"| Queuewait([wait])
         Queuewait([wait]) -->|"(and (mailbox req) (data= count 5))<br/>(recv dropped)<br/>(add dropped_count 1)"| Queuewait([wait])
-        Queuewait([wait]) -->|"(and (data> count 0) (dice-range 0.0 0.5))<br/>(sub count 1)<br/>(set last_departure "service-complete")"| Queuewait([wait])
-        Queuewait([wait]) -->|"(and (data> count 0) (dice-range 0.5 1.0))<br/>(set last_departure "busy")"| Queuewait([wait])
+        Queuewait([wait]) -->|"(and (data&gt; count 0) (dice-range 0.0 0.5))<br/>(sub count 1)<br/>(set last_departure &#34;service-complete&#34;)"| Queuewait([wait])
+        Queuewait([wait]) -->|"(and (data&gt; count 0) (dice-range 0.5 1.0))<br/>(set last_departure &#34;busy&#34;)"| Queuewait([wait])
     end
 ```
 
-## Message Diagram
+#### Message Diagram
 
 ```mermaid
 sequenceDiagram
@@ -1275,7 +1237,7 @@ sequenceDiagram
     Client-->>Queue: req
 ```
 
-## Class Diagram
+#### Class Diagram
 
 ```mermaid
 classDiagram
@@ -1299,16 +1261,21 @@ classDiagram
     <<QueueRole>> Queue
 ```
 
-## Line Graphs
+#### Line Graphs
 
-### Outstanding Messages By Step
+##### Outstanding Messages By Step
 
 ```lisp
 (xyplot queue_outstanding (title "Outstanding Messages By Step") (steps 100) (metric sent-minus-received))
 ```
 
-![Outstanding Messages By Step](generated/queue_outstanding.svg)
-````
+```mermaid
+xychart-beta
+    title "Outstanding Messages By Step"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "sent - received" 0 --> 57
+    line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5, 6, 6, 6, 7, 8, 9, 10, 10, 10, 11, 12, 12, 12, 13, 14, 14, 14, 15, 16, 17, 18, 19, 20, 20, 20, 21, 21, 22, 22, 23, 23, 24, 25, 26, 27, 27, 28, 29, 30, 31, 32, 33, 34, 35, 35, 35, 35, 35, 35, 36, 37, 38, 39, 40, 40, 41, 41, 41, 41, 42, 42, 42, 43, 44, 44, 44, 44, 45, 46, 46, 47, 48, 48, 48, 48, 49, 49, 49, 49, 50, 50, 51, 52, 53, 54, 55, 56, 57, 57]
+```
 
 ## Bakery Role-Reuse Example
 
@@ -1369,67 +1336,9 @@ classDiagram
 		(instance CustomerC CustomerBaseRole))
 ```
 
-### Output Markdown
+### Rendered Output
 
-````markdown
-# Requirements Model
-
-```lisp
-(model
-		(actor ProductionRole
-			(data baked 0)
-			(state start
-				(edge true
-					(send-any TruckRole batch)
-					(add baked 1)
-					(become done)))
-			(state done))
-
-		(actor TruckRole
-			(data deliveries 0)
-			(state wait
-				(edge true
-					(recv cargo)
-					(add deliveries 1)
-					(send StoreRole cargo)
-					(become done)))
-			(state done))
-
-		(actor StoreRole
-			(data inventory 0)
-			(data sold 0)
-			(state idle
-				(edge true
-					(recv shipment)
-					(add inventory 1)
-					(become stocked)))
-			(state stocked
-				(edge true
-					(send CustomerBaseRole sale)
-					(sub inventory 1)
-					(add sold 1)
-					(become stocked))))
-
-		(actor CustomerBaseRole
-			(data served 0)
-			(state ready
-				(edge true
-					(recv sale)
-					(add served 1)
-					(become ready))))
-
-		(instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
-		(instance TruckNorth TruckRole (StoreRole StoreA))
-		(instance TruckSouth TruckRole (StoreRole StoreB))
-		(instance StoreA StoreRole (CustomerBaseRole CustomerA))
-		(instance StoreB StoreRole (CustomerBaseRole CustomerB))
-		(instance StoreC StoreRole (CustomerBaseRole CustomerC))
-		(instance CustomerA CustomerBaseRole)
-		(instance CustomerB CustomerBaseRole)
-		(instance CustomerC CustomerBaseRole))
-```
-
-## State Diagram
+#### State Diagram
 
 ```mermaid
 flowchart TD
@@ -1476,7 +1385,7 @@ flowchart TD
     end
 ```
 
-## Message Diagram
+#### Message Diagram
 
 ```mermaid
 sequenceDiagram
@@ -1498,7 +1407,7 @@ sequenceDiagram
     StoreC-->>CustomerC: sale
 ```
 
-## Class Diagram
+#### Class Diagram
 
 ```mermaid
 classDiagram
@@ -1584,7 +1493,6 @@ classDiagram
     }
     <<CustomerBaseRole>> CustomerC
 ```
-````
 
 
 # Message Plot
@@ -1604,13 +1512,19 @@ The line charts below are rendered from every `xyplot` declaration in the exampl
 
 ### Message Outstanding
 
-![Message Chain Outstanding Messages](../generated/message_outstanding.svg)
+```mermaid
+xychart-beta
+    title "Message Chain Outstanding Messages"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    y-axis "sent - received" 0 --> 1
+    line [0, 1, 0, 1, 0]
+```
 
 <details>
 <summary>XY Plot Source: <code>message_outstanding</code></summary>
 <pre><code class="language-lisp">
 (xyplot message_outstanding
-  (title &quot;Message Chain Outstanding Messages&quot;)
+  (title "Message Chain Outstanding Messages")
   (steps 4)
   (metric sent-minus-received))
 </code></pre>
@@ -1618,13 +1532,19 @@ The line charts below are rendered from every `xyplot` declaration in the exampl
 
 ### Message Receives
 
-![Message Chain Receives By Step](../generated/message_receives.svg)
+```mermaid
+xychart-beta
+    title "Message Chain Receives By Step"
+    x-axis "applied runtime step" [0, 2, 4]
+    y-axis "cumulative receives" 0 --> 2
+    line [0, 1, 2]
+```
 
 <details>
 <summary>XY Plot Source: <code>message_receives</code></summary>
 <pre><code class="language-lisp">
 (xyplot message_receives
-  (title &quot;Message Chain Receives By Step&quot;)
+  (title "Message Chain Receives By Step")
   (steps 4)
   (metric receive-count))
 </code></pre>
@@ -1632,13 +1552,19 @@ The line charts below are rendered from every `xyplot` declaration in the exampl
 
 ### Message Sends
 
-![Message Chain Sends By Step](../generated/message_sends.svg)
+```mermaid
+xychart-beta
+    title "Message Chain Sends By Step"
+    x-axis "applied runtime step" [0, 1, 3]
+    y-axis "cumulative sends" 0 --> 2
+    line [0, 1, 2]
+```
 
 <details>
 <summary>XY Plot Source: <code>message_sends</code></summary>
 <pre><code class="language-lisp">
 (xyplot message_sends
-  (title &quot;Message Chain Sends By Step&quot;)
+  (title "Message Chain Sends By Step")
   (steps 4)
   (metric send-count))
 </code></pre>
@@ -1646,13 +1572,19 @@ The line charts below are rendered from every `xyplot` declaration in the exampl
 
 ### Queue Outstanding
 
-![Outstanding Messages By Step](../generated/queue_outstanding.svg)
+```mermaid
+xychart-beta
+    title "Outstanding Messages By Step"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "sent - received" 0 --> 1
+    line [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+```
 
 <details>
 <summary>XY Plot Source: <code>queue_outstanding</code></summary>
 <pre><code class="language-lisp">
 (xyplot queue_outstanding
-  (title &quot;Outstanding Messages By Step&quot;)
+  (title "Outstanding Messages By Step")
   (steps 100)
   (metric sent-minus-received))
 </code></pre>
@@ -1671,7 +1603,7 @@ Natural follow-on plots include:
 
 # Mermaid Artifacts
 
-The build expects Mermaid sources under `docs/mermaid/` and renders SVGs into `docs/generated/`.
+The committed Markdown keeps Mermaid inline so GitHub can render the diagrams directly from the source document.
 
 The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure, and the examples above keep those diagrams next to the Lisp that generated them.
 
@@ -1688,7 +1620,7 @@ The `Makefile` provides:
 Current assumptions:
 
 - `pandoc` is installed for document generation
-- `mmdc` is installed for Mermaid-to-SVG generation
+- `mmdc` is optional and only needed for `make diagrams`
 
 The document and Mermaid build are intentionally kept separate so the same generated Mermaid source can be inspected directly.
 
@@ -1702,7 +1634,7 @@ For local review, the repository also provides a simple static server target:
 
 - `make serve-docs`
 
-That serves `docs/build/` over a local HTTP server so the generated HTML, SVG diagrams, and plots can be reviewed together in a browser.
+That serves `docs/build/` over a local HTTP server so the generated HTML can be reviewed together in a browser.
 
 # Current Limits
 

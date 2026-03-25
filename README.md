@@ -87,7 +87,8 @@ CTL and diagrams use successor sets derived from `become` calls, and runtime exe
 - [main_test.go](/home/rfielding/code/go-ctl2/main_test.go): executable semantics tests and examples
 - [docs/ir.md](/home/rfielding/code/go-ctl2/docs/ir.md): design document
 - [docs/mermaid](/home/rfielding/code/go-ctl2/docs/mermaid): Mermaid sources
-- [docs/generated](/home/rfielding/code/go-ctl2/docs/generated): generated SVGs and plots
+- [docs/build/ir.generated.md](/home/rfielding/code/go-ctl2/docs/build/ir.generated.md): generated Markdown artifact for GitHub review
+- `docs/generated/`: ignored local build intermediates
 - [scripts](/home/rfielding/code/go-ctl2/scripts): documentation helper scripts
 - [Makefile](/home/rfielding/code/go-ctl2/Makefile): build, docs, and serving commands
 
@@ -97,7 +98,7 @@ Requirements:
 
 - Go 1.22+
 - `pandoc` for HTML docs
-- Mermaid CLI (`mmdc`) for Mermaid SVG rendering
+- Mermaid CLI (`mmdc`) only if you want local SVG previews via `make diagrams`
 
 Run tests:
 
@@ -128,9 +129,9 @@ http://127.0.0.1:8000/ir.html
 The main design document is:
 
 - [docs/ir.md](/home/rfielding/code/go-ctl2/docs/ir.md)
-- [docs/build/ir.html](/home/rfielding/code/go-ctl2/docs/build/ir.html)
+- [docs/build/ir.generated.md](/home/rfielding/code/go-ctl2/docs/build/ir.generated.md)
 
-Use the Markdown version on GitHub for repository browsing, and the built HTML version for the full rendered package with generated diagrams and plots.
+Use the generated Markdown on GitHub for repository browsing, and build the local HTML only when you want a browser-rendered copy.
 
 It explains:
 
