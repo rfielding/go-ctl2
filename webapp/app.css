@@ -188,6 +188,13 @@ button {
   padding: 16px 18px;
 }
 
+.message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .message.user {
   align-self: flex-end;
   background: var(--user);
@@ -205,6 +212,21 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin-bottom: 8px;
+}
+
+.message-copy {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.message-copy:hover {
+  color: var(--text);
+  border-color: var(--accent-2);
+  background: rgba(109, 211, 255, 0.08);
 }
 
 .message-body {
@@ -246,7 +268,9 @@ button {
 .message-body .rendered-html,
 .message-body .rendered-svg,
 .message-body .rendered-mermaid,
-.message-body .rendered-math {
+.message-body .rendered-math,
+.message-body .rendered-canvas,
+.message-body .embedded-render-output {
   margin: 10px 0;
   padding: 12px;
   border-radius: 12px;
@@ -260,12 +284,38 @@ button {
   color: var(--text);
 }
 
+.rendered-lisp-model {
+  display: grid;
+  gap: 12px;
+}
+
+.embedded-render-output {
+  color: var(--text);
+}
+
+.embedded-render-output strong {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--accent);
+}
+
+.embedded-render-error strong {
+  color: #ff9b9b;
+}
+
 .rendered-mermaid svg,
 .rendered-svg svg,
-.rendered-math svg {
+.rendered-math svg,
+.rendered-canvas canvas {
   max-width: 100%;
   height: auto;
   display: block;
+}
+
+.rendered-canvas canvas {
+  width: 100%;
+  border-radius: 10px;
+  background: #09111d;
 }
 
 .inline-image {

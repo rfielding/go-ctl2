@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -53,6 +54,7 @@ type renderResponse struct {
 type chatTurn struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	Turn    int    `json:"turn,omitempty"`
 }
 
 type chatRequest struct {
@@ -218,7 +220,7 @@ func handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	content, err := chatWithProvider(r.Context(), provider, model, req.Source, req.Messages)
 	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, err)
+		writeJSONError(w, http.StatusBadGateway, explainChatError(err))
 		return
 	}
 	writeJSON(w, chatResponse{Provider: provider, Model: model, Content: content})
@@ -395,17 +397,138 @@ func chatWithProvider(ctx context.Context, provider, model, source string, messa
 		}
 		return chatWithProvider(ctx, fallbackProvider, defaultModelForProvider(fallbackProvider), source, messages)
 	case "openai":
-		return chatWithOpenAI(ctx, model, source, messages)
+		content, err := chatWithOpenAI(ctx, model, source, messages)
+		if err != nil {
+			return "", err
+		}
+		return maybeRepairModelReply(source, messages, content, func(retryMessages []chatTurn) (string, error) {
+			return chatWithOpenAI(ctx, model, source, retryMessages)
+		})
 	case "claude":
-		return chatWithAnthropic(ctx, model, source, messages)
+		content, err := chatWithAnthropic(ctx, model, source, messages)
+		if err != nil {
+			return "", err
+		}
+		return maybeRepairModelReply(source, messages, content, func(retryMessages []chatTurn) (string, error) {
+			return chatWithAnthropic(ctx, model, source, retryMessages)
+		})
 	default:
 		return "", fmt.Errorf("unknown provider %q", provider)
 	}
 }
 
+func maybeRepairModelReply(source string, messages []chatTurn, content string, retry func([]chatTurn) (string, error)) (string, error) {
+	modelSource, ok := extractModelSource(content)
+	if !ok {
+		return content, nil
+	}
+	if _, _, err := renderInterpretation(modelSource); err == nil {
+		return content, nil
+	}
+	current := content
+	currentSource := modelSource
+	lastCompileErr := ""
+	repairMessages := append([]chatTurn{}, messages...)
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, _, err := renderInterpretation(currentSource)
+		if err == nil {
+			return current, nil
+		}
+		lastCompileErr = err.Error()
+		repairMessages = append(repairMessages, chatTurn{
+			Role:    "assistant",
+			Content: current,
+		}, chatTurn{
+			Role:    "user",
+			Content: repairPromptForModel(source, lastCompileErr, attempt),
+		})
+		repaired, retryErr := retry(repairMessages)
+		if retryErr != nil {
+			return current + "\n\nExplanation: the generated model did not compile, and the automatic repair request failed before a corrected model came back.\n\n```text\n" + retryErr.Error() + "\n```", nil
+		}
+		repairedSource, repairedOK := extractModelSource(repaired)
+		if !repairedOK {
+			current = repaired + "\n\nExplanation: the automatic repair attempt did not return a Lisp model. Do this: ask the LLM to return only one ```lisp fenced block."
+			currentSource = ""
+			continue
+		}
+		current = repaired
+		currentSource = repairedSource
+	}
+	if strings.TrimSpace(currentSource) == "" {
+		return current + "\n\nExplanation: I gave the LLM multiple chances to repair the model, but it never returned a checkable Lisp model.", nil
+	}
+	return current + "\n\nExplanation: I gave the LLM multiple chances to repair the model, but the final version still does not compile. Do this: inspect the compiler error below and ask for one more focused repair.\n\n```text\n" + lastCompileErr + "\n```", nil
+}
+
+func repairPromptForModel(source, compileErr string, attempt int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The Lisp model you just produced does not compile. This is automatic repair attempt %d.\n\n", attempt)
+	b.WriteString("Compiler error:\n```text\n")
+	b.WriteString(compileErr)
+	b.WriteString("\n```\n\n")
+	b.WriteString("Do this:\n")
+	b.WriteString("- fix the model so it compiles under go-ctl2\n")
+	b.WriteString("- preserve the user's intent\n")
+	b.WriteString("- return only one corrected Lisp model in a ```lisp fenced block\n")
+	b.WriteString("- do not explain the error without also returning the corrected model\n")
+	b.WriteString("- use `in-state`, `data=`, and `mailbox-has` for CTL atoms when needed\n\n")
+	b.WriteString("Current model context:\n```lisp\n")
+	b.WriteString(source)
+	b.WriteString("\n```")
+	return b.String()
+}
+
+func extractModelSource(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "(model") {
+		return trimmed, true
+	}
+	parts := strings.Split(content, "```")
+	for i := 1; i < len(parts); i += 2 {
+		part := parts[i]
+		newline := strings.Index(part, "\n")
+		lang := ""
+		body := part
+		if newline >= 0 {
+			lang = strings.TrimSpace(part[:newline])
+			body = part[newline+1:]
+		}
+		body = strings.TrimSpace(body)
+		if body == "" || !strings.HasPrefix(body, "(model") {
+			continue
+		}
+		switch strings.ToLower(lang) {
+		case "", "lisp", "scheme", "clojure":
+			return body, true
+		}
+	}
+	return "", false
+}
+
+func explainChatError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.TrimSpace(err.Error())
+	if msg == "" {
+		return fmt.Errorf("chat failed, but no error details were returned. Retry the request, and if it repeats, check the selected provider configuration")
+	}
+	if strings.Contains(strings.ToLower(msg), "connection refused") {
+		return fmt.Errorf("chat failed because the selected provider or local server could not be reached. Check that the server is running and that any required API endpoint is reachable\n\ntechnical detail: %s", msg)
+	}
+	if strings.Contains(strings.ToLower(msg), "api key") || strings.Contains(strings.ToLower(msg), "unauthorized") {
+		return fmt.Errorf("chat failed because the selected LLM provider is not configured correctly. Set the required API key and retry\n\ntechnical detail: %s", msg)
+	}
+	return fmt.Errorf("chat failed before a usable answer could be returned. Retry once, and if it repeats, inspect the technical detail below\n\ntechnical detail: %s", msg)
+}
+
 func builtinChatReply(model, source string, messages []chatTurn) (string, error) {
 	last := messages[len(messages)-1].Content
 	lower := strings.ToLower(last)
+	if reply, ok, err := maybeEvaluateLogicRequest(source, messages); ok {
+		return reply, err
+	}
 	if strings.Contains(lower, "sequence diagram") && strings.Contains(lower, "just talked about") {
 		return renderConversationSequence(messages), nil
 	}
@@ -438,7 +561,214 @@ func builtinChatReply(model, source string, messages []chatTurn) (string, error)
 		markdown, _, err := renderInterpretation(source)
 		return markdown, err
 	}
+	if isCurrentEventsModelRequest(lower) && fallbackLLMProvider() == "" {
+		return renderCurrentEventsClarification(), nil
+	}
 	return "", errBuiltinPassThrough
+}
+
+func maybeEvaluateLogicRequest(source string, messages []chatTurn) (string, bool, error) {
+	last := messages[len(messages)-1]
+	lower := strings.ToLower(last.Content)
+	if !looksLikeLogicEvaluationRequest(lower) {
+		return "", false, nil
+	}
+	modelSource, modelLabel := resolveEvaluationModelSource(source, last.Content, messages)
+	if strings.TrimSpace(modelSource) == "" {
+		return "I can evaluate CTL or raw modal mu-calculus against a model, but I do not know which model you mean yet.\n\nPoint me at the current Model tab or reference a prior message like `A12` that contains a `(model ...)` block.", true, nil
+	}
+	formulaSource, logicKind, formulaLabel := resolveEvaluationFormula(last.Content, messages)
+	if formulaSource == "" {
+		return "I can evaluate logic against the model, but I do not know which formula you want.\n\nGive me a formula directly, for example `check (ef (in-state Server done))`, or reference a prior message like `A7` that contains the CTL or mu-calculus formula.", true, nil
+	}
+	spec, err := CompileModel(modelSource)
+	if err != nil {
+		return "I found the target model, but it does not compile yet.\n\nDo this: fix the model first, then ask me to evaluate the logic again.\n\n```text\n" + err.Error() + "\n```", true, nil
+	}
+	explored, err := ExploreModel(spec.Runtime())
+	if err != nil {
+		return "", true, err
+	}
+	var b strings.Builder
+	switch logicKind {
+	case "mu":
+		formula, err := CompileMu(formulaSource)
+		if err != nil {
+			return "I found the model, but the mu-calculus formula does not parse.\n\nDo this: rewrite it as a raw modal mu-calculus formula such as `(mu X (or (in-state A done) (diamond X)))`.\n\n```text\n" + err.Error() + "\n```", true, nil
+		}
+		holds := explored.HoldsMuAtInitial(formula)
+		fmt.Fprintf(&b, "I evaluated the raw modal mu-calculus formula against %s.\n\n", modelLabel)
+		fmt.Fprintf(&b, "- formula source: %s\n", formulaLabel)
+		fmt.Fprintf(&b, "- logic: raw modal mu-calculus\n")
+		fmt.Fprintf(&b, "- formula text: `%s`\n", formulaSource)
+		fmt.Fprintf(&b, "- normalized formula: `%s`\n", formula.String())
+		fmt.Fprintf(&b, "- holds at the initial state: `%t`\n", holds)
+	case "ctl":
+		formula, err := CompileCTL(formulaSource)
+		if err != nil {
+			return "I found the model, but the CTL formula does not parse.\n\nDo this: rewrite it as a CTL formula such as `(ef (in-state Server done))`.\n\n```text\n" + err.Error() + "\n```", true, nil
+		}
+		holds := explored.HoldsAtInitial(formula)
+		fmt.Fprintf(&b, "I evaluated the CTL formula against %s.\n\n", modelLabel)
+		fmt.Fprintf(&b, "- formula source: %s\n", formulaLabel)
+		fmt.Fprintf(&b, "- logic: CTL\n")
+		fmt.Fprintf(&b, "- formula text: `%s`\n", formulaSource)
+		fmt.Fprintf(&b, "- normalized formula: `%s`\n", formula.String())
+		fmt.Fprintf(&b, "- holds at the initial state: `%t`\n", holds)
+	default:
+		return "I found a formula-shaped expression, but I cannot tell whether you meant CTL or raw modal mu-calculus.\n\nDo this: mention `CTL` or `mu-calculus` explicitly, or use a raw mu operator like `(mu X ...)` / `(nu X ...)`.", true, nil
+	}
+	fmt.Fprintf(&b, "- model source: %s\n", modelLabel)
+	b.WriteString("\nIf you want, ask next for `the satisfying states`, `the lowered mu-calculus form`, or `the same check against A12`.\n")
+	return b.String(), true, nil
+}
+
+func looksLikeLogicEvaluationRequest(lower string) bool {
+	actionWords := []string{"evaluate", "check", "does", "whether", "holds", "hold?", "assert"}
+	action := false
+	for _, keyword := range actionWords {
+		if strings.Contains(lower, keyword) {
+			action = true
+			break
+		}
+	}
+	if !action {
+		return false
+	}
+	logicWords := []string{"ctl", "mu-calculus", "mu calculus", "(mu ", "(nu ", "formula", "logic", "against"}
+	for _, keyword := range logicWords {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveEvaluationModelSource(currentSource, prompt string, messages []chatTurn) (string, string) {
+	if modelSource, ok := extractModelSource(prompt); ok {
+		return modelSource, "the current message"
+	}
+	for _, turn := range referencedTurns(prompt, messages) {
+		if modelSource, ok := extractModelSource(turn.Content); ok {
+			return modelSource, turnLabel(turn)
+		}
+	}
+	if strings.TrimSpace(currentSource) != "" {
+		return currentSource, "the current Model tab"
+	}
+	return "", ""
+}
+
+func resolveEvaluationFormula(prompt string, messages []chatTurn) (string, string, string) {
+	if formula, kind := extractLogicFormula(prompt); formula != "" {
+		return formula, kind, "the current message"
+	}
+	for _, turn := range referencedTurns(prompt, messages) {
+		if formula, kind := extractLogicFormula(turn.Content); formula != "" {
+			return formula, kind, turnLabel(turn)
+		}
+	}
+	return "", "", ""
+}
+
+func referencedTurns(prompt string, messages []chatTurn) []chatTurn {
+	matches := map[int]bool{}
+	upper := strings.ToUpper(prompt)
+	for i := 0; i < len(upper)-1; i++ {
+		prefix := upper[i]
+		if prefix != 'A' && prefix != 'U' {
+			continue
+		}
+		j := i + 1
+		for j < len(upper) && upper[j] >= '0' && upper[j] <= '9' {
+			j++
+		}
+		if j == i+1 {
+			continue
+		}
+		n, err := strconv.Atoi(upper[i+1 : j])
+		if err == nil {
+			matches[n] = true
+		}
+		i = j - 1
+	}
+	var out []chatTurn
+	for _, message := range messages {
+		if message.Turn > 0 && matches[message.Turn] {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+func turnLabel(turn chatTurn) string {
+	prefix := "U"
+	if turn.Role == "assistant" {
+		prefix = "A"
+	}
+	if turn.Turn > 0 {
+		return prefix + strconv.Itoa(turn.Turn)
+	}
+	return "the referenced message"
+}
+
+func extractLogicFormula(content string) (string, string) {
+	for _, form := range extractParenthesizedForms(content) {
+		trimmed := strings.TrimSpace(form)
+		if trimmed == "" || strings.HasPrefix(trimmed, "(model") {
+			continue
+		}
+		if _, err := CompileMu(trimmed); err == nil {
+			return trimmed, "mu"
+		}
+		if _, err := CompileCTL(trimmed); err == nil {
+			return trimmed, "ctl"
+		}
+	}
+	return "", ""
+}
+
+func extractParenthesizedForms(text string) []string {
+	var out []string
+	start := -1
+	depth := 0
+	inString := false
+	escaped := false
+	for i, r := range text {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == '"' {
+				inString = false
+			}
+			continue
+		}
+		if r == '"' {
+			inString = true
+			continue
+		}
+		if r == '(' {
+			if depth == 0 {
+				start = i
+			}
+			depth++
+			continue
+		}
+		if r == ')' && depth > 0 {
+			depth--
+			if depth == 0 && start >= 0 {
+				out = append(out, text[start:i+1])
+				start = -1
+			}
+		}
+	}
+	return out
 }
 
 type simpleSequence struct {
@@ -455,6 +785,12 @@ func fallbackLLMProvider() string {
 		return "claude"
 	}
 	return ""
+}
+
+func isCurrentEventsModelRequest(lower string) bool {
+	return (strings.Contains(lower, "currently happening") || strings.Contains(lower, "current") || strings.Contains(lower, "today")) &&
+		(strings.Contains(lower, "create a model") || strings.Contains(lower, "model ")) &&
+		(strings.Contains(lower, "war") || strings.Contains(lower, "prices") || strings.Contains(lower, "iran") || strings.Contains(lower, "organizations"))
 }
 
 func simpleSequencePrompt(original string) *simpleSequence {
@@ -552,6 +888,16 @@ func renderSequenceClarificationQuestion() string {
 	b.WriteString("- `draw a sequence diagram where Client asks Server for quote`\n")
 	b.WriteString("- `A -> B: ping, then B -> C: relay`\n\n")
 	b.WriteString("If you want, give me the participants and the messages in plain English and I will draw it.")
+	return b.String()
+}
+
+func renderCurrentEventsClarification() string {
+	var b strings.Builder
+	b.WriteString("I can help with that, but I need one clarification first.\n\n")
+	b.WriteString("Do you want:\n\n")
+	b.WriteString("- a live current-events answer from OpenAI or Claude, using up-to-date information, or\n")
+	b.WriteString("- a hypothetical go-ctl2 model built only from the situation as you describe it here\n\n")
+	b.WriteString("Right now no external LLM is configured, so I can only do the second one locally unless you set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.")
 	return b.String()
 }
 
@@ -986,9 +1332,11 @@ func chatSystemPrompt(source string) string {
 	var b strings.Builder
 	b.WriteString("You are helping the user reason about a go-ctl2 Lisp requirements model.\n")
 	b.WriteString("Answer in Markdown.\n")
-	b.WriteString("Answer naturally. The app renders normal Markdown text, Markdown images and gifs like ![alt](url), Mermaid fenced blocks, SVG fenced blocks, HTML fenced blocks, and LaTeX math using $...$ or $$...$$.\n")
+	b.WriteString("Answer naturally. The app renders normal Markdown text, Markdown images and gifs like ![alt](url), Mermaid fenced blocks, SVG fenced blocks, HTML fenced blocks, fenced `canvas` blocks for JavaScript canvas animations, and LaTeX math using $...$ or $$...$$.\n")
 	b.WriteString("Be concrete and refer to the current model, not generic theory.\n")
 	b.WriteString("If asked to restate or translate the model, preserve the actual control states, mailboxes, and assertions.\n")
+	b.WriteString("When critiquing a model, explicitly check whether it is deterministic or actually branches, whether EF/AF or similar properties collapse because there is only one execution, whether queue capacities matter, whether consequences are represented as checkable state/data instead of just labels, and whether the actors really model organizations versus abstract systems.\n")
+	b.WriteString("If the model is too weak to support the requested conclusion, say exactly what is missing and propose concrete actor/data/branching/assertion changes.\n")
 	b.WriteString("The detailed reference docs are available in the app at /docs and /docs/ir.generated.md. Point the user there when they need the full language reference or semantics.\n")
 	b.WriteString("You are given both the raw Lisp and the current rendition produced by the compiler. Prefer the rendition when discussing what the tool currently understands, but fall back to the raw Lisp when proposing edits.\n\n")
 	b.WriteString("Current Lisp model:\n\n")

@@ -234,6 +234,14 @@ function renderMessageNode(message) {
   node.classList.add(message.role);
   const turnLabel = turnTag(message);
   node.querySelector(".message-role").textContent = `${turnLabel} ${message.role}`;
+  const copyButton = node.querySelector(".message-copy");
+  if (message.role === "assistant") {
+    copyButton.addEventListener("click", async () => {
+      await copyMessageContent(message.content, copyButton);
+    });
+  } else {
+    copyButton.hidden = true;
+  }
   const body = node.querySelector(".message-body");
   body.appendChild(renderMarkdown(message.content));
   hydrateRichContent(body).catch((error) => console.error(error));
@@ -245,6 +253,7 @@ function renderPendingMessageNode(messages) {
   node.classList.add("assistant", "pending");
   const nextTurn = nextAssistantTurnNumber(messages);
   node.querySelector(".message-role").textContent = `A${nextTurn} assistant`;
+  node.querySelector(".message-copy").hidden = true;
   const body = node.querySelector(".message-body");
   const spinner = document.createElement("div");
   spinner.className = "pending-spinner";
@@ -385,7 +394,7 @@ async function sendChat() {
       conversation.messages.push({ role: "assistant", content: payload.content, turn });
     }
   } catch (error) {
-    conversation.messages.push({ role: "assistant", content: `Error:\n\n\`\`\`text\n${error.message}\n\`\`\``, turn });
+    conversation.messages.push({ role: "assistant", content: `Error:\n\n\`\`\`text\n${formatChatError(error)}\n\`\`\``, turn });
   } finally {
     state.pendingChat.delete(conversation.id);
   }
@@ -431,17 +440,18 @@ function renderInlineMarkdown(text) {
 }
 
 function renderCodeBlock(lang, body) {
+  const trimmed = body.trim();
   if (lang === "mermaid") {
     const wrapper = document.createElement("div");
     wrapper.className = "rendered-mermaid";
-    wrapper.dataset.mermaid = body.trim();
-    wrapper.textContent = body.trim();
+    wrapper.dataset.mermaid = trimmed;
+    wrapper.textContent = trimmed;
     return wrapper;
   }
   if (lang === "latex" || lang === "tex" || lang === "math") {
     const wrapper = document.createElement("div");
     wrapper.className = "rendered-math";
-    wrapper.textContent = `$$\n${body.trim()}\n$$`;
+    wrapper.textContent = `$$\n${trimmed}\n$$`;
     return wrapper;
   }
   if (lang === "html") {
@@ -456,19 +466,156 @@ function renderCodeBlock(lang, body) {
     wrapper.innerHTML = body;
     return wrapper;
   }
+  if (lang === "canvas") {
+    const wrapper = document.createElement("div");
+    wrapper.className = "rendered-canvas";
+    wrapper.dataset.canvasScript = body;
+    wrapper.textContent = "Rendering canvas animation...";
+    return wrapper;
+  }
+  if (isLispModelBlock(lang, trimmed)) {
+    return renderLispModelBlock(trimmed);
+  }
   const pre = document.createElement("pre");
   const code = document.createElement("code");
   if (lang) {
     code.dataset.lang = lang;
   }
-  code.textContent = body.trim();
+  code.textContent = trimmed;
   pre.appendChild(code);
   return pre;
 }
 
 async function hydrateRichContent(root) {
+  await renderEmbeddedLispModels(root);
+  await renderCanvasBlocks(root);
   await renderMermaidBlocks(root);
   await renderMath(root);
+}
+
+function isLispModelBlock(lang, body) {
+  const normalized = (lang || "").toLowerCase();
+  if (!body.startsWith("(model")) {
+    return false;
+  }
+  return normalized === "lisp" || normalized === "clojure" || normalized === "scheme" || normalized === "";
+}
+
+function renderLispModelBlock(source) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "rendered-lisp-model";
+
+  const pre = document.createElement("pre");
+  const code = document.createElement("code");
+  code.dataset.lang = "lisp";
+  code.textContent = source;
+  pre.appendChild(code);
+  wrapper.appendChild(pre);
+
+  const output = document.createElement("div");
+  output.className = "embedded-render-output";
+  output.dataset.lispModel = source;
+  output.textContent = "Rendering model...";
+  wrapper.appendChild(output);
+  return wrapper;
+}
+
+async function renderEmbeddedLispModels(root) {
+  const blocks = Array.from(root.querySelectorAll("[data-lisp-model]"));
+  for (const block of blocks) {
+    if (block.dataset.lispRendered === "true") {
+      continue;
+    }
+    block.dataset.lispRendered = "true";
+    const source = block.dataset.lispModel;
+    try {
+      const response = await fetch("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, format: "markdown" }),
+      });
+      const payload = await response.json();
+      block.innerHTML = "";
+      if (!response.ok) {
+        block.classList.add("embedded-render-error");
+        block.innerHTML = `<strong>Render error</strong><pre><code>${escapeHTML(payload.error || "Render failed.")}</code></pre>`;
+        continue;
+      }
+      block.appendChild(renderMarkdown(payload.markdown));
+      await renderMermaidBlocks(block);
+      await renderMath(block);
+    } catch (error) {
+      block.innerHTML = `<strong>Render error</strong><pre><code>${escapeHTML(formatChatError(error))}</code></pre>`;
+      block.classList.add("embedded-render-error");
+    }
+  }
+}
+
+async function renderCanvasBlocks(root) {
+  const blocks = Array.from(root.querySelectorAll("[data-canvas-script]"));
+  for (const block of blocks) {
+    if (block.dataset.canvasRendered === "true") {
+      continue;
+    }
+    block.dataset.canvasRendered = "true";
+    const script = block.dataset.canvasScript || "";
+    try {
+      const animation = buildCanvasAnimation(script);
+      block.innerHTML = "";
+      const canvas = document.createElement("canvas");
+      canvas.width = animation.width;
+      canvas.height = animation.height;
+      block.appendChild(canvas);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        throw new Error("Canvas 2D context is not available in this browser.");
+      }
+      startCanvasAnimation(block, canvas, ctx, animation);
+    } catch (error) {
+      block.classList.add("embedded-render-error");
+      block.innerHTML = `<strong>Canvas error</strong><pre><code>${escapeHTML(error.message || "Canvas render failed.")}</code></pre>`;
+    }
+  }
+}
+
+function buildCanvasAnimation(script) {
+  let width = 640;
+  let height = 360;
+  const lines = script.split("\n");
+  const body = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sizeMatch = trimmed.match(/^\/\/\s*size:\s*(\d+)\s*x\s*(\d+)\s*$/i);
+    if (sizeMatch) {
+      width = Number(sizeMatch[1]);
+      height = Number(sizeMatch[2]);
+      continue;
+    }
+    body.push(line);
+  }
+  const runner = new Function("canvas", "ctx", "time", "frame", "width", "height", body.join("\n"));
+  return { width, height, runner };
+}
+
+function startCanvasAnimation(container, canvas, ctx, animation) {
+  let frame = 0;
+  const started = performance.now();
+  function tick(now) {
+    if (!container.isConnected) {
+      return;
+    }
+    const time = (now - started) / 1000;
+    try {
+      animation.runner(canvas, ctx, time, frame, canvas.width, canvas.height);
+    } catch (error) {
+      container.classList.add("embedded-render-error");
+      container.innerHTML = `<strong>Canvas error</strong><pre><code>${escapeHTML(error.message || "Canvas animation failed.")}</code></pre>`;
+      return;
+    }
+    frame += 1;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
 }
 
 async function ensureMermaid() {
@@ -584,6 +731,27 @@ function nextAssistantTurnNumber(messages) {
     }
     return Math.max(max, Number(message.turn) || 0);
   }, 0) + 1;
+}
+
+function formatChatError(error) {
+  if (error?.message === "Failed to fetch") {
+    return "Could not reach the local go-ctl2 server at this page origin. Check that the server is still running and that the browser is pointed at the correct localhost port.";
+  }
+  return error?.message || "Request failed.";
+}
+
+async function copyMessageContent(content, button) {
+  const original = button.textContent;
+  try {
+    await navigator.clipboard.writeText(content);
+    button.textContent = "Copied";
+  } catch (error) {
+    button.textContent = "Copy failed";
+    console.error(error);
+  }
+  setTimeout(() => {
+    button.textContent = original;
+  }, 1200);
 }
 
 function turnTag(message) {

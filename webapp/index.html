@@ -73,7 +73,10 @@
 
   <template id="messageTemplate">
     <article class="message">
-      <div class="message-role"></div>
+      <div class="message-header">
+        <div class="message-role"></div>
+        <button type="button" class="message-copy" aria-label="Copy message">Copy</button>
+      </div>
       <div class="message-body"></div>
     </article>
   </template>

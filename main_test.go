@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -633,7 +634,7 @@ func TestProviderCatalogIncludesBuiltin(t *testing.T) {
 
 func TestChatSystemPromptMentionsDocs(t *testing.T) {
 	prompt := chatSystemPrompt("(model)")
-	for _, want := range []string{"/docs", "/docs/ir.generated.md"} {
+	for _, want := range []string{"/docs", "/docs/ir.generated.md", "fenced `canvas` blocks", "deterministic or actually branches", "queue capacities matter"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to mention %q, got %s", want, prompt)
 		}
@@ -786,6 +787,67 @@ func TestBuiltinChatAsksClarifyingQuestionForAmbiguousSequencePrompt(t *testing.
 	}
 }
 
+func TestBuiltinChatAsksClarifyingQuestionForCurrentEventsModelWithoutLLM(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	out, err := builtinChatReply("explain", "(model)", []chatTurn{
+		{Role: "user", Content: "Create a model of what is currently happening with the war in Iran and its effect on oil prices."},
+	})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	for _, want := range []string{"I can help with that, but I need one clarification first.", "live current-events answer", "hypothetical go-ctl2 model"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected current-events clarification to contain %q, got %s", want, out)
+		}
+	}
+}
+
+func TestBuiltinChatEvaluatesCTLAgainstCurrentModel(t *testing.T) {
+	out, err := builtinChatReply("explain", `
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker (queue 1)))
+	`, []chatTurn{
+		{Role: "user", Turn: 1, Content: "check CTL formula (ef (in-state A done))"},
+	})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	for _, want := range []string{"I evaluated the CTL formula", "`true`", "(ef (in-state A done))", "the current Model tab"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected evaluation output to contain %q, got %s", want, out)
+		}
+	}
+}
+
+func TestBuiltinChatEvaluatesMuFormulaFromReferencedTurn(t *testing.T) {
+	out, err := builtinChatReply("explain", `
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker (queue 1)))
+	`, []chatTurn{
+		{Role: "assistant", Turn: 7, Content: "```lisp\n(mu X (or (in-state A done) (diamond X)))\n```"},
+		{Role: "user", Turn: 8, Content: "evaluate mu-calculus formula in A7 against the current model"},
+	})
+	if err != nil {
+		t.Fatalf("builtinChatReply returned error: %v", err)
+	}
+	for _, want := range []string{"raw modal mu-calculus", "formula source: A7", "`true`"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected mu evaluation output to contain %q, got %s", want, out)
+		}
+	}
+}
+
 func TestBuiltinChatFallsBackToConfiguredLLMNotice(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
@@ -800,6 +862,58 @@ func TestBuiltinChatFallsBackToConfiguredLLMNotice(t *testing.T) {
 	}
 	if strings.Contains(out, "switch into model mode") {
 		t.Fatalf("expected no mode speech, got %s", out)
+	}
+}
+
+func TestExtractModelSourceFindsFencedLispModel(t *testing.T) {
+	content := "Here is the model:\n\n```lisp\n(model (actor A (state start)) (instance X A (queue 1)))\n```"
+	got, ok := extractModelSource(content)
+	if !ok {
+		t.Fatal("expected to extract model source")
+	}
+	if !strings.Contains(got, "(instance X A (queue 1))") {
+		t.Fatalf("unexpected extracted model: %s", got)
+	}
+}
+
+func TestExplainChatErrorAlwaysAddsExplanation(t *testing.T) {
+	err := explainChatError(fmt.Errorf("401 unauthorized"))
+	if err == nil {
+		t.Fatal("expected wrapped error")
+	}
+	for _, want := range []string{"configured correctly", "technical detail"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected wrapped error to contain %q, got %s", want, err.Error())
+		}
+	}
+}
+
+func TestMaybeRepairModelReplyRetriesUntilModelCompiles(t *testing.T) {
+	initial := "```lisp\n(model (actor Worker (state start)) (instance A Worker (queue 1)) (assert (ef (state= A start))))\n```"
+	var attempts int
+	got, err := maybeRepairModelReply(`
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker (queue 1)))
+	`, []chatTurn{{Role: "user", Content: "make me a model"}}, initial, func(retryMessages []chatTurn) (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "```lisp\n(model (actor Worker (state start)) (instance A Worker (queue 1)) (assert (ef (state= A start))))\n```", nil
+		}
+		return "```lisp\n(model (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker (queue 1)) (assert (ef (in-state A done))))\n```", nil
+	})
+	if err != nil {
+		t.Fatalf("maybeRepairModelReply returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 repair attempts, got %d", attempts)
+	}
+	if !strings.Contains(got, "(assert (ef (in-state A done)))") {
+		t.Fatalf("expected repaired model, got %s", got)
 	}
 }
 
