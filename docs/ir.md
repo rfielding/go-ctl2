@@ -404,154 +404,60 @@ This is closer to a small structured machine IR than to an arbitrary scripting l
 
 # Branching-Time Logic
 
-CTL needs an exact successor relation. In this design, the successor relation is derived from `become` calls in each transition body.
+CTL needs an exact successor relation. In this design, the relation comes from visible `become` targets, then execution validates that runtime steps stay inside that declared control graph.
 
-Runtime execution exists to validate that:
+## One State, Many Futures
 
-- transitions only land in derived successor states
-- control state updates are not inconsistent with the model
+The explored model is a transition system `(S, →)`. We write `s ⊨ φ` when runtime state `s ∈ S` satisfies formula `φ`.
 
-This means CTL does not need to wait for simulation to discover the control graph.
+The key point is branching: one state can have several possible successors because of scheduler choice, random guards, or mailbox readiness.
 
-## CTL And μ-Calculus
+![CTL branching tree](../static/ctl_tree.svg)
 
-CTL is Computation Tree Logic, and the implementation lowers it into the modal μ-calculus.
+`E` quantifies over some branch. `A` quantifies over all branches.
 
-The explored graph is a transition system with runtime states `S` and successor relation `→ ⊆ S × S`. We write `s ⊨ φ` when state `s` satisfies formula `φ`.
+- `EX p`: there exists an immediate successor `t` with `s → t` and `t ⊨ p`
+- `AX p`: for every immediate successor `t`, if `s → t` then `t ⊨ p`
+- `EF p`: there exists a path on which `p` eventually holds
+- `AF p`: on every path, `p` eventually holds
+- `EG p`: there exists a path on which `p` holds forever
+- `AG p`: on every path, `p` holds forever
+- `E[p U q]`: there exists a path where `p` holds until `q` holds
+- `A[p U q]`: on every path, `p` holds until `q` holds
 
-The mathematical reading is:
+That is the practical reading users need:
 
-- `EX p` means `∃t. s → t ∧ t ⊨ p`
-- `AX p` means `∀t. s → t ⇒ t ⊨ p`
-- `EF p` means `μX.(p ∨ ◇X)`
-- `AF p` means `μX.(p ∨ □X)`
-- `EG p` means `νX.(p ∧ ◇X)`
-- `AG p` means `νX.(p ∧ □X)`
-- `E[p U q]` means `μX.(q ∨ (p ∧ ◇X))`
-- `A[p U q]` means `μX.(q ∨ (p ∧ □X))`
-
-So the user-facing CTL layer and the underlying μ-calculus layer are two views of the same branching-time semantics.
-
-The important idea is that execution does not produce one future. It produces a tree of possible futures:
-
-- scheduler choice can produce different next steps
-- random guards can produce different next steps
-- mailbox contents can enable or disable different edges
-
-CTL lets us ask whether a property holds on some future branch or on all future branches.
-
-There are two dimensions in every temporal CTL operator:
-
-- path quantifier:
-  `E` means "there exists a path"
-  `A` means "for all paths"
-- time modality:
-  `X` means "in the next step"
-  `F` means "eventually in the future"
-  `G` means "globally, always in the future"
-  `U` means "until"
-
-That is the core connection:
-
-- `E` corresponds to existential choice
-  some reachable branch works
-- `A` corresponds to universal choice
-  every reachable branch must work
-
-In ordinary language:
-
-- `EF p`
-  there exists some execution path on which `p` eventually becomes true
-  "possibly, at some point, `p` happens"
-- `AF p`
-  on every execution path, `p` eventually becomes true
-  "necessarily, sooner or later, `p` happens"
-- `EG p`
-  there exists some execution path on which `p` remains true forever
-  "possibly, the system can stay in a `p`-good region forever"
-- `AG p`
-  on every execution path, `p` remains true forever
-  "necessarily, `p` is always preserved"
-- `EX p`
-  there exists an immediate successor state where `p` holds
-  "possibly on the next step"
-- `AX p`
-  for every immediate successor state, `p` holds
-  "necessarily on the next step"
-- `E[p U q]`
-  there exists a path where `p` keeps holding until `q` eventually holds
-- `A[p U q]`
-  on every path, `p` keeps holding until `q` eventually holds
-
-This is why the pairs matter:
-
-- `EF` vs `AF`
-  possible eventuality vs guaranteed eventuality
-- `EG` vs `AG`
-  possible invariant along some branch vs invariant along all branches
-- `EX` vs `AX`
-  one-step possibility vs one-step necessity
-- `EU` vs `AU`
-  possible progress condition vs guaranteed progress condition
+- `EF`: possible reachability
+- `AF`: guaranteed reachability
+- `EG`: possible persistence
+- `AG`: universal invariant
 
 Examples:
 
-- `(ef (in-state Server accepted))`
-  there is some way for the server to reach `accepted`
-- `(af (in-state Server accepted))`
-  every possible future must eventually reach `accepted`
-- `(ag (not (mailbox-has Relay ping)))`
-  along all futures, the relay mailbox is always free of `ping`
-- `(eg (data> Queue count 0))`
-  there exists some path where the queue can stay non-empty forever
+- `(ef (in-state Negotiator ceasefire))`
+- `(af (in-state CivilianSupply stabilized))`
+- `(ag (not (mailbox-has EarlyWarning false-alarm)))`
+- `(eg (data= Frontline status mobilizing))`
 
-`EF` is often the right operator for reachability or possibility.
-`AF` is stronger: it means no matter how scheduling and randomness resolve, the desired state is unavoidable.
-That difference is exactly why users need the quantifier explanation up front.
+## CTL And μ-Calculus
 
-## Raw μ-Calculus
+The implementation lowers CTL into the modal μ-calculus:
 
-The modal mu-calculus is the lower-level fixpoint logic underneath this checker.
-CTL is now treated as a readable special case of that more general logic.
+- `EX p = ◇p`
+- `AX p = □p`
+- `EF p = μX.(p ∨ ◇X)`
+- `AF p = μX.(p ∨ □X)`
+- `EG p = νX.(p ∧ ◇X)`
+- `AG p = νX.(p ∧ □X)`
+- `E[p U q] = μX.(q ∨ (p ∧ ◇X))`
+- `A[p U q] = μX.(q ∨ (p ∧ □X))`
 
-At first glance, the implementation of `mu` and `nu` can look almost suspiciously small.
-That is because the power comes from the combination of just three ideas:
+The fixpoint intuition is standard:
 
-- boolean structure
-- modal next-step structure
-- fixpoints over a finite successor graph
+- `μ` is least fixpoint: build upward from the empty set
+- `ν` is greatest fixpoint: prune downward from the full set
 
-The modal operators are:
-
-- `diamond p`
-  there exists a successor state where `p` holds
-  this is the same branching idea as CTL's existential next-step operator
-- `box p`
-  for all successor states, `p` holds
-  this is the universal next-step version
-
-The fixpoint operators are:
-
-- `mu X body`
-  least fixpoint
-  think "the smallest set of states that satisfies this recursive equation"
-- `nu X body`
-  greatest fixpoint
-  think "the largest set of states that satisfies this recursive equation"
-
-Intuition:
-
-- `mu` is usually how you express eventuality, progress, or finite escape
-- `nu` is usually how you express invariance, persistence, or the ability to remain inside a region forever
-
-That is the core mental model:
-
-- least fixpoint = build upward from nothing
-- greatest fixpoint = prune downward from everything
-
-### Small Examples
-
-Reachability:
+Small examples:
 
 ```lisp
 (mu X
@@ -559,16 +465,7 @@ Reachability:
       (diamond X)))
 ```
 
-Read it as:
-
-- a state satisfies this formula if
-  it is already an `accepted` state
-  or it can move in one step to another state that satisfies the same formula
-
-That is exactly "there exists a path that eventually reaches `accepted`".
-So this is the mu-calculus form of `EF`.
-
-Invariant preservation:
+This is `EF (in-state Server accepted)`.
 
 ```lisp
 (nu X
@@ -576,230 +473,13 @@ Invariant preservation:
        (box X)))
 ```
 
-Read it as:
+This is `AG (not (mailbox-has Relay ping))`.
 
-- a state satisfies this formula if
-  it is safe now
-  and all of its successors also satisfy the same invariant
+## What The Checker Proves
 
-That is exactly "on all paths, always safe".
-So this is the mu-calculus form of `AG`.
+The checker explores the reachable runtime graph, adds an explicit self-loop on deadlock states, and evaluates each formula as a set of satisfying states.
 
-Possible persistence:
-
-```lisp
-(nu X
-  (and (data> Queue count 0)
-       (diamond X)))
-```
-
-Read it as:
-
-- the queue is non-empty now
-- and there exists some next step that keeps you inside the same region
-
-That captures the idea that there is some execution branch along which the queue can remain non-empty forever.
-That is the mu-calculus form of `EG`.
-
-### Why The Algorithm Is So Small
-
-The evaluator looks small because it is doing repeated set refinement on a finite graph.
-
-For `mu`:
-
-- start with the empty set
-- evaluate the body assuming `X` means that current set
-- keep adding states until nothing changes
-
-For `nu`:
-
-- start with the set of all states
-- evaluate the body assuming `X` means that current set
-- keep removing states until nothing changes
-
-That is enough to express a large amount of temporal reasoning because recursive temporal properties are exactly what fixpoints are good at.
-
-For example:
-
-- "eventually reach a good state"
-  means repeated predecessor expansion until the set stabilizes
-- "always remain safe"
-  means repeated pruning of states that have bad successors until the set stabilizes
-- "stay inside this region forever on some branch"
-  means repeatedly removing states that cannot remain inside the region
-
-### CTL As A Special Case
-
-The reason this is such a good foundation is that standard CTL operators translate directly into mu-calculus:
-
-- `EX p`
-  becomes `(diamond p)`
-- `AX p`
-  becomes `(box p)`
-- `EF p`
-  becomes `(mu X (or p (diamond X)))`
-- `AF p`
-  becomes `(mu X (or p (box X)))`
-- `EG p`
-  becomes `(nu X (and p (diamond X)))`
-- `AG p`
-  becomes `(nu X (and p (box X)))`
-- `E[p U q]`
-  becomes `(mu X (or q (and p (diamond X))))`
-- `A[p U q]`
-  becomes `(mu X (or q (and p (box X))))`
-
-So CTL is not being replaced here.
-It becomes the user-facing fragment with the friendlier names, while the semantic engine underneath is the more general fixpoint logic.
-
-### Why This Feels Like LTL Territory
-
-It is reasonable to look at these formulas and think:
-"these are the kinds of things I usually use LTL for".
-
-That instinct is right in a practical sense.
-Many properties people ask for in system design sound like:
-
-- eventually something good happens
-- always something bad is prevented
-- once a request arrives, eventually a response appears
-- some loop can continue forever
-
-Those are the same kinds of temporal intuitions that lead people to LTL.
-
-The important distinction is semantic:
-
-- LTL talks about a single path at a time
-- CTL and the mu-calculus talk directly about branching futures
-
-In this repository, branching matters a lot:
-
-- scheduler choice creates alternative next steps
-- random guards create alternative next steps
-- mailbox contents create alternative next steps
-
-So a branching-time logic is a better fit than plain linear-time reasoning.
-
-The nice surprise is that the mu-calculus is expressive enough to capture many of the "eventually", "always", and "until" properties people informally think of as LTL-style requirements, while still speaking directly about the branching graph your runtime actually explores.
-
-### Practical Reading Guide
-
-When reading a raw mu-calculus formula:
-
-1. identify the atomic predicate
-   what is the local fact you care about?
-2. identify the modal direction
-   `diamond` means "some next branch", `box` means "every next branch"
-3. identify the fixpoint
-   `mu` usually means eventuality or progress
-   `nu` usually means invariance or persistence
-4. read the recursion as "keep applying this condition until it stabilizes"
-
-That is all the checker is doing in code.
-It is simple enough to implement compactly, but general enough to cover a large part of practical temporal reasoning.
-
-## Present Operators
-
-The implementation currently supports:
-
-- `not`, `and`, `or`, `implies`
-- `ex`, `ax`
-- `ef`, `af`
-- `eg`, `ag`
-- `eu`, `au`
-
-Raw mu-calculus operators currently include:
-
-- `true`, `false`
-- `not`, `and`, `or`
-- `diamond`, `box`
-- `mu`, `nu`
-- atomic predicates such as `in-state`, `data=`, and `mailbox-has`
-
-Atomic predicates currently include:
-
-- `(in-state A done "actor A is in done")`
-- `(data= A key value "actor A has the expected value")`
-- `(mailbox-has A msg "actor A currently holds the message")`
-
-Predicate forms may carry a final string argument used only as human-readable documentation. The evaluator ignores that trailing string semantically.
-
-## How The Checker Works
-
-The algorithm in this repository is a standard finite-state CTL model-checking pattern over the explored runtime graph.
-
-Step 1: build the reachable graph.
-
-- start from the initial runtime
-- execute one enabled actor step at a time
-- clone successor runtimes
-- deduplicate states by a serialized runtime key
-- record the successor relation between runtime states
-
-If a state has no enabled successors, the implementation records a self-loop labeled `deadlock`.
-That makes deadlock states explicit in the graph and keeps the temporal operators total.
-
-Step 2: evaluate formulas by computing the set of satisfying states.
-
-For each subformula, the checker computes:
-
-- the set of explored states where the subformula is true
-
-Atomic predicates are evaluated directly on each runtime state.
-Boolean operators are evaluated by ordinary set operations:
-
-- `not`
-  complement
-- `and`
-  intersection
-- `or`
-  union
-- `implies`
-  `not left or right`
-
-The temporal operators are computed from the successor graph:
-
-- `EX p`
-  mark any state with at least one successor already marked by `p`
-- `AX p`
-  mark any state whose successors are all marked by `p`
-- `EF p`
-  reduce to `E[true U p]`
-- `AF p`
-  reduce to `A[true U p]`
-- `AG p`
-  reduce to `not EF not p`
-- `EG p`
-  compute a greatest fixpoint:
-  start from states satisfying `p`, then repeatedly remove any state that cannot stay inside that set on at least one successor
-- `EU(p, q)`
-  compute a least fixpoint:
-  start from states satisfying `q`, then repeatedly add states satisfying `p` that can move to an already accepted state
-- `AU(p, q)`
-  compute a least fixpoint:
-  start from states satisfying `q`, then repeatedly add states satisfying `p` whose successors are all already accepted
-
-So the checker is not proving arbitrary mathematics.
-It is doing graph analysis on the explored transition system induced by the actor model.
-
-That is exactly why this works well here:
-
-- the graph is explicit
-- the control flow is explicit
-- the user can inspect both the model and the formulas
-- the result can be explained in ordinary "possibly/necessarily, eventually/always" language
-
-## What CTL Is Proving Here
-
-At the current stage, CTL is proving properties over the repository’s induced model, not solving theorem-proving problems over arbitrary infinite mathematics.
-
-That means:
-
-- if the reachable state space is finite and fully explored, the model-checking result is exact for that model
-- if the model is bounded or abstracted, the result applies to that abstraction
-- if the derived `become` successor relation is wrong, the result is only as good as that model
-
-This is still useful. The tool is intended to make control flow, messaging, and temporal requirements inspectable enough that a human can review the generated model rather than trusting a hidden formalization.
+The result is exact for the explored finite model. It is not a theorem about all imaginable implementations. If the model is wrong, the proof is wrong. The value is that the state machine, message topology, diagrams, and temporal formulas are all inspectable in the same artifact.
 
 # Event Log And Metrics
 

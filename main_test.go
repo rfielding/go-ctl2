@@ -598,7 +598,10 @@ func TestCompileModelRequiresActorDeclarations(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing declaration error, got nil")
 	}
-	if !strings.Contains(err.Error(), "no actor declarations") {
+	if !strings.Contains(err.Error(), "no actor instances") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Do this:") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -778,7 +781,10 @@ func TestCompileModelRejectsSendToMultiBoundRole(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected ambiguous send error, got nil")
 	}
-	if !strings.Contains(err.Error(), "use send-any") {
+	if !strings.Contains(err.Error(), "replace `send` with `send-any`") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Do this:") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1436,6 +1442,26 @@ func TestPureLispBuiltinsAndDef(t *testing.T) {
 	}
 	if got := runtime.Actors[0].Data["ys"].String(); got != "(z a b c)" {
 		t.Fatalf("expected ys=(z a b c), got %s", got)
+	}
+}
+
+func TestDefRejectsHiddenActions(t *testing.T) {
+	_, err := CompileActor(`
+		(actor A
+			(state start
+				(edge true
+					(def bad () (send B ping))
+					(become done)))
+			(state done))
+	`)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "forbidden form `send`") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "keep `def` bodies pure") {
+		t.Fatalf("error should explain what to do next: %v", err)
 	}
 }
 

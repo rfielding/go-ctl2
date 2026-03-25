@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" role="img" aria-labelledby="title desc">
+  <title id="title">CTL branching tree</title>
+  <desc id="desc">A state s branches to three successors. One branch eventually reaches q, one branch keeps p forever, and one branch violates p.</desc>
+  <defs>
+    <style>
+      .bg { fill: #fffdf8; }
+      .edge { stroke: #4b5563; stroke-width: 3; fill: none; }
+      .node { stroke: #111827; stroke-width: 3; }
+      .root { fill: #fde68a; }
+      .good { fill: #bfdbfe; }
+      .goal { fill: #bbf7d0; }
+      .bad { fill: #fecaca; }
+      .label { font: 700 22px Georgia, 'Times New Roman', serif; fill: #111827; }
+      .small { font: 500 18px Georgia, 'Times New Roman', serif; fill: #1f2937; }
+      .math { font: italic 600 24px Georgia, 'Times New Roman', serif; fill: #111827; }
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="900" height="420" rx="20"/>
+
+  <path class="edge" d="M450 90 L210 185"/>
+  <path class="edge" d="M450 90 L450 185"/>
+  <path class="edge" d="M450 90 L690 185"/>
+  <path class="edge" d="M210 215 L120 320"/>
+  <path class="edge" d="M210 215 L300 320"/>
+  <path class="edge" d="M450 215 L450 320"/>
+  <path class="edge" d="M690 215 L600 320"/>
+  <path class="edge" d="M690 215 L780 320"/>
+
+  <circle class="node root" cx="450" cy="70" r="34"/>
+  <circle class="node good" cx="210" cy="200" r="30"/>
+  <circle class="node good" cx="450" cy="200" r="30"/>
+  <circle class="node bad" cx="690" cy="200" r="30"/>
+  <circle class="node goal" cx="120" cy="340" r="28"/>
+  <circle class="node good" cx="300" cy="340" r="28"/>
+  <circle class="node good" cx="450" cy="340" r="28"/>
+  <circle class="node bad" cx="600" cy="340" r="28"/>
+  <circle class="node bad" cx="780" cy="340" r="28"/>
+
+  <text class="label" x="450" y="78" text-anchor="middle">s</text>
+  <text class="label" x="210" y="208" text-anchor="middle">t₁</text>
+  <text class="label" x="450" y="208" text-anchor="middle">t₂</text>
+  <text class="label" x="690" y="208" text-anchor="middle">t₃</text>
+  <text class="label" x="120" y="348" text-anchor="middle">q</text>
+  <text class="label" x="300" y="348" text-anchor="middle">p</text>
+  <text class="label" x="450" y="348" text-anchor="middle">p</text>
+  <text class="label" x="600" y="348" text-anchor="middle">¬p</text>
+  <text class="label" x="780" y="348" text-anchor="middle">¬p</text>
+
+  <text class="math" x="40" y="55">EX p</text>
+  <text class="small" x="40" y="83">true if some immediate child satisfies p</text>
+
+  <text class="math" x="40" y="145">EF q</text>
+  <text class="small" x="40" y="173">true here because the left branch can reach q</text>
+
+  <text class="math" x="40" y="235">AG p</text>
+  <text class="small" x="40" y="263">false here because the right branch reaches ¬p</text>
+
+  <text class="math" x="40" y="325">EG p</text>
+  <text class="small" x="40" y="353">true here because the middle branch can stay in p</text>
+
+  <text class="small" x="560" y="54">CTL reasons over the whole tree of futures, not one trace.</text>
+</svg>

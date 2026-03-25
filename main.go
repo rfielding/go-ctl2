@@ -855,6 +855,29 @@ func stripOptionalDescription(items []Value, minLen int) []Value {
 	return items
 }
 
+func adviceError(summary, advice string) error {
+	return fmt.Errorf("%s. Do this: %s", summary, advice)
+}
+
+func syntaxError(name, syntax string) error {
+	return adviceError(fmt.Sprintf("%s has the wrong shape", name), fmt.Sprintf("rewrite it as `%s`", syntax))
+}
+
+func operandError(name string, count int, example string) error {
+	word := "operand"
+	if count != 1 {
+		word = "operands"
+	}
+	return adviceError(fmt.Sprintf("%s expects %d %s", name, count, word), fmt.Sprintf("use `%s`", example))
+}
+
+func unsupportedFormError(kind, name string, supported []string) error {
+	return adviceError(
+		fmt.Sprintf("unsupported %s %q", kind, name),
+		fmt.Sprintf("use one of %s", strings.Join(supported, ", ")),
+	)
+}
+
 func normalizePredicateLiteral(v Value) Value {
 	if isListHead(v, "quote") && len(v.Items) == 2 {
 		return cloneValue(v.Items[1])
@@ -864,7 +887,7 @@ func normalizePredicateLiteral(v Value) Value {
 
 func buildCTL(form Value) (CTLFormula, error) {
 	if !isList(form) || len(form.Items) == 0 {
-		return CTLFormula{}, fmt.Errorf("ctl formula must be a non-empty list")
+		return CTLFormula{}, adviceError("CTL formulas must be non-empty lists", "wrap the operator and its operands in parentheses, for example `(ef (in-state Server done))`")
 	}
 
 	head, err := expectSymbol(form.Items[0], "ctl operator")
@@ -875,7 +898,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "not":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, fmt.Errorf("%s expects one operand", head)
+			return CTLFormula{}, operandError(head, 1, "(not p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -885,7 +908,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "and":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
+			return CTLFormula{}, operandError(head, 2, "(and p q)")
 		}
 		left, err := buildCTL(items[1])
 		if err != nil {
@@ -899,7 +922,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "or":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
+			return CTLFormula{}, operandError(head, 2, "(or p q)")
 		}
 		left, err := buildCTL(items[1])
 		if err != nil {
@@ -913,7 +936,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "implies", "->":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return CTLFormula{}, fmt.Errorf("%s expects two operands", head)
+			return CTLFormula{}, operandError(head, 2, "(implies p q)")
 		}
 		left, err := buildCTL(items[1])
 		if err != nil {
@@ -927,7 +950,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "ex":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, fmt.Errorf("ex expects one operand")
+			return CTLFormula{}, operandError("ex", 1, "(ex p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -937,7 +960,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "ax":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, fmt.Errorf("ax expects one operand")
+			return CTLFormula{}, operandError("ax", 1, "(ax p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -947,7 +970,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "ef":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, fmt.Errorf("ef expects one operand")
+			return CTLFormula{}, operandError("ef", 1, "(ef p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -957,7 +980,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "af":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, fmt.Errorf("af expects one operand")
+			return CTLFormula{}, operandError("af", 1, "(af p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -967,7 +990,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "eg":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, fmt.Errorf("eg expects one operand")
+			return CTLFormula{}, operandError("eg", 1, "(eg p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -977,7 +1000,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "ag":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, fmt.Errorf("ag expects one operand")
+			return CTLFormula{}, operandError("ag", 1, "(ag p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -987,7 +1010,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "eu":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return CTLFormula{}, fmt.Errorf("eu expects two operands")
+			return CTLFormula{}, operandError("eu", 2, "(eu p q)")
 		}
 		left, err := buildCTL(items[1])
 		if err != nil {
@@ -1001,7 +1024,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "au":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return CTLFormula{}, fmt.Errorf("au expects two operands")
+			return CTLFormula{}, operandError("au", 2, "(au p q)")
 		}
 		left, err := buildCTL(items[1])
 		if err != nil {
@@ -1015,7 +1038,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "in-state":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return CTLFormula{}, fmt.Errorf("in-state expects actor and state")
+			return CTLFormula{}, syntaxError("in-state", "(in-state ActorName StateName)")
 		}
 		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
@@ -1029,7 +1052,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "data=":
 		items := stripOptionalDescription(form.Items, 4)
 		if len(items) != 4 {
-			return CTLFormula{}, fmt.Errorf("data= expects actor, key, value")
+			return CTLFormula{}, syntaxError("data=", "(data= ActorName key value)")
 		}
 		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
@@ -1043,7 +1066,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 	case "mailbox-has":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return CTLFormula{}, fmt.Errorf("mailbox-has expects actor and message")
+			return CTLFormula{}, syntaxError("mailbox-has", "(mailbox-has ActorName message)")
 		}
 		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
@@ -1051,7 +1074,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 		}
 		return Atom(MailboxHas(actor, normalizePredicateLiteral(items[2]))), nil
 	default:
-		return CTLFormula{}, fmt.Errorf("unsupported ctl operator %q", head)
+		return CTLFormula{}, unsupportedFormError("CTL operator", head, []string{"`not`", "`and`", "`or`", "`implies`", "`ex`", "`ax`", "`ef`", "`af`", "`eg`", "`ag`", "`eu`", "`au`", "`in-state`", "`data=`", "`mailbox-has`"})
 	}
 }
 
@@ -1067,7 +1090,7 @@ func buildMu(form Value) (MuFormula, error) {
 		}
 	}
 	if !isList(form) || len(form.Items) == 0 {
-		return MuFormula{}, fmt.Errorf("mu formula must be a symbol or non-empty list")
+		return MuFormula{}, adviceError("modal mu-calculus formulas must be symbols or non-empty lists", "write a variable like `X`, a constant like `true`, or a list such as `(mu X (or p (diamond X)))`")
 	}
 
 	head, err := expectSymbol(form.Items[0], "mu operator")
@@ -1078,7 +1101,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "not":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return MuFormula{}, fmt.Errorf("not expects one operand")
+			return MuFormula{}, operandError("not", 1, "(not p)")
 		}
 		inner, err := buildMu(items[1])
 		if err != nil {
@@ -1088,7 +1111,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "and":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return MuFormula{}, fmt.Errorf("and expects two operands")
+			return MuFormula{}, operandError("and", 2, "(and p q)")
 		}
 		left, err := buildMu(items[1])
 		if err != nil {
@@ -1102,7 +1125,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "or":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return MuFormula{}, fmt.Errorf("or expects two operands")
+			return MuFormula{}, operandError("or", 2, "(or p q)")
 		}
 		left, err := buildMu(items[1])
 		if err != nil {
@@ -1116,7 +1139,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "diamond":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return MuFormula{}, fmt.Errorf("diamond expects one operand")
+			return MuFormula{}, operandError("diamond", 1, "(diamond p)")
 		}
 		inner, err := buildMu(items[1])
 		if err != nil {
@@ -1126,7 +1149,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "box":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return MuFormula{}, fmt.Errorf("box expects one operand")
+			return MuFormula{}, operandError("box", 1, "(box p)")
 		}
 		inner, err := buildMu(items[1])
 		if err != nil {
@@ -1136,7 +1159,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "mu":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return MuFormula{}, fmt.Errorf("mu expects a variable and body")
+			return MuFormula{}, syntaxError("mu", "(mu X body)")
 		}
 		name, err := expectSymbol(items[1], "mu variable")
 		if err != nil {
@@ -1150,7 +1173,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "nu":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return MuFormula{}, fmt.Errorf("nu expects a variable and body")
+			return MuFormula{}, syntaxError("nu", "(nu X body)")
 		}
 		name, err := expectSymbol(items[1], "nu variable")
 		if err != nil {
@@ -1164,7 +1187,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "in-state":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return MuFormula{}, fmt.Errorf("in-state expects actor and state")
+			return MuFormula{}, syntaxError("in-state", "(in-state ActorName StateName)")
 		}
 		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
@@ -1178,7 +1201,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "data=":
 		items := stripOptionalDescription(form.Items, 4)
 		if len(items) != 4 {
-			return MuFormula{}, fmt.Errorf("data= expects actor, key, value")
+			return MuFormula{}, syntaxError("data=", "(data= ActorName key value)")
 		}
 		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
@@ -1192,7 +1215,7 @@ func buildMu(form Value) (MuFormula, error) {
 	case "mailbox-has":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return MuFormula{}, fmt.Errorf("mailbox-has expects actor and message")
+			return MuFormula{}, syntaxError("mailbox-has", "(mailbox-has ActorName message)")
 		}
 		actor, err := expectSymbol(items[1], "actor name")
 		if err != nil {
@@ -1200,7 +1223,7 @@ func buildMu(form Value) (MuFormula, error) {
 		}
 		return MuAtomFormula(MailboxHas(actor, normalizePredicateLiteral(items[2]))), nil
 	default:
-		return MuFormula{}, fmt.Errorf("unsupported mu operator %q", head)
+		return MuFormula{}, unsupportedFormError("mu operator", head, []string{"`true`", "`false`", "`not`", "`and`", "`or`", "`diamond`", "`box`", "`mu`", "`nu`", "`in-state`", "`data=`", "`mailbox-has`"})
 	}
 }
 
@@ -1680,11 +1703,11 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 			}
 			return rt.DiceValue < 0.5, nil
 		default:
-			return false, fmt.Errorf("unsupported guard symbol %q", form.Text)
+			return false, unsupportedFormError("guard symbol", form.Text, []string{"`true`", "`dice`"})
 		}
 	}
 	if !isList(form) || len(form.Items) == 0 {
-		return false, fmt.Errorf("unsupported guard %s", form.String())
+		return false, adviceError(fmt.Sprintf("unsupported guard %s", form.String()), "write a guard symbol like `true` or a guard list such as `(and (mailbox req) (data> count 0))`")
 	}
 	head, err := expectSymbol(form.Items[0], "guard operator")
 	if err != nil {
@@ -1694,7 +1717,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "mailbox":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return false, fmt.Errorf("mailbox guard must be (mailbox message)")
+			return false, syntaxError("mailbox guard", "(mailbox message)")
 		}
 		want := items[1]
 		if offered != nil && offered.Equal(want) {
@@ -1730,7 +1753,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "not":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return false, fmt.Errorf("%s guard needs one operand", head)
+			return false, operandError(head, 1, "(not guard)")
 		}
 		ok, err := rt.evalGuardSpec(items[1], actor, offered)
 		if err != nil {
@@ -1740,7 +1763,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "implies", "->":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return false, fmt.Errorf("%s guard needs two operands", head)
+			return false, operandError(head, 2, "(implies left right)")
 		}
 		left, err := rt.evalGuardSpec(items[1], actor, offered)
 		if err != nil {
@@ -1753,7 +1776,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "dice-range":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return false, fmt.Errorf("dice-range guard must be (dice-range low high)")
+			return false, syntaxError("dice-range guard", "(dice-range low high)")
 		}
 		if rt.Dice == nil {
 			return true, nil
@@ -1770,7 +1793,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "dice<":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return false, fmt.Errorf("dice< guard must be (dice< high)")
+			return false, syntaxError("dice< guard", "(dice< high)")
 		}
 		if rt.Dice == nil {
 			return true, nil
@@ -1783,7 +1806,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "dice>=":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return false, fmt.Errorf("dice>= guard must be (dice>= low)")
+			return false, syntaxError("dice>= guard", "(dice>= low)")
 		}
 		if rt.Dice == nil {
 			return true, nil
@@ -1796,7 +1819,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "data=":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return false, fmt.Errorf("data= guard must be (data= key value)")
+			return false, syntaxError("data= guard", "(data= key value)")
 		}
 		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
@@ -1806,7 +1829,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 	case "data>":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return false, fmt.Errorf("data> guard must be (data> key value)")
+			return false, syntaxError("data> guard", "(data> key value)")
 		}
 		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
@@ -1822,7 +1845,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 		}
 		return got > want, nil
 	default:
-		return false, fmt.Errorf("unsupported guard form %q", head)
+		return false, unsupportedFormError("guard form", head, []string{"`mailbox`", "`and`", "`or`", "`not`", "`implies`", "`dice-range`", "`dice<`", "`dice>=`", "`data=`", "`data>`"})
 	}
 }
 
@@ -1881,7 +1904,7 @@ func MustCompileModel(src string) *RequirementsModel {
 
 func buildActor(form Value) (*Actor, error) {
 	if !isListHead(form, "actor") || len(form.Items) < 3 {
-		return nil, fmt.Errorf("actor form must be (actor name state...)")
+		return nil, syntaxError("actor", "(actor RoleName item...)")
 	}
 	name, err := expectSymbol(form.Items[1], "actor name")
 	if err != nil {
@@ -1904,7 +1927,7 @@ func buildActor(form Value) (*Actor, error) {
 			actor.States = append(actor.States, states...)
 		case isListHead(item, "data"):
 			if len(item.Items) != 3 {
-				return nil, fmt.Errorf("actor %s: data form must be (data key value)", name)
+				return nil, fmt.Errorf("actor %s: %w", name, syntaxError("data", "(data key value)"))
 			}
 			key, err := expectSymbol(item.Items[1], "data key")
 			if err != nil {
@@ -1912,11 +1935,11 @@ func buildActor(form Value) (*Actor, error) {
 			}
 			actor.Data[key] = cloneValue(item.Items[2])
 		default:
-			return nil, fmt.Errorf("actor %s: actor item must be state or data", name)
+			return nil, fmt.Errorf("actor %s: %w", name, adviceError("actor items must be `state` or `data` forms", "move helper declarations inside actions with `def`, and keep the actor body as `(data ...)` or `(state ...)` only"))
 		}
 	}
 	if len(actor.States) == 0 {
-		return nil, fmt.Errorf("actor %s: no states", name)
+		return nil, fmt.Errorf("actor %s: %w", name, adviceError("actor has no states", "declare at least one `(state Name ...)`; the first state becomes the initial control location"))
 	}
 	actor.Data["state"] = Symbol(actor.States[0].Name)
 	return actor, nil
@@ -1924,7 +1947,7 @@ func buildActor(form Value) (*Actor, error) {
 
 func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 	if !isListHead(form, "model") || len(form.Items) < 2 {
-		return nil, fmt.Errorf("model form must be (model item...)")
+		return nil, syntaxError("model", "(model item...)")
 	}
 	model := &RequirementsModel{Spec: form}
 	actorTypes := map[string]*Actor{}
@@ -1936,7 +1959,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 				return nil, err
 			}
 			if _, exists := actorTypes[actor.Name]; exists {
-				return nil, fmt.Errorf("duplicate actor role %s", actor.Name)
+				return nil, adviceError(fmt.Sprintf("duplicate actor role %s", actor.Name), "rename one role or merge their states into a single `(actor RoleName ...)` block")
 			}
 			actorTypes[actor.Name] = actor
 			model.ActorTypes = append(model.ActorTypes, actor)
@@ -1959,17 +1982,17 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 			}
 			model.Plots = append(model.Plots, plot)
 		default:
-			return nil, fmt.Errorf("model item must be actor, instance, assert, or xyplot")
+			return nil, adviceError("model items must be `actor`, `instance`, `assert`, or `xyplot` forms", "move any other forms inside an actor state or inside a supported top-level form")
 		}
 	}
 	if len(model.Declarations) == 0 {
-		return nil, fmt.Errorf("model: no actor declarations")
+		return nil, adviceError("model has no actor instances", "add at least one `(instance Name Role ...)` so the runtime has concrete actors to explore")
 	}
 	seenNames := map[string]bool{}
 	declarationsByName := map[string]ActorDeclaration{}
 	for _, decl := range model.Declarations {
 		if seenNames[decl.Name] {
-			return nil, fmt.Errorf("duplicate actor name %s", decl.Name)
+			return nil, adviceError(fmt.Sprintf("duplicate actor name %s", decl.Name), "give each `(instance ...)` a unique concrete name")
 		}
 		seenNames[decl.Name] = true
 		declarationsByName[decl.Name] = decl
@@ -1977,7 +2000,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 	for _, decl := range model.Declarations {
 		actorType, ok := actorTypes[decl.Role]
 		if !ok {
-			return nil, fmt.Errorf("instance %s references unknown actor role %s", decl.Name, decl.Role)
+			return nil, adviceError(fmt.Sprintf("instance %s references unknown actor role %s", decl.Name, decl.Role), "declare that role with `(actor RoleName ...)` before using it in `(instance ...)`")
 		}
 		requiredPeerRoles, err := collectActorPeerRoles(actorType)
 		if err != nil {
@@ -1997,7 +2020,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 		model.Actors = append(model.Actors, actor)
 	}
 	if len(model.Actors) == 0 {
-		return nil, fmt.Errorf("model: no actors")
+		return nil, adviceError("model produced no runtime actors", "check that each `(instance Name Role ...)` references a declared role and survived validation")
 	}
 	return model, nil
 }
@@ -2048,7 +2071,7 @@ func walkSendTargets(form Value, visit func(string)) error {
 		}
 	case "send", "send-any":
 		if len(form.Items) != 3 {
-			return fmt.Errorf("%s must be (%s role message)", head, head)
+			return syntaxError(head, fmt.Sprintf("(%s role message)", head))
 		}
 		role, err := expectSymbol(form.Items[1], "send target role")
 		if err != nil {
@@ -2064,25 +2087,25 @@ func validateActorRoleBindings(decl ActorDeclaration, actorType *Actor, actorTyp
 	for _, role := range requiredPeerRoles {
 		required[role] = true
 		if _, ok := actorTypes[role]; !ok {
-			return fmt.Errorf("actor role %s sends to unknown peer role %s", actorType.Name, role)
+			return adviceError(fmt.Sprintf("actor role %s sends to unknown peer role %s", actorType.Name, role), "declare the peer role with `(actor PeerRole ...)` or change the send target role name")
 		}
 		targetInstances, ok := decl.RoleBindings[role]
 		if !ok || len(targetInstances) == 0 {
-			return fmt.Errorf("instance %s must fill peer role %s", decl.Name, role)
+			return adviceError(fmt.Sprintf("instance %s must fill peer role %s", decl.Name, role), fmt.Sprintf("add a binding like `(%s TargetInstance)` inside that `(instance %s ...)` form", role, decl.Name))
 		}
 		for _, targetInstance := range targetInstances {
 			targetDecl, ok := declarations[targetInstance]
 			if !ok {
-				return fmt.Errorf("instance %s fills peer role %s with unknown instance %s", decl.Name, role, targetInstance)
+				return adviceError(fmt.Sprintf("instance %s fills peer role %s with unknown instance %s", decl.Name, role, targetInstance), "declare that target with its own `(instance Name Role ...)` form")
 			}
 			if targetDecl.Role != role {
-				return fmt.Errorf("instance %s fills peer role %s with instance %s playing role %s", decl.Name, role, targetInstance, targetDecl.Role)
+				return adviceError(fmt.Sprintf("instance %s fills peer role %s with instance %s playing role %s", decl.Name, role, targetInstance, targetDecl.Role), fmt.Sprintf("bind `%s` to an instance whose declared role is `%s`", role, role))
 			}
 		}
 	}
 	for role := range decl.RoleBindings {
 		if !required[role] {
-			return fmt.Errorf("instance %s provides unused peer role fill %s", decl.Name, role)
+			return adviceError(fmt.Sprintf("instance %s provides unused peer role fill %s", decl.Name, role), "remove that binding or add a matching `send` or `send-any` that uses the role")
 		}
 	}
 	return nil
@@ -2118,7 +2141,7 @@ func resolveSendTargets(form Value, bindings map[string][]string) (Value, error)
 	switch head {
 	case "send":
 		if len(form.Items) != 3 {
-			return Value{}, fmt.Errorf("send must be (send role message)")
+			return Value{}, syntaxError("send", "(send role message)")
 		}
 		role, err := expectSymbol(form.Items[1], "peer role")
 		if err != nil {
@@ -2126,15 +2149,15 @@ func resolveSendTargets(form Value, bindings map[string][]string) (Value, error)
 		}
 		targets, ok := bindings[role]
 		if !ok || len(targets) == 0 {
-			return Value{}, fmt.Errorf("unresolved peer role %s", role)
+			return Value{}, adviceError(fmt.Sprintf("unresolved peer role %s", role), "add that role to the enclosing `(instance ...)` bindings")
 		}
 		if len(targets) != 1 {
-			return Value{}, fmt.Errorf("peer role %s resolves to %d instances; use send-any", role, len(targets))
+			return Value{}, adviceError(fmt.Sprintf("peer role %s resolves to %d instances", role, len(targets)), "replace `send` with `send-any` when a role can map to multiple concrete actors")
 		}
 		return List(Symbol("send"), Symbol(targets[0]), cloneValue(form.Items[2])), nil
 	case "send-any":
 		if len(form.Items) != 3 {
-			return Value{}, fmt.Errorf("send-any must be (send-any role message)")
+			return Value{}, syntaxError("send-any", "(send-any role message)")
 		}
 		role, err := expectSymbol(form.Items[1], "peer role")
 		if err != nil {
@@ -2142,7 +2165,7 @@ func resolveSendTargets(form Value, bindings map[string][]string) (Value, error)
 		}
 		targets, ok := bindings[role]
 		if !ok || len(targets) == 0 {
-			return Value{}, fmt.Errorf("unresolved peer role %s", role)
+			return Value{}, adviceError(fmt.Sprintf("unresolved peer role %s", role), "add that role to the enclosing `(instance ...)` bindings")
 		}
 		items := []Value{Symbol("send-any")}
 		for _, target := range targets {
@@ -2168,7 +2191,7 @@ func resolveSendTargets(form Value, bindings map[string][]string) (Value, error)
 
 func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 	if !isListHead(form, "instance") || len(form.Items) < 3 {
-		return ActorDeclaration{}, fmt.Errorf("instance form must be (instance name role (PeerRole InstanceName...)...)")
+		return ActorDeclaration{}, syntaxError("instance", "(instance Name Role (PeerRole Target...)...)")
 	}
 	name, err := expectSymbol(form.Items[1], "actor name")
 	if err != nil {
@@ -2181,14 +2204,14 @@ func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 	bindings := map[string][]string{}
 	for _, item := range form.Items[3:] {
 		if !isList(item) || len(item.Items) < 2 {
-			return ActorDeclaration{}, fmt.Errorf("instance binding must be (PeerRole InstanceName...)")
+			return ActorDeclaration{}, syntaxError("instance binding", "(PeerRole InstanceName...)")
 		}
 		peerRole, err := expectSymbol(item.Items[0], "peer role")
 		if err != nil {
 			return ActorDeclaration{}, err
 		}
 		if _, exists := bindings[peerRole]; exists {
-			return ActorDeclaration{}, fmt.Errorf("instance %s repeats binding for peer role %s", name, peerRole)
+			return ActorDeclaration{}, adviceError(fmt.Sprintf("instance %s repeats binding for peer role %s", name, peerRole), "keep one binding per peer role and list all target instances inside it")
 		}
 		targets := make([]string, 0, len(item.Items)-1)
 		seen := map[string]bool{}
@@ -2198,7 +2221,7 @@ func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 				return ActorDeclaration{}, err
 			}
 			if seen[target] {
-				return ActorDeclaration{}, fmt.Errorf("instance %s repeats peer instance %s for role %s", name, target, peerRole)
+				return ActorDeclaration{}, adviceError(fmt.Sprintf("instance %s repeats peer instance %s for role %s", name, target, peerRole), "list each concrete peer instance only once per role binding")
 			}
 			seen[target] = true
 			targets = append(targets, target)
@@ -2215,7 +2238,7 @@ func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 
 func buildAssertion(form Value) (Assertion, error) {
 	if !isListHead(form, "assert") || len(form.Items) != 2 {
-		return Assertion{}, fmt.Errorf("assert form must be (assert ctl-formula)")
+		return Assertion{}, syntaxError("assert", "(assert ctl-formula)")
 	}
 	formula, err := buildCTL(form.Items[1])
 	if err != nil {
@@ -2226,7 +2249,7 @@ func buildAssertion(form Value) (Assertion, error) {
 
 func buildXYPlot(form Value) (XYPlot, error) {
 	if !isListHead(form, "xyplot") || len(form.Items) < 2 {
-		return XYPlot{}, fmt.Errorf("xyplot form must be (xyplot name option...)")
+		return XYPlot{}, syntaxError("xyplot", "(xyplot name option...)")
 	}
 	name, err := expectSymbol(form.Items[1], "xyplot name")
 	if err != nil {
@@ -2241,7 +2264,7 @@ func buildXYPlot(form Value) (XYPlot, error) {
 	}
 	for _, item := range form.Items[2:] {
 		if !isList(item) || len(item.Items) == 0 {
-			return XYPlot{}, fmt.Errorf("xyplot option must be a non-empty list")
+			return XYPlot{}, adviceError("xyplot options must be non-empty lists", "rewrite each option as a list such as `(title \"Queue backlog\")` or `(steps 100)`")
 		}
 		head, err := expectSymbol(item.Items[0], "xyplot option")
 		if err != nil {
@@ -2250,12 +2273,12 @@ func buildXYPlot(form Value) (XYPlot, error) {
 		switch head {
 		case "title":
 			if len(item.Items) != 2 || item.Items[1].Kind != KindString {
-				return XYPlot{}, fmt.Errorf("xyplot title must be (title \"...\")")
+				return XYPlot{}, syntaxError("xyplot title", "(title \"...\")")
 			}
 			plot.Title = item.Items[1].Text
 		case "steps":
 			if len(item.Items) != 2 {
-				return XYPlot{}, fmt.Errorf("xyplot steps must be (steps n)")
+				return XYPlot{}, syntaxError("xyplot steps", "(steps n)")
 			}
 			steps, err := valueInt(item.Items[1])
 			if err != nil {
@@ -2264,7 +2287,7 @@ func buildXYPlot(form Value) (XYPlot, error) {
 			plot.Steps = steps
 		case "metric":
 			if len(item.Items) != 2 {
-				return XYPlot{}, fmt.Errorf("xyplot metric must be (metric name)")
+				return XYPlot{}, syntaxError("xyplot metric", "(metric name)")
 			}
 			metric, err := expectSymbol(item.Items[1], "xyplot metric")
 			if err != nil {
@@ -2273,11 +2296,11 @@ func buildXYPlot(form Value) (XYPlot, error) {
 			switch metric {
 			case "sent-minus-received", "send-count", "receive-count":
 			default:
-				return XYPlot{}, fmt.Errorf("unsupported xyplot metric %q", metric)
+				return XYPlot{}, unsupportedFormError("xyplot metric", metric, []string{"`sent-minus-received`", "`send-count`", "`receive-count`"})
 			}
 			plot.Metric = metric
 		default:
-			return XYPlot{}, fmt.Errorf("unsupported xyplot option %q", head)
+			return XYPlot{}, unsupportedFormError("xyplot option", head, []string{"`title`", "`steps`", "`metric`"})
 		}
 	}
 	return plot, nil
@@ -2285,7 +2308,7 @@ func buildXYPlot(form Value) (XYPlot, error) {
 
 func buildState(form Value) ([]State, error) {
 	if !isListHead(form, "state") || len(form.Items) < 2 {
-		return nil, fmt.Errorf("state form must be (state name ...)")
+		return nil, syntaxError("state", "(state Name edge...)")
 	}
 	name, err := expectSymbol(form.Items[1], "state name")
 	if err != nil {
@@ -2485,7 +2508,7 @@ func collectBecomeStates(form Value) ([]string, error) {
 		return nil, err
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("edge must contain at least one become")
+		return nil, adviceError("edge has no reachable `become`", "end every control-flow branch with `(become StateName)` so the next state is explicit")
 	}
 	return out, nil
 }
@@ -2513,7 +2536,7 @@ func walkBecomeStates(form Value, out *[]string, seen map[string]bool) error {
 		}
 	case "become":
 		if len(form.Items) != 2 {
-			return fmt.Errorf("become must be (become state)")
+			return syntaxError("become", "(become StateName)")
 		}
 		name, err := expectSymbol(form.Items[1], "state name")
 		if err != nil {
@@ -2568,7 +2591,7 @@ func validateNoNestedSendRecv(form Value) error {
 	}
 	switch head {
 	case "send", "send-any", "recv":
-		return fmt.Errorf("%s must be the first action after the edge condition", head)
+		return adviceError(fmt.Sprintf("%s must be the first action after the edge condition", head), "move communication to the front of the edge body, or split the logic into extra states so send/recv happens before local work")
 	case "do":
 		for _, item := range form.Items[1:] {
 			if err := validateNoNestedSendRecv(item); err != nil {
@@ -2580,6 +2603,32 @@ func validateNoNestedSendRecv(form Value) error {
 			if err := validateNoNestedSendRecv(item); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func validatePureFunctionBody(form Value) error {
+	if !isList(form) || len(form.Items) == 0 {
+		return nil
+	}
+	if isListHead(form, "quote") {
+		return nil
+	}
+	head, err := expectSymbol(form.Items[0], "function body operator")
+	if err != nil {
+		return err
+	}
+	switch head {
+	case "send", "send-any", "recv", "become", "do", "if", "set", "add", "sub", "md5", "rsa-raw", "cryptorandom", "sample-exponential", "def":
+		return adviceError(
+			fmt.Sprintf("function body uses forbidden form `%s`", head),
+			"keep `def` bodies pure and move messaging, state changes, and other actions into the surrounding `edge` body",
+		)
+	}
+	for _, item := range form.Items {
+		if err := validatePureFunctionBody(item); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2614,12 +2663,12 @@ func compileGuard(form Value) (GuardFunc, error) {
 				return rt.DiceValue < 0.5
 			}, nil
 		default:
-			return nil, fmt.Errorf("unsupported guard symbol %q", form.Text)
+			return nil, unsupportedFormError("guard symbol", form.Text, []string{"`true`", "`dice`"})
 		}
 	}
 
 	if !isList(form) || len(form.Items) == 0 {
-		return nil, fmt.Errorf("unsupported guard %s", form.String())
+		return nil, adviceError(fmt.Sprintf("unsupported guard %s", form.String()), "write a guard symbol like `true` or a guard list such as `(and (mailbox req) (data> count 0))`")
 	}
 
 	head, err := expectSymbol(form.Items[0], "guard operator")
@@ -2630,7 +2679,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "mailbox":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return nil, fmt.Errorf("mailbox guard must be (mailbox message)")
+			return nil, syntaxError("mailbox guard", "(mailbox message)")
 		}
 		want := items[1]
 		return func(rt *Runtime, actor *Actor) bool {
@@ -2644,7 +2693,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "and":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) < 3 {
-			return nil, fmt.Errorf("%s guard needs at least two operands", head)
+			return nil, adviceError("and guard needs at least two operands", "write `(and guard1 guard2 ...)` with two or more child guards")
 		}
 		var guards []GuardFunc
 		for _, item := range items[1:] {
@@ -2665,7 +2714,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "or":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) < 3 {
-			return nil, fmt.Errorf("%s guard needs at least two operands", head)
+			return nil, adviceError("or guard needs at least two operands", "write `(or guard1 guard2 ...)` with two or more child guards")
 		}
 		var guards []GuardFunc
 		for _, item := range items[1:] {
@@ -2686,7 +2735,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "not":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return nil, fmt.Errorf("%s guard needs one operand", head)
+			return nil, operandError(head, 1, "(not guard)")
 		}
 		inner, err := compileGuard(items[1])
 		if err != nil {
@@ -2698,7 +2747,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "implies", "->":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return nil, fmt.Errorf("%s guard needs two operands", head)
+			return nil, operandError(head, 2, "(implies left right)")
 		}
 		left, err := compileGuard(items[1])
 		if err != nil {
@@ -2714,7 +2763,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "dice-range":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return nil, fmt.Errorf("dice-range guard must be (dice-range low high)")
+			return nil, syntaxError("dice-range guard", "(dice-range low high)")
 		}
 		low, err := valueFloat(items[1])
 		if err != nil {
@@ -2733,7 +2782,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "dice<":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return nil, fmt.Errorf("dice< guard must be (dice< high)")
+			return nil, syntaxError("dice< guard", "(dice< high)")
 		}
 		high, err := valueFloat(items[1])
 		if err != nil {
@@ -2748,7 +2797,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "dice>=":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return nil, fmt.Errorf("dice>= guard must be (dice>= low)")
+			return nil, syntaxError("dice>= guard", "(dice>= low)")
 		}
 		low, err := valueFloat(items[1])
 		if err != nil {
@@ -2763,7 +2812,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "data=":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return nil, fmt.Errorf("data= guard must be (data= key value)")
+			return nil, syntaxError("data= guard", "(data= key value)")
 		}
 		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
@@ -2776,7 +2825,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 	case "data>":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
-			return nil, fmt.Errorf("data> guard must be (data> key value)")
+			return nil, syntaxError("data> guard", "(data> key value)")
 		}
 		key, err := expectSymbol(items[1], "data key")
 		if err != nil {
@@ -2791,13 +2840,13 @@ func compileGuard(form Value) (GuardFunc, error) {
 			return err == nil && got > want
 		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported guard form %q", head)
+		return nil, unsupportedFormError("guard form", head, []string{"`mailbox`", "`and`", "`or`", "`not`", "`implies`", "`dice-range`", "`dice<`", "`dice>=`", "`data=`", "`data>`"})
 	}
 }
 
 func compileAction(form Value) (ActionFunc, error) {
 	if !isList(form) || len(form.Items) == 0 {
-		return nil, fmt.Errorf("unsupported action %s", form.String())
+		return nil, adviceError(fmt.Sprintf("unsupported action %s", form.String()), "write an action list headed by `send`, `recv`, `become`, `set`, `if`, `do`, or another documented action form")
 	}
 
 	head, err := expectSymbol(form.Items[0], "action operator")
@@ -2807,7 +2856,7 @@ func compileAction(form Value) (ActionFunc, error) {
 	switch head {
 	case "do":
 		if len(form.Items) < 2 {
-			return nil, fmt.Errorf("do needs at least one action")
+			return nil, adviceError("do needs at least one action", "write `(do action1 action2 ...)` or remove the empty `do` wrapper")
 		}
 		var actions []ActionFunc
 		for _, item := range form.Items[1:] {
@@ -2827,7 +2876,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "send":
 		if len(form.Items) != 3 {
-			return nil, fmt.Errorf("send must be (send actor message)")
+			return nil, syntaxError("send", "(send ActorName message)")
 		}
 		to, err := expectSymbol(form.Items[1], "send target")
 		if err != nil {
@@ -2836,7 +2885,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		return Send(to, form.Items[2]), nil
 	case "send-any":
 		if len(form.Items) < 3 {
-			return nil, fmt.Errorf("send-any must be (send-any actor... message)")
+			return nil, syntaxError("send-any", "(send-any ActorName... message)")
 		}
 		targets := make([]string, 0, len(form.Items)-2)
 		for _, item := range form.Items[1 : len(form.Items)-1] {
@@ -2849,7 +2898,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		return SendAny(targets, form.Items[len(form.Items)-1]), nil
 	case "recv":
 		if len(form.Items) != 2 {
-			return nil, fmt.Errorf("recv must be (recv variable)")
+			return nil, syntaxError("recv", "(recv variable)")
 		}
 		name, err := expectSymbol(form.Items[1], "recv variable")
 		if err != nil {
@@ -2858,7 +2907,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		return ReceiveInto(name), nil
 	case "become":
 		if len(form.Items) != 2 {
-			return nil, fmt.Errorf("become must be (become state)")
+			return nil, syntaxError("become", "(become StateName)")
 		}
 		name, err := expectSymbol(form.Items[1], "state name")
 		if err != nil {
@@ -2870,7 +2919,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "set":
 		if len(form.Items) != 3 {
-			return nil, fmt.Errorf("set must be (set key value)")
+			return nil, syntaxError("set", "(set key value)")
 		}
 		key, err := expectSymbol(form.Items[1], "set key")
 		if err != nil {
@@ -2883,7 +2932,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "def":
 		if len(form.Items) != 4 {
-			return nil, fmt.Errorf("def must be (def name (params...) body)")
+			return nil, syntaxError("def", "(def name (params...) body)")
 		}
 		name, err := expectSymbol(form.Items[1], "function name")
 		if err != nil {
@@ -2891,7 +2940,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}
 		paramsForm := form.Items[2]
 		if !isList(paramsForm) {
-			return nil, fmt.Errorf("def params must be a list")
+			return nil, adviceError("def parameter list must be a list", "rewrite the helper as `(def name (p1 p2 ...) body)`")
 		}
 		params := make([]string, 0, len(paramsForm.Items))
 		for _, item := range paramsForm.Items {
@@ -2902,6 +2951,9 @@ func compileAction(form Value) (ActionFunc, error) {
 			params = append(params, param)
 		}
 		body := cloneValue(form.Items[3])
+		if err := validatePureFunctionBody(body); err != nil {
+			return nil, err
+		}
 		return func(_ *Runtime, actor *Actor) error {
 			if actor.Defs == nil {
 				actor.Defs = map[string]FunctionDef{}
@@ -2914,7 +2966,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "if":
 		if len(form.Items) != 3 && len(form.Items) != 4 {
-			return nil, fmt.Errorf("if must be (if guard then [else])")
+			return nil, syntaxError("if", "(if guard then [else])")
 		}
 		cond, err := compileGuard(form.Items[1])
 		if err != nil {
@@ -2942,7 +2994,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "add":
 		if len(form.Items) != 3 {
-			return nil, fmt.Errorf("add must be (add key value)")
+			return nil, syntaxError("add", "(add key value)")
 		}
 		key, err := expectSymbol(form.Items[1], "add key")
 		if err != nil {
@@ -2963,7 +3015,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "sub":
 		if len(form.Items) != 3 {
-			return nil, fmt.Errorf("sub must be (sub key value)")
+			return nil, syntaxError("sub", "(sub key value)")
 		}
 		key, err := expectSymbol(form.Items[1], "sub key")
 		if err != nil {
@@ -2984,7 +3036,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "md5":
 		if len(form.Items) != 3 {
-			return nil, fmt.Errorf("md5 must be (md5 out source)")
+			return nil, syntaxError("md5", "(md5 out source)")
 		}
 		out, err := expectSymbol(form.Items[1], "md5 out key")
 		if err != nil {
@@ -2999,7 +3051,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "rsa-raw":
 		if len(form.Items) != 5 {
-			return nil, fmt.Errorf("rsa-raw must be (rsa-raw out modulus exponent message)")
+			return nil, syntaxError("rsa-raw", "(rsa-raw out modulus exponent message)")
 		}
 		out, err := expectSymbol(form.Items[1], "rsa out key")
 		if err != nil {
@@ -3027,7 +3079,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "cryptorandom":
 		if len(form.Items) != 3 {
-			return nil, fmt.Errorf("cryptorandom must be (cryptorandom out bytes)")
+			return nil, syntaxError("cryptorandom", "(cryptorandom out bytes)")
 		}
 		out, err := expectSymbol(form.Items[1], "cryptorandom out key")
 		if err != nil {
@@ -3038,7 +3090,7 @@ func compileAction(form Value) (ActionFunc, error) {
 			return nil, err
 		}
 		if nbytes < 0 {
-			return nil, fmt.Errorf("cryptorandom byte count must be non-negative")
+			return nil, adviceError("cryptorandom byte count must be non-negative", "use `0` or a positive integer byte count")
 		}
 		return func(_ *Runtime, actor *Actor) error {
 			buf := make([]byte, nbytes)
@@ -3050,7 +3102,7 @@ func compileAction(form Value) (ActionFunc, error) {
 		}, nil
 	case "sample-exponential":
 		if len(form.Items) != 3 {
-			return nil, fmt.Errorf("sample-exponential must be (sample-exponential out rate)")
+			return nil, syntaxError("sample-exponential", "(sample-exponential out rate)")
 		}
 		out, err := expectSymbol(form.Items[1], "sample-exponential out key")
 		if err != nil {
@@ -3061,7 +3113,7 @@ func compileAction(form Value) (ActionFunc, error) {
 			return nil, err
 		}
 		if rate <= 0 {
-			return nil, fmt.Errorf("sample-exponential rate must be positive")
+			return nil, adviceError("sample-exponential rate must be positive", "use a positive floating-point rate such as `0.5` or `2.0`")
 		}
 		return func(rt *Runtime, actor *Actor) error {
 			u := rt.DiceValue
@@ -3076,7 +3128,7 @@ func compileAction(form Value) (ActionFunc, error) {
 			return nil
 		}, nil
 	default:
-		return nil, fmt.Errorf("unsupported action form %q", head)
+		return nil, unsupportedFormError("action form", head, []string{"`do`", "`send`", "`send-any`", "`recv`", "`become`", "`set`", "`def`", "`if`", "`add`", "`sub`", "`md5`", "`rsa-raw`", "`cryptorandom`", "`sample-exponential`"})
 	}
 }
 
@@ -3247,16 +3299,24 @@ func mailboxSenderAt(senders []string, idx int) string {
 
 func valueInt(v Value) (int, error) {
 	if v.Kind != KindNumber {
-		return 0, fmt.Errorf("value %s is not a number", v.String())
+		return 0, adviceError(fmt.Sprintf("value %s is not a number", v.String()), "use an integer literal such as `0`, `1`, or `42`")
 	}
-	return strconv.Atoi(v.Text)
+	out, err := strconv.Atoi(v.Text)
+	if err != nil {
+		return 0, adviceError(fmt.Sprintf("invalid integer %s", v.Text), "use a base-10 integer literal such as `0`, `1`, or `42`")
+	}
+	return out, nil
 }
 
 func valueFloat(v Value) (float64, error) {
 	if v.Kind != KindNumber {
-		return 0, fmt.Errorf("value %s is not a number", v.String())
+		return 0, adviceError(fmt.Sprintf("value %s is not a number", v.String()), "use a numeric literal such as `0.5`, `1.0`, or `2`")
 	}
-	return strconv.ParseFloat(v.Text, 64)
+	out, err := strconv.ParseFloat(v.Text, 64)
+	if err != nil {
+		return 0, adviceError(fmt.Sprintf("invalid floating-point number %s", v.Text), "use a decimal literal such as `0.5` or `2.0`")
+	}
+	return out, nil
 }
 
 func valueBigInt(v Value) (*big.Int, error) {
@@ -3264,17 +3324,17 @@ func valueBigInt(v Value) (*big.Int, error) {
 	case KindNumber:
 		out, ok := new(big.Int).SetString(v.Text, 10)
 		if !ok {
-			return nil, fmt.Errorf("invalid integer %s", v.Text)
+			return nil, adviceError(fmt.Sprintf("invalid integer %s", v.Text), "use a base-10 integer literal such as `65537`")
 		}
 		return out, nil
 	case KindString:
 		out, ok := new(big.Int).SetString(v.Text, 10)
 		if !ok {
-			return nil, fmt.Errorf("invalid integer string %s", v.Text)
+			return nil, adviceError(fmt.Sprintf("invalid integer string %s", v.Text), "store a base-10 integer string such as \"65537\", or use a numeric literal instead")
 		}
 		return out, nil
 	default:
-		return nil, fmt.Errorf("value %s is not an integer", v.String())
+		return nil, adviceError(fmt.Sprintf("value %s is not an integer", v.String()), "use an integer literal or a variable that resolves to an integer")
 	}
 }
 
@@ -3377,7 +3437,7 @@ func isListHead(v Value, want string) bool {
 
 func expectSymbol(v Value, context string) (string, error) {
 	if v.Kind != KindSymbol {
-		return "", fmt.Errorf("%s must be a symbol", context)
+		return "", adviceError(fmt.Sprintf("%s must be a symbol", context), fmt.Sprintf("replace %s with a bare symbol such as `Server`, `done`, or `count`", v.String()))
 	}
 	return v.Text, nil
 }
@@ -3394,7 +3454,7 @@ func Read(input string) (Value, error) {
 		return Value{}, err
 	}
 	if p.hasNext() {
-		return Value{}, fmt.Errorf("unexpected token %q", p.peek().text)
+		return Value{}, adviceError(fmt.Sprintf("unexpected token %q", p.peek().text), "remove the extra token or wrap the whole program in one valid Lisp form")
 	}
 	return v, nil
 }
@@ -3722,7 +3782,7 @@ type parser struct {
 
 func (p *parser) parseValue() (Value, error) {
 	if !p.hasNext() {
-		return Value{}, fmt.Errorf("unexpected end of input")
+		return Value{}, adviceError("unexpected end of input", "close any open lists and finish the current form")
 	}
 
 	switch p.peek().kind {
@@ -3733,13 +3793,13 @@ func (p *parser) parseValue() (Value, error) {
 	case "symbol", "number", "string", "bool":
 		return p.parseAtom()
 	default:
-		return Value{}, fmt.Errorf("unexpected token %q", p.peek().text)
+		return Value{}, adviceError(fmt.Sprintf("unexpected token %q", p.peek().text), "start a form with `(`, a quote `'`, or an atom")
 	}
 }
 
 func (p *parser) parseQuote() (Value, error) {
 	if !p.match("quote") {
-		return Value{}, fmt.Errorf("expected quote")
+		return Value{}, adviceError("expected quote", "use `'value` to quote the next form")
 	}
 	quoted, err := p.parseValue()
 	if err != nil {
@@ -3750,13 +3810,13 @@ func (p *parser) parseQuote() (Value, error) {
 
 func (p *parser) parseSExpr() (Value, error) {
 	if !p.match("lparen") {
-		return Value{}, fmt.Errorf("expected '('")
+		return Value{}, adviceError("expected '('", "start each list form with an opening parenthesis")
 	}
 
 	var items []Value
 	for {
 		if !p.hasNext() {
-			return Value{}, fmt.Errorf("unterminated list")
+			return Value{}, adviceError("unterminated list", "add the missing `)` to close the current form")
 		}
 		if p.match("rparen") {
 			return List(items...), nil
@@ -3780,7 +3840,7 @@ func (p *parser) parseSExpr() (Value, error) {
 
 func (p *parser) parseHeadValue() (Value, error) {
 	if !p.hasNext() {
-		return Value{}, fmt.Errorf("unexpected end of input")
+		return Value{}, adviceError("unexpected end of input", "close any open lists and finish the current form")
 	}
 
 	switch p.peek().kind {
@@ -3793,7 +3853,7 @@ func (p *parser) parseHeadValue() (Value, error) {
 
 func (p *parser) parseAtom() (Value, error) {
 	if !p.hasNext() {
-		return Value{}, fmt.Errorf("unexpected end of input")
+		return Value{}, adviceError("unexpected end of input", "finish the atom or close the surrounding list")
 	}
 
 	tok := p.peek()
@@ -3809,7 +3869,7 @@ func (p *parser) parseAtom() (Value, error) {
 	case "bool":
 		return Bool(tok.text), nil
 	default:
-		return Value{}, fmt.Errorf("unexpected atom %q", tok.text)
+		return Value{}, adviceError(fmt.Sprintf("unexpected atom %q", tok.text), "use a symbol, number, string, or boolean atom")
 	}
 }
 
@@ -3886,7 +3946,7 @@ func tokenize(input string) ([]token, error) {
 				i++
 			}
 			if i >= len(runes) {
-				return nil, fmt.Errorf("unterminated string literal")
+				return nil, adviceError("unterminated string literal", "add the closing double quote to finish the string")
 			}
 			out = append(out, token{
 				kind:      "string",
@@ -3944,7 +4004,7 @@ func tokenize(input string) ([]token, error) {
 			continue
 		}
 
-		return nil, fmt.Errorf("unexpected character %q", string(ch))
+		return nil, adviceError(fmt.Sprintf("unexpected character %q", string(ch)), "remove that character or rewrite the form with Lisp syntax such as `(send Target msg)`")
 	}
 
 	return out, nil
@@ -4227,64 +4287,64 @@ func docPlotBindings() (map[string]docPlotBinding, error) {
 
 func renderDocLanguageSections() (string, error) {
 	modelForms := []languageFormDoc{
-		{Form: "`(model item...)`", Params: "`item := actor | instance | assert | xyplot`", Semantics: "Top-level container. No actors are created implicitly."},
-		{Form: "`(actor RoleName item...)`", Params: "`item := data | state`", Semantics: "Declares a reusable actor-role template."},
-		{Form: "`(data key value)`", Params: "`key` symbol, `value` literal/value form", Semantics: "Introduces actor-local data with an initial value."},
-		{Form: "`(state Name edge...)`", Params: "`Name` symbol", Semantics: "Declares a named control state. The first declared state is the initial control location."},
-		{Form: "`(edge guard action...)`", Params: "`guard` guard form", Semantics: "Declares one guarded atomic transition. At least one reachable `become` is required."},
-		{Form: "`(instance Name Role (PeerRole Target...)...)`", Params: "`Target...` concrete actor names", Semantics: "Creates one runtime actor and binds each referenced peer role to one or more concrete instances."},
-		{Form: "`(assert ctl-formula)`", Params: "CTL formula", Semantics: "Adds a branching-time requirement checked over the explored model."},
-		{Form: "`(xyplot name (title s) (steps n) (metric m))`", Params: "`metric := send-count | receive-count | sent-minus-received`", Semantics: "Requests a runtime-derived plot for the model example."},
+		{Form: "`(model $item:form...)`", Params: "`$item := actor | instance | assert | xyplot`", Semantics: "Top-level container. Nothing is created implicitly."},
+		{Form: "`(actor $role:symbol $item:form...)`", Params: "`$item := data | state`", Semantics: "Declares a reusable actor-role template."},
+		{Form: "`(data $key:symbol $value:value)`", Params: "`$key` actor-local name", Semantics: "Initializes actor-local data before execution starts."},
+		{Form: "`(state $name:symbol $edge:form...)`", Params: "`$name` control-state name", Semantics: "Declares one named control location. The first state is initial."},
+		{Form: "`(edge $guard:guard $action:action...)`", Params: "`$guard` readiness condition", Semantics: "One atomic transition. Every branch must reach a `become`."},
+		{Form: "`(instance $name:symbol $role:symbol ($peerRole:symbol $target:symbol...)...)`", Params: "`$target` concrete actor instance", Semantics: "Creates one runtime actor and fills its peer-role bindings."},
+		{Form: "`(assert $p:ctl)`", Params: "`$p` CTL formula", Semantics: "Checks a branching-time requirement over the explored model."},
+		{Form: "`(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))`", Params: "`$m := send-count | receive-count | sent-minus-received`", Semantics: "Requests a runtime-derived line chart."},
 	}
 	guardForms := []languageFormDoc{
 		{Form: "`true`", Params: "none", Semantics: "Always enabled."},
-		{Form: "`(mailbox msg)`", Params: "`msg` message literal/value", Semantics: "True when the actor mailbox currently contains a matching message."},
-		{Form: "`(data= key value)`", Params: "`key` local variable, `value` literal/value form", Semantics: "True when the actor-local value equals the resolved right-hand side."},
-		{Form: "`(data> key value)`", Params: "numeric comparison", Semantics: "True when the actor-local numeric value is greater than the resolved right-hand side."},
-		{Form: "`(dice-range lo hi)`", Params: "floating-point bounds", Semantics: "True when the sampled `Dice` value satisfies `lo ≤ Dice < hi`."},
-		{Form: "`(dice< x)`", Params: "floating-point threshold", Semantics: "True when `Dice < x`."},
-		{Form: "`(dice>= x)`", Params: "floating-point threshold", Semantics: "True when `Dice ≥ x`."},
-		{Form: "`(dice)`", Params: "none", Semantics: "Resolves to the sampled floating-point value in `[0,1]`."},
-		{Form: "`(and g...)`, `(or g...)`, `(not g)`, `(implies p q)`", Params: "guard forms", Semantics: "Boolean composition over guard predicates."},
+		{Form: "`dice`", Params: "none", Semantics: "Shorthand for a 50/50 branch when no bounds are needed."},
+		{Form: "`(mailbox $msg:value)`", Params: "`$msg` literal or quoted message", Semantics: "True when the mailbox contains a matching message."},
+		{Form: "`(data= $key:symbol $value:value)`", Params: "`$key` actor-local variable", Semantics: "True when the local value equals the resolved right-hand side."},
+		{Form: "`(data> $key:symbol $value:int)`", Params: "`$value` integer threshold", Semantics: "True when the local integer is strictly greater."},
+		{Form: "`(dice-range $low:float $high:float)`", Params: "`0.0 ≤ $low ≤ $high ≤ 1.0`", Semantics: "True when `Dice ∈ [$low,$high]`."},
+		{Form: "`(dice< $high:float)`", Params: "`$high` upper bound", Semantics: "True when `Dice < $high`."},
+		{Form: "`(dice>= $low:float)`", Params: "`$low` lower bound", Semantics: "True when `Dice ≥ $low`."},
+		{Form: "`(and $g:guard...)`, `(or $g:guard...)`, `(not $g:guard)`, `(implies $p:guard $q:guard)`", Params: "guard composition", Semantics: "Boolean structure over guards."},
 	}
 	actionForms := []languageFormDoc{
-		{Form: "`(send Role msg)`", Params: "`Role` peer role with exactly one bound target", Semantics: "Sends `msg` to the single bound instance. Compile-time error if the role resolves to multiple instances."},
-		{Form: "`(send-any Role msg)`", Params: "`Role` peer role with one or more bound targets", Semantics: "Sends to the first ready concrete target in that role set."},
-		{Form: "`(recv var)`", Params: "`var` local name", Semantics: "Consumes one incoming message into `var` and also writes the sending actor name into local `sender`."},
-		{Form: "`(become State)`", Params: "`State` declared control state", Semantics: "Moves the actor into the next control location."},
-		{Form: "`(set key value)`", Params: "local name and value form", Semantics: "Stores the resolved value into actor-local data."},
-		{Form: "`(add key delta)`, `(sub key delta)`", Params: "numeric local name and numeric value form", Semantics: "Applies integer arithmetic to actor-local data."},
-		{Form: "`(if guard then [else])`", Params: "guard and action blocks", Semantics: "Conditional action execution inside an atomic transition."},
-		{Form: "`(do action...)`", Params: "action list", Semantics: "Explicit sequencing when a nested action block is needed."},
-		{Form: "`(def name (p...) body)`", Params: "actor-local pure helper", Semantics: "Defines a value-level helper callable from `set`, `send`, and other value positions."},
-		{Form: "`(md5 out source)`", Params: "destination variable and value form", Semantics: "Computes the MD5 digest of the resolved value and stores its hex string."},
-		{Form: "`(rsa-raw out modulus exponent message)`", Params: "numeric value forms", Semantics: "Computes raw modular exponentiation `message^exponent mod modulus` and stores the numeric result."},
-		{Form: "`(cryptorandom out bytes)`", Params: "destination variable and byte count", Semantics: "Generates cryptographic randomness and stores a hex string."},
-		{Form: "`(sample-exponential out rate)`", Params: "destination variable and positive rate", Semantics: "Samples an exponential variate and stores the floating-point value."},
+		{Form: "`(send $role:symbol $msg:value)`", Params: "`$role` must bind to exactly one target", Semantics: "Sends one message to the bound concrete actor."},
+		{Form: "`(send-any $role:symbol $msg:value)`", Params: "`$role` may bind to several targets", Semantics: "Sends to the first ready target in that peer-role set."},
+		{Form: "`(recv $var:symbol)`", Params: "`$var` local variable name", Semantics: "Consumes one incoming message and also stores the sender in `sender`."},
+		{Form: "`(become $state:symbol)`", Params: "`$state` declared control state", Semantics: "Sets the next control location."},
+		{Form: "`(set $key:symbol $value:value)`", Params: "`$key` actor-local variable", Semantics: "Writes a resolved value into actor-local data."},
+		{Form: "`(add $key:symbol $delta:int)`, `(sub $key:symbol $delta:int)`", Params: "`$key` integer variable", Semantics: "Integer arithmetic on actor-local data."},
+		{Form: "`(if $guard:guard $then:action [$else:action])`", Params: "guard plus action branches", Semantics: "Conditional execution inside one atomic transition."},
+		{Form: "`(do $action:action...)`", Params: "explicit action sequence", Semantics: "Groups nested actions when one form is required."},
+		{Form: "`(def $name:symbol ($param:symbol...) $body:value)`", Params: "actor-local pure helper", Semantics: "Defines a value helper used from value positions. `send`, `recv`, `become`, and other action forms are forbidden inside the body."},
+		{Form: "`(md5 $out:symbol $source:value)`", Params: "`$out` destination variable", Semantics: "Stores an MD5 hex digest."},
+		{Form: "`(rsa-raw $out:symbol $modulus:int $exponent:int $message:int)`", Params: "big-integer inputs", Semantics: "Stores `message^exponent mod modulus`."},
+		{Form: "`(cryptorandom $out:symbol $bytes:int)`", Params: "`$bytes ≥ 0`", Semantics: "Stores a random hex string."},
+		{Form: "`(sample-exponential $out:symbol $rate:float)`", Params: "`$rate > 0`", Semantics: "Stores an exponential variate sample."},
 	}
 	valueForms := []languageFormDoc{
-		{Form: "symbols", Params: "local variable names", Semantics: "Resolve to actor-local data when present; otherwise remain symbols."},
-		{Form: "`'x`, `'(a b)`", Params: "quoted literal", Semantics: "Prevents evaluation and injects a literal symbol/list value."},
-		{Form: "`(cons a b)`", Params: "value forms", Semantics: "Prepends `a` onto list `b`."},
-		{Form: "`(car xs)`", Params: "list value form", Semantics: "Returns the first list element, or invalid/empty when absent."},
-		{Form: "`(cdr xs)`", Params: "list value form", Semantics: "Returns the tail of a list."},
+		{Form: "bare symbol", Params: "`$var:symbol` in docs; actual model omits `$`", Semantics: "Resolves to actor-local data when present; otherwise stays a symbol literal."},
+		{Form: "`'$x`, `'(a b)`", Params: "quoted literal", Semantics: "Prevents evaluation and injects a literal symbol or list."},
+		{Form: "`(cons $head:value $tail:value)`", Params: "value forms", Semantics: "Prepends `$head` onto list `$tail`."},
+		{Form: "`(car $xs:value)`", Params: "`$xs` list value", Semantics: "Returns the first list element, or empty/invalid when absent."},
+		{Form: "`(cdr $xs:value)`", Params: "`$xs` list value", Semantics: "Returns the tail of a list."},
 	}
 	ctlForms := []languageFormDoc{
-		{Form: "`(in-state A s)`", Params: "actor and state", Semantics: "Atomic predicate `A.state = s`."},
-		{Form: "`(data= A key value)`", Params: "actor, local name, value", Semantics: "Atomic predicate over actor-local data."},
-		{Form: "`(mailbox-has A msg)`", Params: "actor and message", Semantics: "Atomic predicate over queued messages."},
-		{Form: "`(ex p)`, `(ax p)`", Params: "CTL formula", Semantics: "Next-step possibility and necessity."},
-		{Form: "`(ef p)`, `(af p)`", Params: "CTL formula", Semantics: "Future possibility and inevitability."},
-		{Form: "`(eg p)`, `(ag p)`", Params: "CTL formula", Semantics: "Existential and universal invariance."},
-		{Form: "`(eu p q)`, `(au p q)`", Params: "CTL formulas", Semantics: "Existential and universal until."},
-		{Form: "`(not p)`, `(and p q)`, `(or p q)`, `(implies p q)`", Params: "CTL formulas", Semantics: "Boolean composition over CTL formulas."},
+		{Form: "`(in-state $actor:symbol $state:symbol)`", Params: "atomic state predicate", Semantics: "Asserts `$actor.state = $state`."},
+		{Form: "`(data= $actor:symbol $key:symbol $value:value)`", Params: "atomic data predicate", Semantics: "Asserts one actor-local value equals `$value`."},
+		{Form: "`(mailbox-has $actor:symbol $msg:value)`", Params: "atomic mailbox predicate", Semantics: "Asserts the mailbox currently contains `$msg`."},
+		{Form: "`(ex $p:ctl)`, `(ax $p:ctl)`", Params: "next-step modalities", Semantics: "`EX` and `AX`."},
+		{Form: "`(ef $p:ctl)`, `(af $p:ctl)`", Params: "eventual modalities", Semantics: "`EF` and `AF`."},
+		{Form: "`(eg $p:ctl)`, `(ag $p:ctl)`", Params: "global modalities", Semantics: "`EG` and `AG`."},
+		{Form: "`(eu $p:ctl $q:ctl)`, `(au $p:ctl $q:ctl)`", Params: "until modalities", Semantics: "`E[p U q]` and `A[p U q]`."},
+		{Form: "`(not $p:ctl)`, `(and $p:ctl $q:ctl)`, `(or $p:ctl $q:ctl)`, `(implies $p:ctl $q:ctl)`", Params: "Boolean CTL structure", Semantics: "Boolean composition over CTL formulas."},
 	}
 	muForms := []languageFormDoc{
 		{Form: "`true`, `false`", Params: "none", Semantics: "Boolean constants for the raw modal μ-calculus layer."},
-		{Form: "`(diamond p)`, `(box p)`", Params: "μ-calculus formula", Semantics: "Existential and universal next-step modalities."},
-		{Form: "`(mu X body)`, `(nu X body)`", Params: "fixpoint variable and body", Semantics: "Least and greatest fixpoints."},
-		{Form: "`(not p)`, `(and p q)`, `(or p q)`", Params: "μ-calculus formulas", Semantics: "Boolean composition over formulas."},
-		{Form: "`(in-state A s)`, `(data= A key value)`, `(mailbox-has A msg)`", Params: "same atoms as CTL", Semantics: "State predicates shared with the CTL surface syntax."},
+		{Form: "`(diamond $p:mu)`, `(box $p:mu)`", Params: "next-step modalities", Semantics: "Existential and universal modal operators."},
+		{Form: "`(mu $X:symbol $body:mu)`, `(nu $X:symbol $body:mu)`", Params: "fixpoint variable plus body", Semantics: "Least and greatest fixpoints."},
+		{Form: "`(not $p:mu)`, `(and $p:mu $q:mu)`, `(or $p:mu $q:mu)`", Params: "Boolean mu structure", Semantics: "Boolean composition over formulas."},
+		{Form: "`(in-state $actor:symbol $state:symbol)`, `(data= $actor:symbol $key:symbol $value:value)`, `(mailbox-has $actor:symbol $msg:value)`", Params: "same atoms as CTL", Semantics: "State predicates shared with the CTL surface syntax."},
 	}
 
 	var b strings.Builder
@@ -4293,21 +4353,25 @@ func renderDocLanguageSections() (string, error) {
 	b.WriteString("Write a go-ctl2 model as Lisp.\n")
 	b.WriteString("Use exactly one top-level (model ...).\n")
 	b.WriteString("Declare reusable behavior with (actor RoleName ...).\n")
-	b.WriteString("Declare runtime actors explicitly with (instance Name Role (PeerRole Target...)...).\n")
-	b.WriteString("There is no implicit actor creation.\n")
+	b.WriteString("Declare concrete runtime actors with (instance Name Role (PeerRole Target...)...).\n")
+	b.WriteString("There is no implicit actor creation, implicit topology, or implicit next state.\n")
+	b.WriteString("Model the situation as a state machine, not as loose propositions.\n")
+	b.WriteString("For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.\n")
+	b.WriteString("Only assert propositions that are grounded in named states, mailbox contents, or actor-local data.\n")
 	b.WriteString("Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.\n")
 	b.WriteString("Use (send Role msg) only when that role resolves to exactly one concrete actor.\n")
 	b.WriteString("Use (send-any Role msg) when a role may resolve to several concrete actors.\n")
 	b.WriteString("State is actor-local. The only cross-actor effect is messaging.\n")
 	b.WriteString("Each transition is (edge guard action...) inside a declared (state ...).\n")
-	b.WriteString("Every edge must eventually reach at least one (become State).\n")
+	b.WriteString("Every edge must reach at least one (become State).\n")
 	b.WriteString("Use (recv var) to consume a message. recv also writes the sender name into local variable sender.\n")
-	b.WriteString("Use quoted literals for structured messages, for example '(message (type ping)).\n")
-	b.WriteString("Keep control flow explicit with named states and become transitions.\n")
-	b.WriteString("Put CTL requirements in (assert ...).\n")
-	b.WriteString("Use only the builtins and forms documented below.\n")
+	b.WriteString("Use quoted literals for structured messages, for example '(message (type strike) (target refinery)).\n")
+	b.WriteString("Prefer short named states such as idle, mobilizing, negotiating, retaliating, ceasefire, failed.\n")
+	b.WriteString("Put branching-time requirements in (assert ...).\n")
+	b.WriteString("Use only the forms documented below.\n")
 	b.WriteString("```")
 	b.WriteString("\n\n# Language Reference\n\n")
+	b.WriteString("Documentation metavariables start with `$` and include a type tag, for example `$count:int` or `$msg:value`. Actual models do not include the `$`; write `count` and `msg` in the Lisp itself.\n\n")
 	writeLanguageTable(&b, "## Core Model Forms", modelForms)
 	writeLanguageTable(&b, "## Guard Forms", guardForms)
 	writeLanguageTable(&b, "## Action Forms", actionForms)
@@ -4320,7 +4384,7 @@ func renderDocLanguageSections() (string, error) {
 
 func writeLanguageTable(b *strings.Builder, title string, rows []languageFormDoc) {
 	b.WriteString(title)
-	b.WriteString("\n\n| Form | Parameters | Operational Semantics |\n| --- | --- | --- |\n")
+	b.WriteString("\n\n| Form | Metavariables | Operational Semantics |\n| --- | --- | --- |\n")
 	for _, row := range rows {
 		fmt.Fprintf(b, "| %s | %s | %s |\n", row.Form, row.Params, row.Semantics)
 	}

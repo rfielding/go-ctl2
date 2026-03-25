@@ -50,102 +50,107 @@ The exact information an LLM needs to author models is also the information a hu
 Write a go-ctl2 model as Lisp.
 Use exactly one top-level (model ...).
 Declare reusable behavior with (actor RoleName ...).
-Declare runtime actors explicitly with (instance Name Role (PeerRole Target...)...).
-There is no implicit actor creation.
+Declare concrete runtime actors with (instance Name Role (PeerRole Target...)...).
+There is no implicit actor creation, implicit topology, or implicit next state.
+Model the situation as a state machine, not as loose propositions.
+For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.
+Only assert propositions that are grounded in named states, mailbox contents, or actor-local data.
 Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.
 Use (send Role msg) only when that role resolves to exactly one concrete actor.
 Use (send-any Role msg) when a role may resolve to several concrete actors.
 State is actor-local. The only cross-actor effect is messaging.
 Each transition is (edge guard action...) inside a declared (state ...).
-Every edge must eventually reach at least one (become State).
+Every edge must reach at least one (become State).
 Use (recv var) to consume a message. recv also writes the sender name into local variable sender.
-Use quoted literals for structured messages, for example '(message (type ping)).
-Keep control flow explicit with named states and become transitions.
-Put CTL requirements in (assert ...).
-Use only the builtins and forms documented below.
+Use quoted literals for structured messages, for example '(message (type strike) (target refinery)).
+Prefer short named states such as idle, mobilizing, negotiating, retaliating, ceasefire, failed.
+Put branching-time requirements in (assert ...).
+Use only the forms documented below.
 ```
 
 # Language Reference
 
+Documentation metavariables start with `$` and include a type tag, for example `$count:int` or `$msg:value`. Actual models do not include the `$`; write `count` and `msg` in the Lisp itself.
+
 ## Core Model Forms
 
-| Form | Parameters | Operational Semantics |
+| Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
-| `(model item...)` | `item := actor | instance | assert | xyplot` | Top-level container. No actors are created implicitly. |
-| `(actor RoleName item...)` | `item := data | state` | Declares a reusable actor-role template. |
-| `(data key value)` | `key` symbol, `value` literal/value form | Introduces actor-local data with an initial value. |
-| `(state Name edge...)` | `Name` symbol | Declares a named control state. The first declared state is the initial control location. |
-| `(edge guard action...)` | `guard` guard form | Declares one guarded atomic transition. At least one reachable `become` is required. |
-| `(instance Name Role (PeerRole Target...)...)` | `Target...` concrete actor names | Creates one runtime actor and binds each referenced peer role to one or more concrete instances. |
-| `(assert ctl-formula)` | CTL formula | Adds a branching-time requirement checked over the explored model. |
-| `(xyplot name (title s) (steps n) (metric m))` | `metric := send-count | receive-count | sent-minus-received` | Requests a runtime-derived plot for the model example. |
+| `(model $item:form...)` | `$item := actor | instance | assert | xyplot` | Top-level container. Nothing is created implicitly. |
+| `(actor $role:symbol $item:form...)` | `$item := data | state` | Declares a reusable actor-role template. |
+| `(data $key:symbol $value:value)` | `$key` actor-local name | Initializes actor-local data before execution starts. |
+| `(state $name:symbol $edge:form...)` | `$name` control-state name | Declares one named control location. The first state is initial. |
+| `(edge $guard:guard $action:action...)` | `$guard` readiness condition | One atomic transition. Every branch must reach a `become`. |
+| `(instance $name:symbol $role:symbol ($peerRole:symbol $target:symbol...)...)` | `$target` concrete actor instance | Creates one runtime actor and fills its peer-role bindings. |
+| `(assert $p:ctl)` | `$p` CTL formula | Checks a branching-time requirement over the explored model. |
+| `(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))` | `$m := send-count | receive-count | sent-minus-received` | Requests a runtime-derived line chart. |
 
 ## Guard Forms
 
-| Form | Parameters | Operational Semantics |
+| Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
 | `true` | none | Always enabled. |
-| `(mailbox msg)` | `msg` message literal/value | True when the actor mailbox currently contains a matching message. |
-| `(data= key value)` | `key` local variable, `value` literal/value form | True when the actor-local value equals the resolved right-hand side. |
-| `(data> key value)` | numeric comparison | True when the actor-local numeric value is greater than the resolved right-hand side. |
-| `(dice-range lo hi)` | floating-point bounds | True when the sampled `Dice` value satisfies `lo ≤ Dice < hi`. |
-| `(dice< x)` | floating-point threshold | True when `Dice < x`. |
-| `(dice>= x)` | floating-point threshold | True when `Dice ≥ x`. |
-| `(dice)` | none | Resolves to the sampled floating-point value in `[0,1]`. |
-| `(and g...)`, `(or g...)`, `(not g)`, `(implies p q)` | guard forms | Boolean composition over guard predicates. |
+| `dice` | none | Shorthand for a 50/50 branch when no bounds are needed. |
+| `(mailbox $msg:value)` | `$msg` literal or quoted message | True when the mailbox contains a matching message. |
+| `(data= $key:symbol $value:value)` | `$key` actor-local variable | True when the local value equals the resolved right-hand side. |
+| `(data> $key:symbol $value:int)` | `$value` integer threshold | True when the local integer is strictly greater. |
+| `(dice-range $low:float $high:float)` | `0.0 ≤ $low ≤ $high ≤ 1.0` | True when `Dice ∈ [$low,$high]`. |
+| `(dice< $high:float)` | `$high` upper bound | True when `Dice < $high`. |
+| `(dice>= $low:float)` | `$low` lower bound | True when `Dice ≥ $low`. |
+| `(and $g:guard...)`, `(or $g:guard...)`, `(not $g:guard)`, `(implies $p:guard $q:guard)` | guard composition | Boolean structure over guards. |
 
 ## Action Forms
 
-| Form | Parameters | Operational Semantics |
+| Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
-| `(send Role msg)` | `Role` peer role with exactly one bound target | Sends `msg` to the single bound instance. Compile-time error if the role resolves to multiple instances. |
-| `(send-any Role msg)` | `Role` peer role with one or more bound targets | Sends to the first ready concrete target in that role set. |
-| `(recv var)` | `var` local name | Consumes one incoming message into `var` and also writes the sending actor name into local `sender`. |
-| `(become State)` | `State` declared control state | Moves the actor into the next control location. |
-| `(set key value)` | local name and value form | Stores the resolved value into actor-local data. |
-| `(add key delta)`, `(sub key delta)` | numeric local name and numeric value form | Applies integer arithmetic to actor-local data. |
-| `(if guard then [else])` | guard and action blocks | Conditional action execution inside an atomic transition. |
-| `(do action...)` | action list | Explicit sequencing when a nested action block is needed. |
-| `(def name (p...) body)` | actor-local pure helper | Defines a value-level helper callable from `set`, `send`, and other value positions. |
-| `(md5 out source)` | destination variable and value form | Computes the MD5 digest of the resolved value and stores its hex string. |
-| `(rsa-raw out modulus exponent message)` | numeric value forms | Computes raw modular exponentiation `message^exponent mod modulus` and stores the numeric result. |
-| `(cryptorandom out bytes)` | destination variable and byte count | Generates cryptographic randomness and stores a hex string. |
-| `(sample-exponential out rate)` | destination variable and positive rate | Samples an exponential variate and stores the floating-point value. |
+| `(send $role:symbol $msg:value)` | `$role` must bind to exactly one target | Sends one message to the bound concrete actor. |
+| `(send-any $role:symbol $msg:value)` | `$role` may bind to several targets | Sends to the first ready target in that peer-role set. |
+| `(recv $var:symbol)` | `$var` local variable name | Consumes one incoming message and also stores the sender in `sender`. |
+| `(become $state:symbol)` | `$state` declared control state | Sets the next control location. |
+| `(set $key:symbol $value:value)` | `$key` actor-local variable | Writes a resolved value into actor-local data. |
+| `(add $key:symbol $delta:int)`, `(sub $key:symbol $delta:int)` | `$key` integer variable | Integer arithmetic on actor-local data. |
+| `(if $guard:guard $then:action [$else:action])` | guard plus action branches | Conditional execution inside one atomic transition. |
+| `(do $action:action...)` | explicit action sequence | Groups nested actions when one form is required. |
+| `(def $name:symbol ($param:symbol...) $body:value)` | actor-local pure helper | Defines a value helper used from value positions. `send`, `recv`, `become`, and other action forms are forbidden inside the body. |
+| `(md5 $out:symbol $source:value)` | `$out` destination variable | Stores an MD5 hex digest. |
+| `(rsa-raw $out:symbol $modulus:int $exponent:int $message:int)` | big-integer inputs | Stores `message^exponent mod modulus`. |
+| `(cryptorandom $out:symbol $bytes:int)` | `$bytes ≥ 0` | Stores a random hex string. |
+| `(sample-exponential $out:symbol $rate:float)` | `$rate > 0` | Stores an exponential variate sample. |
 
 ## Value Forms
 
-| Form | Parameters | Operational Semantics |
+| Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
-| symbols | local variable names | Resolve to actor-local data when present; otherwise remain symbols. |
-| `'x`, `'(a b)` | quoted literal | Prevents evaluation and injects a literal symbol/list value. |
-| `(cons a b)` | value forms | Prepends `a` onto list `b`. |
-| `(car xs)` | list value form | Returns the first list element, or invalid/empty when absent. |
-| `(cdr xs)` | list value form | Returns the tail of a list. |
+| bare symbol | `$var:symbol` in docs; actual model omits `$` | Resolves to actor-local data when present; otherwise stays a symbol literal. |
+| `'$x`, `'(a b)` | quoted literal | Prevents evaluation and injects a literal symbol or list. |
+| `(cons $head:value $tail:value)` | value forms | Prepends `$head` onto list `$tail`. |
+| `(car $xs:value)` | `$xs` list value | Returns the first list element, or empty/invalid when absent. |
+| `(cdr $xs:value)` | `$xs` list value | Returns the tail of a list. |
 
 ## Branching-Time Logic Forms
 
 ### CTL Surface Forms
 
-| Form | Parameters | Operational Semantics |
+| Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
-| `(in-state A s)` | actor and state | Atomic predicate `A.state = s`. |
-| `(data= A key value)` | actor, local name, value | Atomic predicate over actor-local data. |
-| `(mailbox-has A msg)` | actor and message | Atomic predicate over queued messages. |
-| `(ex p)`, `(ax p)` | CTL formula | Next-step possibility and necessity. |
-| `(ef p)`, `(af p)` | CTL formula | Future possibility and inevitability. |
-| `(eg p)`, `(ag p)` | CTL formula | Existential and universal invariance. |
-| `(eu p q)`, `(au p q)` | CTL formulas | Existential and universal until. |
-| `(not p)`, `(and p q)`, `(or p q)`, `(implies p q)` | CTL formulas | Boolean composition over CTL formulas. |
+| `(in-state $actor:symbol $state:symbol)` | atomic state predicate | Asserts `$actor.state = $state`. |
+| `(data= $actor:symbol $key:symbol $value:value)` | atomic data predicate | Asserts one actor-local value equals `$value`. |
+| `(mailbox-has $actor:symbol $msg:value)` | atomic mailbox predicate | Asserts the mailbox currently contains `$msg`. |
+| `(ex $p:ctl)`, `(ax $p:ctl)` | next-step modalities | `EX` and `AX`. |
+| `(ef $p:ctl)`, `(af $p:ctl)` | eventual modalities | `EF` and `AF`. |
+| `(eg $p:ctl)`, `(ag $p:ctl)` | global modalities | `EG` and `AG`. |
+| `(eu $p:ctl $q:ctl)`, `(au $p:ctl $q:ctl)` | until modalities | `E[p U q]` and `A[p U q]`. |
+| `(not $p:ctl)`, `(and $p:ctl $q:ctl)`, `(or $p:ctl $q:ctl)`, `(implies $p:ctl $q:ctl)` | Boolean CTL structure | Boolean composition over CTL formulas. |
 
 ### Raw Modal μ-Calculus Forms
 
-| Form | Parameters | Operational Semantics |
+| Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
 | `true`, `false` | none | Boolean constants for the raw modal μ-calculus layer. |
-| `(diamond p)`, `(box p)` | μ-calculus formula | Existential and universal next-step modalities. |
-| `(mu X body)`, `(nu X body)` | fixpoint variable and body | Least and greatest fixpoints. |
-| `(not p)`, `(and p q)`, `(or p q)` | μ-calculus formulas | Boolean composition over formulas. |
-| `(in-state A s)`, `(data= A key value)`, `(mailbox-has A msg)` | same atoms as CTL | State predicates shared with the CTL surface syntax. |
+| `(diamond $p:mu)`, `(box $p:mu)` | next-step modalities | Existential and universal modal operators. |
+| `(mu $X:symbol $body:mu)`, `(nu $X:symbol $body:mu)` | fixpoint variable plus body | Least and greatest fixpoints. |
+| `(not $p:mu)`, `(and $p:mu $q:mu)`, `(or $p:mu $q:mu)` | Boolean mu structure | Boolean composition over formulas. |
+| `(in-state $actor:symbol $state:symbol)`, `(data= $actor:symbol $key:symbol $value:value)`, `(mailbox-has $actor:symbol $msg:value)` | same atoms as CTL | State predicates shared with the CTL surface syntax. |
 
 
 
@@ -507,154 +512,60 @@ This is closer to a small structured machine IR than to an arbitrary scripting l
 
 # Branching-Time Logic
 
-CTL needs an exact successor relation. In this design, the successor relation is derived from `become` calls in each transition body.
+CTL needs an exact successor relation. In this design, the relation comes from visible `become` targets, then execution validates that runtime steps stay inside that declared control graph.
 
-Runtime execution exists to validate that:
+## One State, Many Futures
 
-- transitions only land in derived successor states
-- control state updates are not inconsistent with the model
+The explored model is a transition system `(S, →)`. We write `s ⊨ φ` when runtime state `s ∈ S` satisfies formula `φ`.
 
-This means CTL does not need to wait for simulation to discover the control graph.
+The key point is branching: one state can have several possible successors because of scheduler choice, random guards, or mailbox readiness.
 
-## CTL And μ-Calculus
+![CTL branching tree](../static/ctl_tree.svg)
 
-CTL is Computation Tree Logic, and the implementation lowers it into the modal μ-calculus.
+`E` quantifies over some branch. `A` quantifies over all branches.
 
-The explored graph is a transition system with runtime states `S` and successor relation `→ ⊆ S × S`. We write `s ⊨ φ` when state `s` satisfies formula `φ`.
+- `EX p`: there exists an immediate successor `t` with `s → t` and `t ⊨ p`
+- `AX p`: for every immediate successor `t`, if `s → t` then `t ⊨ p`
+- `EF p`: there exists a path on which `p` eventually holds
+- `AF p`: on every path, `p` eventually holds
+- `EG p`: there exists a path on which `p` holds forever
+- `AG p`: on every path, `p` holds forever
+- `E[p U q]`: there exists a path where `p` holds until `q` holds
+- `A[p U q]`: on every path, `p` holds until `q` holds
 
-The mathematical reading is:
+That is the practical reading users need:
 
-- `EX p` means `∃t. s → t ∧ t ⊨ p`
-- `AX p` means `∀t. s → t ⇒ t ⊨ p`
-- `EF p` means `μX.(p ∨ ◇X)`
-- `AF p` means `μX.(p ∨ □X)`
-- `EG p` means `νX.(p ∧ ◇X)`
-- `AG p` means `νX.(p ∧ □X)`
-- `E[p U q]` means `μX.(q ∨ (p ∧ ◇X))`
-- `A[p U q]` means `μX.(q ∨ (p ∧ □X))`
-
-So the user-facing CTL layer and the underlying μ-calculus layer are two views of the same branching-time semantics.
-
-The important idea is that execution does not produce one future. It produces a tree of possible futures:
-
-- scheduler choice can produce different next steps
-- random guards can produce different next steps
-- mailbox contents can enable or disable different edges
-
-CTL lets us ask whether a property holds on some future branch or on all future branches.
-
-There are two dimensions in every temporal CTL operator:
-
-- path quantifier:
-  `E` means "there exists a path"
-  `A` means "for all paths"
-- time modality:
-  `X` means "in the next step"
-  `F` means "eventually in the future"
-  `G` means "globally, always in the future"
-  `U` means "until"
-
-That is the core connection:
-
-- `E` corresponds to existential choice
-  some reachable branch works
-- `A` corresponds to universal choice
-  every reachable branch must work
-
-In ordinary language:
-
-- `EF p`
-  there exists some execution path on which `p` eventually becomes true
-  "possibly, at some point, `p` happens"
-- `AF p`
-  on every execution path, `p` eventually becomes true
-  "necessarily, sooner or later, `p` happens"
-- `EG p`
-  there exists some execution path on which `p` remains true forever
-  "possibly, the system can stay in a `p`-good region forever"
-- `AG p`
-  on every execution path, `p` remains true forever
-  "necessarily, `p` is always preserved"
-- `EX p`
-  there exists an immediate successor state where `p` holds
-  "possibly on the next step"
-- `AX p`
-  for every immediate successor state, `p` holds
-  "necessarily on the next step"
-- `E[p U q]`
-  there exists a path where `p` keeps holding until `q` eventually holds
-- `A[p U q]`
-  on every path, `p` keeps holding until `q` eventually holds
-
-This is why the pairs matter:
-
-- `EF` vs `AF`
-  possible eventuality vs guaranteed eventuality
-- `EG` vs `AG`
-  possible invariant along some branch vs invariant along all branches
-- `EX` vs `AX`
-  one-step possibility vs one-step necessity
-- `EU` vs `AU`
-  possible progress condition vs guaranteed progress condition
+- `EF`: possible reachability
+- `AF`: guaranteed reachability
+- `EG`: possible persistence
+- `AG`: universal invariant
 
 Examples:
 
-- `(ef (in-state Server accepted))`
-  there is some way for the server to reach `accepted`
-- `(af (in-state Server accepted))`
-  every possible future must eventually reach `accepted`
-- `(ag (not (mailbox-has Relay ping)))`
-  along all futures, the relay mailbox is always free of `ping`
-- `(eg (data> Queue count 0))`
-  there exists some path where the queue can stay non-empty forever
+- `(ef (in-state Negotiator ceasefire))`
+- `(af (in-state CivilianSupply stabilized))`
+- `(ag (not (mailbox-has EarlyWarning false-alarm)))`
+- `(eg (data= Frontline status mobilizing))`
 
-`EF` is often the right operator for reachability or possibility.
-`AF` is stronger: it means no matter how scheduling and randomness resolve, the desired state is unavoidable.
-That difference is exactly why users need the quantifier explanation up front.
+## CTL And μ-Calculus
 
-## Raw μ-Calculus
+The implementation lowers CTL into the modal μ-calculus:
 
-The modal mu-calculus is the lower-level fixpoint logic underneath this checker.
-CTL is now treated as a readable special case of that more general logic.
+- `EX p = ◇p`
+- `AX p = □p`
+- `EF p = μX.(p ∨ ◇X)`
+- `AF p = μX.(p ∨ □X)`
+- `EG p = νX.(p ∧ ◇X)`
+- `AG p = νX.(p ∧ □X)`
+- `E[p U q] = μX.(q ∨ (p ∧ ◇X))`
+- `A[p U q] = μX.(q ∨ (p ∧ □X))`
 
-At first glance, the implementation of `mu` and `nu` can look almost suspiciously small.
-That is because the power comes from the combination of just three ideas:
+The fixpoint intuition is standard:
 
-- boolean structure
-- modal next-step structure
-- fixpoints over a finite successor graph
+- `μ` is least fixpoint: build upward from the empty set
+- `ν` is greatest fixpoint: prune downward from the full set
 
-The modal operators are:
-
-- `diamond p`
-  there exists a successor state where `p` holds
-  this is the same branching idea as CTL's existential next-step operator
-- `box p`
-  for all successor states, `p` holds
-  this is the universal next-step version
-
-The fixpoint operators are:
-
-- `mu X body`
-  least fixpoint
-  think "the smallest set of states that satisfies this recursive equation"
-- `nu X body`
-  greatest fixpoint
-  think "the largest set of states that satisfies this recursive equation"
-
-Intuition:
-
-- `mu` is usually how you express eventuality, progress, or finite escape
-- `nu` is usually how you express invariance, persistence, or the ability to remain inside a region forever
-
-That is the core mental model:
-
-- least fixpoint = build upward from nothing
-- greatest fixpoint = prune downward from everything
-
-### Small Examples
-
-Reachability:
+Small examples:
 
 ```lisp
 (mu X
@@ -662,16 +573,7 @@ Reachability:
       (diamond X)))
 ```
 
-Read it as:
-
-- a state satisfies this formula if
-  it is already an `accepted` state
-  or it can move in one step to another state that satisfies the same formula
-
-That is exactly "there exists a path that eventually reaches `accepted`".
-So this is the mu-calculus form of `EF`.
-
-Invariant preservation:
+This is `EF (in-state Server accepted)`.
 
 ```lisp
 (nu X
@@ -679,230 +581,13 @@ Invariant preservation:
        (box X)))
 ```
 
-Read it as:
+This is `AG (not (mailbox-has Relay ping))`.
 
-- a state satisfies this formula if
-  it is safe now
-  and all of its successors also satisfy the same invariant
+## What The Checker Proves
 
-That is exactly "on all paths, always safe".
-So this is the mu-calculus form of `AG`.
+The checker explores the reachable runtime graph, adds an explicit self-loop on deadlock states, and evaluates each formula as a set of satisfying states.
 
-Possible persistence:
-
-```lisp
-(nu X
-  (and (data> Queue count 0)
-       (diamond X)))
-```
-
-Read it as:
-
-- the queue is non-empty now
-- and there exists some next step that keeps you inside the same region
-
-That captures the idea that there is some execution branch along which the queue can remain non-empty forever.
-That is the mu-calculus form of `EG`.
-
-### Why The Algorithm Is So Small
-
-The evaluator looks small because it is doing repeated set refinement on a finite graph.
-
-For `mu`:
-
-- start with the empty set
-- evaluate the body assuming `X` means that current set
-- keep adding states until nothing changes
-
-For `nu`:
-
-- start with the set of all states
-- evaluate the body assuming `X` means that current set
-- keep removing states until nothing changes
-
-That is enough to express a large amount of temporal reasoning because recursive temporal properties are exactly what fixpoints are good at.
-
-For example:
-
-- "eventually reach a good state"
-  means repeated predecessor expansion until the set stabilizes
-- "always remain safe"
-  means repeated pruning of states that have bad successors until the set stabilizes
-- "stay inside this region forever on some branch"
-  means repeatedly removing states that cannot remain inside the region
-
-### CTL As A Special Case
-
-The reason this is such a good foundation is that standard CTL operators translate directly into mu-calculus:
-
-- `EX p`
-  becomes `(diamond p)`
-- `AX p`
-  becomes `(box p)`
-- `EF p`
-  becomes `(mu X (or p (diamond X)))`
-- `AF p`
-  becomes `(mu X (or p (box X)))`
-- `EG p`
-  becomes `(nu X (and p (diamond X)))`
-- `AG p`
-  becomes `(nu X (and p (box X)))`
-- `E[p U q]`
-  becomes `(mu X (or q (and p (diamond X))))`
-- `A[p U q]`
-  becomes `(mu X (or q (and p (box X))))`
-
-So CTL is not being replaced here.
-It becomes the user-facing fragment with the friendlier names, while the semantic engine underneath is the more general fixpoint logic.
-
-### Why This Feels Like LTL Territory
-
-It is reasonable to look at these formulas and think:
-"these are the kinds of things I usually use LTL for".
-
-That instinct is right in a practical sense.
-Many properties people ask for in system design sound like:
-
-- eventually something good happens
-- always something bad is prevented
-- once a request arrives, eventually a response appears
-- some loop can continue forever
-
-Those are the same kinds of temporal intuitions that lead people to LTL.
-
-The important distinction is semantic:
-
-- LTL talks about a single path at a time
-- CTL and the mu-calculus talk directly about branching futures
-
-In this repository, branching matters a lot:
-
-- scheduler choice creates alternative next steps
-- random guards create alternative next steps
-- mailbox contents create alternative next steps
-
-So a branching-time logic is a better fit than plain linear-time reasoning.
-
-The nice surprise is that the mu-calculus is expressive enough to capture many of the "eventually", "always", and "until" properties people informally think of as LTL-style requirements, while still speaking directly about the branching graph your runtime actually explores.
-
-### Practical Reading Guide
-
-When reading a raw mu-calculus formula:
-
-1. identify the atomic predicate
-   what is the local fact you care about?
-2. identify the modal direction
-   `diamond` means "some next branch", `box` means "every next branch"
-3. identify the fixpoint
-   `mu` usually means eventuality or progress
-   `nu` usually means invariance or persistence
-4. read the recursion as "keep applying this condition until it stabilizes"
-
-That is all the checker is doing in code.
-It is simple enough to implement compactly, but general enough to cover a large part of practical temporal reasoning.
-
-## Present Operators
-
-The implementation currently supports:
-
-- `not`, `and`, `or`, `implies`
-- `ex`, `ax`
-- `ef`, `af`
-- `eg`, `ag`
-- `eu`, `au`
-
-Raw mu-calculus operators currently include:
-
-- `true`, `false`
-- `not`, `and`, `or`
-- `diamond`, `box`
-- `mu`, `nu`
-- atomic predicates such as `in-state`, `data=`, and `mailbox-has`
-
-Atomic predicates currently include:
-
-- `(in-state A done "actor A is in done")`
-- `(data= A key value "actor A has the expected value")`
-- `(mailbox-has A msg "actor A currently holds the message")`
-
-Predicate forms may carry a final string argument used only as human-readable documentation. The evaluator ignores that trailing string semantically.
-
-## How The Checker Works
-
-The algorithm in this repository is a standard finite-state CTL model-checking pattern over the explored runtime graph.
-
-Step 1: build the reachable graph.
-
-- start from the initial runtime
-- execute one enabled actor step at a time
-- clone successor runtimes
-- deduplicate states by a serialized runtime key
-- record the successor relation between runtime states
-
-If a state has no enabled successors, the implementation records a self-loop labeled `deadlock`.
-That makes deadlock states explicit in the graph and keeps the temporal operators total.
-
-Step 2: evaluate formulas by computing the set of satisfying states.
-
-For each subformula, the checker computes:
-
-- the set of explored states where the subformula is true
-
-Atomic predicates are evaluated directly on each runtime state.
-Boolean operators are evaluated by ordinary set operations:
-
-- `not`
-  complement
-- `and`
-  intersection
-- `or`
-  union
-- `implies`
-  `not left or right`
-
-The temporal operators are computed from the successor graph:
-
-- `EX p`
-  mark any state with at least one successor already marked by `p`
-- `AX p`
-  mark any state whose successors are all marked by `p`
-- `EF p`
-  reduce to `E[true U p]`
-- `AF p`
-  reduce to `A[true U p]`
-- `AG p`
-  reduce to `not EF not p`
-- `EG p`
-  compute a greatest fixpoint:
-  start from states satisfying `p`, then repeatedly remove any state that cannot stay inside that set on at least one successor
-- `EU(p, q)`
-  compute a least fixpoint:
-  start from states satisfying `q`, then repeatedly add states satisfying `p` that can move to an already accepted state
-- `AU(p, q)`
-  compute a least fixpoint:
-  start from states satisfying `q`, then repeatedly add states satisfying `p` whose successors are all already accepted
-
-So the checker is not proving arbitrary mathematics.
-It is doing graph analysis on the explored transition system induced by the actor model.
-
-That is exactly why this works well here:
-
-- the graph is explicit
-- the control flow is explicit
-- the user can inspect both the model and the formulas
-- the result can be explained in ordinary "possibly/necessarily, eventually/always" language
-
-## What CTL Is Proving Here
-
-At the current stage, CTL is proving properties over the repository’s induced model, not solving theorem-proving problems over arbitrary infinite mathematics.
-
-That means:
-
-- if the reachable state space is finite and fully explored, the model-checking result is exact for that model
-- if the model is bounded or abstracted, the result applies to that abstraction
-- if the derived `become` successor relation is wrong, the result is only as good as that model
-
-This is still useful. The tool is intended to make control flow, messaging, and temporal requirements inspectable enough that a human can review the generated model rather than trusting a hidden formalization.
+The result is exact for the explored finite model. It is not a theorem about all imaginable implementations. If the model is wrong, the proof is wrong. The value is that the state machine, message topology, diagrams, and temporal formulas are all inspectable in the same artifact.
 
 # Event Log And Metrics
 
