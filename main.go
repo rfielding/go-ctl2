@@ -3940,6 +3940,13 @@ func tokenize(input string) ([]token, error) {
 			i++
 			continue
 		}
+		if ch == ';' && i+1 < len(runes) && runes[i+1] == ';' {
+			i += 2
+			for i < len(runes) && runes[i] != '\n' {
+				i++
+			}
+			continue
+		}
 
 		switch ch {
 		case '\'':

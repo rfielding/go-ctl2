@@ -144,6 +144,19 @@ func TestReadRejectsMExpr(t *testing.T) {
 	}
 }
 
+func TestReadIgnoresDoubleSemicolonComments(t *testing.T) {
+	got, err := Read(`
+		;; actor comment
+		(send actor message) ;; trailing comment
+	`)
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if got.String() != "(send actor message)" {
+		t.Fatalf("got %s, want %s", got.String(), "(send actor message)")
+	}
+}
+
 func TestRuntimeMessageChainABC(t *testing.T) {
 	ping := Symbol("ping")
 
@@ -999,6 +1012,26 @@ func TestCompileModelRejectsUnknownActorRole(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown actor role") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileModelAcceptsDoubleSemicolonComments(t *testing.T) {
+	spec, err := CompileModel(`
+		;; top-level comment
+		(model
+			(actor Worker
+				;; start state
+				(state start
+					(edge true
+						(become done))) ;; done edge
+				(state done))
+			(instance A Worker (queue 1))) ;; instance comment
+	`)
+	if err != nil {
+		t.Fatalf("CompileModel returned error: %v", err)
+	}
+	if len(spec.Actors) != 1 {
+		t.Fatalf("expected 1 actor, got %d", len(spec.Actors))
 	}
 }
 
