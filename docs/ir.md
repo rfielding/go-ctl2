@@ -40,6 +40,12 @@ The important constraint is inspectability. The user should be able to reject a 
 - one semantic source feeding execution, proof, plots, and diagrams
 - a small enough core language that the generated output is reviewable line by line
 
+# Authoring Prompt And Language Reference
+
+The exact information an LLM needs to author models is also the information a human reviewer needs. The documentation therefore includes the literal authoring prompt plus a generated reference for every core form, guard, action, value helper, CTL operator, and raw modal μ-calculus operator:
+
+{{LANGUAGE_SECTIONS}}
+
 # Terminology
 
 The document uses the following terms consistently:
@@ -49,11 +55,9 @@ The document uses the following terms consistently:
 - actor role
   a reusable behavior template declared by `(actor RoleName ...)`
 - peer role fill
-  an instance-level mapping from a referenced role to the concrete instance that plays it
-- step
-  a model-wide control-state name declared once by `(step Name)`
+  an instance-level mapping from a referenced role to one or more concrete instances that play it
 - state
-  an actor-local implementation of one declared step
+  a named control location declared directly inside an actor role
 - transition
   a guarded atomic step whose successor states are derived from `become`
 - mailbox
@@ -76,7 +80,7 @@ An actor role has:
 - local data
 - a set of named states
 
-Each runtime actor is created explicitly with `(instance ActorName RoleName (PeerRole InstanceName)...)`.
+Each runtime actor is created explicitly with `(instance ActorName RoleName (PeerRole InstanceName...)...)`.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
 
 ## State
@@ -146,15 +150,19 @@ Each actor mailbox can be treated as a bounded or unbounded queue.
 
 - `recv` is ready if a matching message is present
 - `send` is ready if the target mailbox has space
+- `send-any` is ready if any filled target mailbox has space
 
 ## Zero-Capacity Channels
 
 A mailbox capacity of `0` means synchronous rendezvous semantics.
 
 - `send` is ready only if the receiver has a matching ready `recv`
+- `send-any` is ready only if at least one filled receiver has a matching ready `recv`
 - `recv` is ready only if a sender is ready to rendezvous
 
 The runtime currently models this by checking receiver readiness before a zero-capacity send is allowed to execute.
+
+On a successful `recv`, the payload is stored in the declared variable and the local variable `sender` is also set to the sending actor name. That gives the receiver a built-in return address.
 
 ## Random Guards
 
@@ -180,8 +188,6 @@ Full M/M/1/5-style example:
 
 ```lisp
 (model
-  (step loop)
-  (step wait)
   (actor ClientRole
     (state loop
       (edge (dice-range 0.0 0.5)
@@ -266,6 +272,10 @@ The Mermaid artifacts below are a useful companion view for this example:
 
 - a queue state rendition showing explicit self-loops
 - a queue message/service rendition showing arrival and service-completion flows
+
+![M/M/1/5 Queue State Diagram](/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_state.svg)
+
+![M/M/1/5 Queue Flow Diagram](/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_flow.svg)
 
 ## Decision Processes
 
@@ -352,7 +362,7 @@ The intended structured control tools are:
 
 This is closer to a small structured machine IR than to an arbitrary scripting language.
 
-# CTL Strategy
+# Branching-Time Logic
 
 CTL needs an exact successor relation. In this design, the successor relation is derived from `become` calls in each transition body.
 
@@ -363,9 +373,24 @@ Runtime execution exists to validate that:
 
 This means CTL does not need to wait for simulation to discover the control graph.
 
-## What CTL Means
+## CTL And μ-Calculus
 
-CTL is Computation Tree Logic.
+CTL is Computation Tree Logic, and the implementation lowers it into the modal μ-calculus.
+
+The explored graph is a transition system with runtime states `S` and successor relation `→ ⊆ S × S`. We write `s ⊨ φ` when state `s` satisfies formula `φ`.
+
+The mathematical reading is:
+
+- `EX p` means `∃t. s → t ∧ t ⊨ p`
+- `AX p` means `∀t. s → t ⇒ t ⊨ p`
+- `EF p` means `μX.(p ∨ ◇X)`
+- `AF p` means `μX.(p ∨ □X)`
+- `EG p` means `νX.(p ∧ ◇X)`
+- `AG p` means `νX.(p ∧ □X)`
+- `E[p U q]` means `μX.(q ∨ (p ∧ ◇X))`
+- `A[p U q]` means `μX.(q ∨ (p ∧ □X))`
+
+So the user-facing CTL layer and the underlying μ-calculus layer are two views of the same branching-time semantics.
 
 The important idea is that execution does not produce one future. It produces a tree of possible futures:
 
@@ -444,7 +469,7 @@ Examples:
 `AF` is stronger: it means no matter how scheduling and randomness resolve, the desired state is unavoidable.
 That difference is exactly why users need the quantifier explanation up front.
 
-## Mu-Calculus Tutorial
+## Raw μ-Calculus
 
 The modal mu-calculus is the lower-level fixpoint logic underneath this checker.
 CTL is now treated as a readable special case of that more general logic.
@@ -750,58 +775,7 @@ This is the beginning of the metrics side of the tool. The goal is that message 
 
 # Built-ins
 
-The language needs protocol-oriented built-ins so examples like authentication and key exchange do not require embedding large arithmetic sublanguages.
-
-Current built-ins:
-
-- `(md5 out source)`
-  - computes an MD5 digest of the resolved source value
-  - stores a hex string in `out`
-
-- `(rsa-raw out modulus exponent message)`
-  - performs raw modular exponentiation
-  - stores the numeric result in `out`
-
-- `(cryptorandom out bytes)`
-  - generates cryptographic randomness
-  - stores a hex string in `out`
-
-- `(sample-exponential out rate)`
-  - samples from an exponential distribution with the given positive rate
-  - stores the sampled floating-point value in `out`
-
-Pure value-level helpers:
-
-- `(cons a b)`
-  - builds a simple list by prepending `a` to `b`
-- `(car xs)`
-  - returns the first element of a list
-- `(cdr xs)`
-  - returns the tail of a list
-- `(def name (params...) body)`
-  - defines an actor-local pure helper function whose body can be used inside value positions such as `set` and `send`
-
-These are intentionally low-level. They are not safe protocol APIs. They are protocol-modeling primitives.
-
-Planned built-ins:
-
-- SHA families
-- keyed MAC constructions
-- raw RSA decrypt/sign variants
-- byte concatenation and parsing helpers
-- comparison helpers for protocol checks
-
-## Protocol Modeling Direction
-
-The current crypto built-ins are intentionally raw. The purpose of the built-ins is not to provide production-safe cryptographic APIs. The purpose is to let protocol examples express byte-level and arithmetic-level steps without bloating the core language.
-
-The long-term direction is to support examples such as:
-
-- challenge-response protocols
-- request/acknowledgement handshakes
-- key transport and key confirmation flows
-- message authentication checks
-- timeout and retry logic
+The canonical builtin inventory now lives in the generated authoring reference near the top of this document so the human-facing documentation and the LLM-facing prompt share one source of truth.
 
 # Why This IR Is Sensible
 
@@ -857,7 +831,7 @@ This allows:
 
 - state machine diagrams without simulation
 - sequence diagrams without simulation
-- UML-like class diagrams showing actor-local variable ownership plus read/write usage
+- UML-like class diagrams showing actor-local control states and data
 - the same input feeding both proof and presentation
 
 # Repository Layout
@@ -879,6 +853,12 @@ The current repository is intentionally small. The most important files are:
 
 The tests are not secondary. They are the clearest executable specification currently in the repository.
 
+# Worked Examples
+
+The canonical examples are generated as exact input/output pairs: the literal Lisp source first, then the rendered diagrams, CTL outcomes, and plots that come from that same source.
+
+{{EXAMPLE_SECTIONS}}
+
 # Example Model
 
 The document example should not be a single actor in isolation. The intended workflow is to describe a set of interacting actors, generate diagrams from that same input, and check temporal requirements over the same derived control graph.
@@ -893,27 +873,27 @@ This small message-chain example is intentionally simple, but it already exercis
 
 ```lisp
 (model
-  (step loop)
-  (step relay)
-  (step idle)
   (actor ClientRole
-    (state loop
+    (state start
       (edge true
         (send RelayRole '(message (type ping)))
-        (become loop))))
+        (become done)))
+    (state done))
 
   (actor RelayRole
     (state relay
       (edge true
         (recv msg)
         (send ServerRole msg)
-        (become relay))))
+        (become done)))
+    (state done))
 
   (actor ServerRole
     (state idle
       (edge true
         (recv received)
-        (become idle))))
+        (become done)))
+    (state done))
 
   (instance Client ClientRole (RelayRole Relay))
   (instance Relay RelayRole (ServerRole Server))
@@ -925,15 +905,15 @@ This small message-chain example is intentionally simple, but it already exercis
 
   (xyplot message_outstanding
     (title "Message Chain Outstanding Messages")
-    (steps 24)
+    (steps 4)
     (metric sent-minus-received))
   (xyplot message_sends
     (title "Message Chain Sends By Step")
-    (steps 24)
+    (steps 4)
     (metric send-count))
   (xyplot message_receives
     (title "Message Chain Receives By Step")
-    (steps 24)
+    (steps 4)
     (metric receive-count)))
 ```
 
@@ -947,6 +927,14 @@ The operational intent is:
 - the relay forwards that value unchanged to the server
 - if a `recv` has no message available, that edge is simply not ready
 
+From that same model, the documentation keeps the rendered diagrams adjacent to the source:
+
+![Message Chain State Diagram](/home/rfielding/code/go-ctl2/docs/generated/a_to_b_state.svg)
+
+![Message Chain Sequence Diagram](/home/rfielding/code/go-ctl2/docs/generated/a_to_b_sequence.svg)
+
+{{ASSERTION_SECTIONS}}
+
 ## Example Rendered Class Data
 
 From that same model, the documentation renderer can emit a Mermaid class diagram that exposes:
@@ -955,56 +943,125 @@ From that same model, the documentation renderer can emit a Mermaid class diagra
 - the bound actor role
 - the actor-local control states
 - the actor-local variables inferred from declared data and transition effects
-- whether each variable is read, written, or both
 
 Example:
 
 ```mermaid
 classDiagram
     class Client {
-        +loop : step
-        +state : var
+        +start : state
+        +done : state
+        +state : data
     }
     <<ClientRole>> Client
-    class Clientvarstate {
-        +state : var
-    }
-    Client --> Clientvarstate : writes
 
     class Relay {
-        +relay : step
-        +msg : var
-        +state : var
+        +relay : state
+        +done : state
+        +msg : data
+        +sender : data
+        +state : data
     }
     <<RelayRole>> Relay
-    class Relayvarmsg {
-        +msg : var
-    }
-    class Relayvarstate {
-        +state : var
-    }
-    Relay --> Relayvarmsg : writes
-    Relay --> Relayvarstate : writes
 
     class Server {
-        +idle : step
-        +received : var
-        +state : var
+        +idle : state
+        +done : state
+        +received : data
+        +sender : data
+        +state : data
     }
     <<ServerRole>> Server
-    class Servervarreceived {
-        +received : var
-    }
-    class Servervarstate {
-        +state : var
-    }
-    Server --> Servervarreceived : writes
-    Server --> Servervarstate : writes
 ```
 
 This is intentionally actor-local.
 The class view does not try to infer hidden shared memory because the language does not have any.
 It instead makes actor-owned variables legible enough that a human reviewer can quickly see which names are introduced and which ones participate in local control logic.
+
+## Role Reuse Example
+
+The same role can be instantiated multiple times without sharing variables.
+This bakery sketch uses:
+
+- one `ProductionRole`
+- two `TruckRole` instances
+- three `StoreRole` instances
+- one `CustomerBaseRole` per store
+
+```lisp
+(model
+  (actor ProductionRole
+    (data baked 0)
+    (state start
+      (edge true
+        (send-any TruckRole batch)
+        (add baked 1)
+        (become done)))
+    (state done))
+
+  (actor TruckRole
+    (data deliveries 0)
+    (state wait
+      (edge true
+        (recv cargo)
+        (add deliveries 1)
+        (send StoreRole cargo)
+        (become done)))
+    (state done))
+
+  (actor StoreRole
+    (data inventory 0)
+    (data sold 0)
+    (state idle
+      (edge true
+        (recv shipment)
+        (add inventory 1)
+        (become stocked)))
+    (state stocked
+      (edge true
+        (send CustomerBaseRole sale)
+        (sub inventory 1)
+        (add sold 1)
+        (become stocked))))
+
+  (actor CustomerBaseRole
+    (data served 0)
+    (state ready
+      (edge true
+        (recv sale)
+        (add served 1)
+        (become ready))))
+
+  (instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
+  (instance TruckNorth TruckRole (StoreRole StoreA))
+  (instance TruckSouth TruckRole (StoreRole StoreB))
+  (instance StoreA StoreRole (CustomerBaseRole CustomerA))
+  (instance StoreB StoreRole (CustomerBaseRole CustomerB))
+  (instance StoreC StoreRole (CustomerBaseRole CustomerC))
+  (instance CustomerA CustomerBaseRole)
+  (instance CustomerB CustomerBaseRole)
+  (instance CustomerC CustomerBaseRole))
+```
+
+If you step `Production`, then `TruckNorth`, then `TruckNorth` again, then `StoreA`, then `StoreA` again, and finally `CustomerA`, the local data stays instance-specific:
+
+- `Production.baked = 1`
+- `TruckNorth.deliveries = 1`
+- `TruckSouth.deliveries = 0`
+- `StoreA.sold = 1`
+- `StoreB.sold = 0`
+- `StoreC.sold = 0`
+- `CustomerA.served = 1`
+- `CustomerB.served = 0`
+- `CustomerC.served = 0`
+
+That is the intended semantics: roles are reusable templates, but every instantiated actor carries its own data map and current control state.
+
+The repeated actor names are real control-flow steps, not a documentation trick:
+
+- `Production` can target either truck because its `TruckRole` fill names both `TruckNorth` and `TruckSouth`, and `send-any` chooses one concrete truck.
+- `TruckNorth` first receives the batch, then sends it to `StoreA`.
+- `StoreA` first receives the shipment, then sends a sale to `CustomerA`.
 
 ## Walkthrough Of The Example
 
@@ -1012,20 +1069,20 @@ The example should be read as a top-level `model` containing three small control
 
 `Client`
 
-- starts in `loop`
+- starts in `start`
 - sends one `ping`-typed message to `Relay`
-- becomes `loop` again
+- becomes `done`
 
 `Relay`
 
 - has one explicit source state, `relay`
-- when a message is available, it consumes it, forwards it to `Server`, and becomes `relay` again
+- when a message is available, it consumes it, forwards it to `Server`, and becomes `done`
 - the compiler inserts an internal wait substate so the compiled control graph still begins each communication step with `recv` or `send`
 
 `Server`
 
 - waits in `idle`
-- when a message is available, it consumes it, records it, and becomes `idle` again
+- when a message is available, it consumes it, records it, and becomes `done`
 
 This example is deliberately small, but it is enough to show:
 
@@ -1066,11 +1123,7 @@ Natural follow-on plots include:
 
 The build expects Mermaid sources under `docs/mermaid/` and renders SVGs into `docs/generated/`.
 
-Example includes:
-
-{{DIAGRAM_SECTIONS}}
-
-The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure.
+The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure, and the examples above keep those diagrams next to the Lisp that generated them.
 
 # Build
 

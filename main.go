@@ -38,7 +38,7 @@ type Value struct {
 type GuardFunc func(*Runtime, *Actor) bool
 type ActionFunc func(*Runtime, *Actor) error
 type MessageGuardFunc func(Value) bool
-type MessageHandlerFunc func(*Runtime, *Actor, Value) error
+type MessageHandlerFunc func(*Runtime, *Actor, Value, string) error
 
 type FunctionDef struct {
 	Params []string
@@ -85,7 +85,7 @@ type State struct {
 type Actor struct {
 	Name         string
 	Role         string
-	RoleBindings map[string]string
+	RoleBindings map[string][]string
 	Data         map[string]Value
 	Defs         map[string]FunctionDef
 	States       []State
@@ -93,16 +93,18 @@ type Actor struct {
 }
 
 type Runtime struct {
-	Actors        []*Actor
-	Mailboxes     map[string][]Value
-	MailboxCaps   map[string]int
-	SyncInbox     map[string]Value
-	Trace         []string
-	Events        []Event
-	Step          int
-	DiceValue     float64
-	ChooseActorFn func(*Runtime) int
-	Dice          func() float64
+	Actors         []*Actor
+	Mailboxes      map[string][]Value
+	MailboxSenders map[string][]string
+	MailboxCaps    map[string]int
+	SyncInbox      map[string]Value
+	SyncSender     map[string]string
+	Trace          []string
+	Events         []Event
+	Step           int
+	DiceValue      float64
+	ChooseActorFn  func(*Runtime) int
+	Dice           func() float64
 }
 
 type StepResult struct {
@@ -206,22 +208,16 @@ type AssertionResult struct {
 type RequirementsModel struct {
 	ActorTypes   []*Actor
 	Actors       []*Actor
-	Steps        []StepDeclaration
 	Declarations []ActorDeclaration
 	Assertions   []Assertion
 	Plots        []XYPlot
 	Spec         Value
 }
 
-type StepDeclaration struct {
-	Name string
-	Spec Value
-}
-
 type ActorDeclaration struct {
 	Name         string
 	Role         string
-	RoleBindings map[string]string
+	RoleBindings map[string][]string
 	Spec         Value
 }
 
@@ -248,16 +244,19 @@ type ExploredEdge struct {
 
 func NewRuntime(actors ...*Actor) *Runtime {
 	rt := &Runtime{
-		Actors:      actors,
-		Mailboxes:   make(map[string][]Value, len(actors)),
-		MailboxCaps: make(map[string]int, len(actors)),
-		SyncInbox:   make(map[string]Value, len(actors)),
+		Actors:         actors,
+		Mailboxes:      make(map[string][]Value, len(actors)),
+		MailboxSenders: make(map[string][]string, len(actors)),
+		MailboxCaps:    make(map[string]int, len(actors)),
+		SyncInbox:      make(map[string]Value, len(actors)),
+		SyncSender:     make(map[string]string, len(actors)),
 		Dice: func() float64 {
 			return rand.Float64()
 		},
 	}
 	for _, actor := range actors {
 		rt.Mailboxes[actor.Name] = nil
+		rt.MailboxSenders[actor.Name] = nil
 		rt.MailboxCaps[actor.Name] = -1
 		if actor.Data == nil {
 			actor.Data = map[string]Value{}
@@ -459,6 +458,10 @@ func (rt *Runtime) Mailbox(name string) []Value {
 	return rt.Mailboxes[name]
 }
 
+func (rt *Runtime) mailboxSenders(name string) []string {
+	return rt.MailboxSenders[name]
+}
+
 func (rt *Runtime) mailboxCap(name string) int {
 	cap, ok := rt.MailboxCaps[name]
 	if !ok {
@@ -467,20 +470,27 @@ func (rt *Runtime) mailboxCap(name string) int {
 	return cap
 }
 
-func (rt *Runtime) Enqueue(name string, message Value) {
+func (rt *Runtime) Enqueue(name string, message Value, sender string) {
 	rt.Mailboxes[name] = append(rt.Mailboxes[name], message)
+	rt.MailboxSenders[name] = append(rt.MailboxSenders[name], sender)
 }
 
-func (rt *Runtime) DequeueMatching(name string, guard MessageGuardFunc) (Value, bool) {
+func (rt *Runtime) DequeueMatching(name string, guard MessageGuardFunc) (Value, string, bool) {
 	mailbox := rt.Mailboxes[name]
+	senders := rt.MailboxSenders[name]
 	for i, message := range mailbox {
 		if guard != nil && !guard(message) {
 			continue
 		}
 		rt.Mailboxes[name] = append(mailbox[:i], mailbox[i+1:]...)
-		return message, true
+		sender := ""
+		if i < len(senders) {
+			sender = senders[i]
+			rt.MailboxSenders[name] = append(senders[:i], senders[i+1:]...)
+		}
+		return message, sender, true
 	}
-	return Value{}, false
+	return Value{}, "", false
 }
 
 func (rt *Runtime) Tracef(format string, args ...interface{}) {
@@ -556,21 +566,23 @@ func (rt *Runtime) EventRateSeries(kind EventKind, filter func(Event) bool, wind
 
 func (rt *Runtime) Clone() *Runtime {
 	clone := &Runtime{
-		Actors:      make([]*Actor, len(rt.Actors)),
-		Mailboxes:   make(map[string][]Value, len(rt.Mailboxes)),
-		MailboxCaps: make(map[string]int, len(rt.MailboxCaps)),
-		SyncInbox:   cloneValueMap(rt.SyncInbox),
-		Trace:       append([]string(nil), rt.Trace...),
-		Events:      append([]Event(nil), rt.Events...),
-		Step:        rt.Step,
-		DiceValue:   rt.DiceValue,
-		Dice:        rt.Dice,
+		Actors:         make([]*Actor, len(rt.Actors)),
+		Mailboxes:      make(map[string][]Value, len(rt.Mailboxes)),
+		MailboxSenders: cloneStringSliceMap(rt.MailboxSenders),
+		MailboxCaps:    make(map[string]int, len(rt.MailboxCaps)),
+		SyncInbox:      cloneValueMap(rt.SyncInbox),
+		SyncSender:     cloneStringMap(rt.SyncSender),
+		Trace:          append([]string(nil), rt.Trace...),
+		Events:         append([]Event(nil), rt.Events...),
+		Step:           rt.Step,
+		DiceValue:      rt.DiceValue,
+		Dice:           rt.Dice,
 	}
 	for i, actor := range rt.Actors {
 		cloneActor := &Actor{
 			Name:         actor.Name,
 			Role:         actor.Role,
-			RoleBindings: cloneStringMap(actor.RoleBindings),
+			RoleBindings: cloneStringSliceMap(actor.RoleBindings),
 			Data:         cloneValueMap(actor.Data),
 			Defs:         cloneFunctionDefs(actor.Defs),
 			States:       cloneStates(actor.States),
@@ -590,7 +602,7 @@ func cloneActor(actor *Actor) *Actor {
 	return &Actor{
 		Name:         actor.Name,
 		Role:         actor.Role,
-		RoleBindings: cloneStringMap(actor.RoleBindings),
+		RoleBindings: cloneStringSliceMap(actor.RoleBindings),
 		Data:         cloneValueMap(actor.Data),
 		Defs:         cloneFunctionDefs(actor.Defs),
 		States:       cloneStates(actor.States),
@@ -618,6 +630,10 @@ func (rt *Runtime) StateKey() string {
 		for i, message := range rt.Mailboxes[actor.Name] {
 			if i > 0 {
 				b.WriteString(",")
+			}
+			if sender := mailboxSenderAt(rt.mailboxSenders(actor.Name), i); sender != "" {
+				b.WriteString(sender)
+				b.WriteString(">")
 			}
 			b.WriteString(message.String())
 		}
@@ -839,6 +855,13 @@ func stripOptionalDescription(items []Value, minLen int) []Value {
 	return items
 }
 
+func normalizePredicateLiteral(v Value) Value {
+	if isListHead(v, "quote") && len(v.Items) == 2 {
+		return cloneValue(v.Items[1])
+	}
+	return cloneValue(v)
+}
+
 func buildCTL(form Value) (CTLFormula, error) {
 	if !isList(form) || len(form.Items) == 0 {
 		return CTLFormula{}, fmt.Errorf("ctl formula must be a non-empty list")
@@ -1016,7 +1039,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		return Atom(ActorDataEquals(actor, key, items[3])), nil
+		return Atom(ActorDataEquals(actor, key, normalizePredicateLiteral(items[3]))), nil
 	case "mailbox-has":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
@@ -1026,7 +1049,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 		if err != nil {
 			return CTLFormula{}, err
 		}
-		return Atom(MailboxHas(actor, items[2])), nil
+		return Atom(MailboxHas(actor, normalizePredicateLiteral(items[2]))), nil
 	default:
 		return CTLFormula{}, fmt.Errorf("unsupported ctl operator %q", head)
 	}
@@ -1165,7 +1188,7 @@ func buildMu(form Value) (MuFormula, error) {
 		if err != nil {
 			return MuFormula{}, err
 		}
-		return MuAtomFormula(ActorDataEquals(actor, key, items[3])), nil
+		return MuAtomFormula(ActorDataEquals(actor, key, normalizePredicateLiteral(items[3]))), nil
 	case "mailbox-has":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
@@ -1175,7 +1198,7 @@ func buildMu(form Value) (MuFormula, error) {
 		if err != nil {
 			return MuFormula{}, err
 		}
-		return MuAtomFormula(MailboxHas(actor, items[2])), nil
+		return MuAtomFormula(MailboxHas(actor, normalizePredicateLiteral(items[2]))), nil
 	default:
 		return MuFormula{}, fmt.Errorf("unsupported mu operator %q", head)
 	}
@@ -1370,36 +1393,61 @@ func MailboxHas(actorName string, want Value) StatePredicate {
 	}
 }
 
-func Send(to string, message Value) ActionFunc {
-	return func(rt *Runtime, actor *Actor) error {
-		resolved := evalValue(actor, message)
-		if rt.mailboxCap(to) == 0 {
-			if err := rt.rendezvous(to, resolved); err != nil {
-				return err
-			}
-			rt.logEvent(Event{
-				Step:      rt.Step,
-				Kind:      EventSend,
-				ActorName: actor.Name,
-				PeerName:  to,
-				Message:   cloneValue(resolved),
-			})
-			rt.Tracef("%s -> %s %s", actor.Name, to, resolved.String())
-			return nil
+func (rt *Runtime) targetReady(target string, message Value) bool {
+	cap := rt.mailboxCap(target)
+	if cap == 0 {
+		return rt.canRendezvous(target, message)
+	}
+	return cap < 0 || len(rt.Mailbox(target)) < cap
+}
+
+func (rt *Runtime) deliverMessage(from, to string, resolved Value) error {
+	if rt.mailboxCap(to) == 0 {
+		if err := rt.rendezvous(from, to, resolved); err != nil {
+			return err
 		}
-		if cap := rt.mailboxCap(to); cap >= 0 && len(rt.Mailbox(to)) >= cap {
-			return fmt.Errorf("mailbox %s is full", to)
-		}
-		rt.Enqueue(to, resolved)
 		rt.logEvent(Event{
 			Step:      rt.Step,
 			Kind:      EventSend,
-			ActorName: actor.Name,
+			ActorName: from,
 			PeerName:  to,
 			Message:   cloneValue(resolved),
 		})
-		rt.Tracef("%s -> %s %s", actor.Name, to, resolved.String())
+		rt.Tracef("%s -> %s %s", from, to, resolved.String())
 		return nil
+	}
+	if cap := rt.mailboxCap(to); cap >= 0 && len(rt.Mailbox(to)) >= cap {
+		return fmt.Errorf("mailbox %s is full", to)
+	}
+	rt.Enqueue(to, resolved, from)
+	rt.logEvent(Event{
+		Step:      rt.Step,
+		Kind:      EventSend,
+		ActorName: from,
+		PeerName:  to,
+		Message:   cloneValue(resolved),
+	})
+	rt.Tracef("%s -> %s %s", from, to, resolved.String())
+	return nil
+}
+
+func Send(to string, message Value) ActionFunc {
+	return func(rt *Runtime, actor *Actor) error {
+		resolved := evalValue(actor, message)
+		return rt.deliverMessage(actor.Name, to, resolved)
+	}
+}
+
+func SendAny(targets []string, message Value) ActionFunc {
+	return func(rt *Runtime, actor *Actor) error {
+		resolved := evalValue(actor, message)
+		for _, to := range targets {
+			if !rt.targetReady(to, resolved) {
+				continue
+			}
+			return rt.deliverMessage(actor.Name, to, resolved)
+		}
+		return fmt.Errorf("no send-any target ready for %s", resolved.String())
 	}
 }
 
@@ -1408,20 +1456,23 @@ func Receive(match MessageGuardFunc, handler MessageHandlerFunc) ActionFunc {
 		if offered, ok := rt.SyncInbox[actor.Name]; ok {
 			if match == nil || match(offered) {
 				delete(rt.SyncInbox, actor.Name)
+				sender := rt.SyncSender[actor.Name]
+				delete(rt.SyncSender, actor.Name)
 				rt.logEvent(Event{
 					Step:      rt.Step,
 					Kind:      EventReceive,
 					ActorName: actor.Name,
+					PeerName:  sender,
 					Message:   cloneValue(offered),
 				})
 				rt.Tracef("%s <= %s", actor.Name, offered.String())
 				if handler == nil {
 					return nil
 				}
-				return handler(rt, actor, offered)
+				return handler(rt, actor, offered, sender)
 			}
 		}
-		message, ok := rt.DequeueMatching(actor.Name, match)
+		message, sender, ok := rt.DequeueMatching(actor.Name, match)
 		if !ok {
 			return nil
 		}
@@ -1429,19 +1480,21 @@ func Receive(match MessageGuardFunc, handler MessageHandlerFunc) ActionFunc {
 			Step:      rt.Step,
 			Kind:      EventReceive,
 			ActorName: actor.Name,
+			PeerName:  sender,
 			Message:   cloneValue(message),
 		})
 		rt.Tracef("%s <= %s", actor.Name, message.String())
 		if handler == nil {
 			return nil
 		}
-		return handler(rt, actor, message)
+		return handler(rt, actor, message, sender)
 	}
 }
 
 func ReceiveInto(name string) ActionFunc {
-	return Receive(nil, func(_ *Runtime, actor *Actor, message Value) error {
+	return Receive(nil, func(_ *Runtime, actor *Actor, message Value, sender string) error {
 		actor.Data[name] = cloneValue(message)
+		actor.Data["sender"] = Symbol(sender)
 		return nil
 	})
 }
@@ -1506,11 +1559,22 @@ func (rt *Runtime) actionReady(form Value, actor *Actor, offered *Value) bool {
 			return false
 		}
 		message := form.Items[2]
-		cap := rt.mailboxCap(target)
-		if cap == 0 {
-			return rt.canRendezvous(target, message)
+		return rt.targetReady(target, message)
+	case "send-any":
+		if len(form.Items) < 4 {
+			return false
 		}
-		return cap < 0 || len(rt.Mailbox(target)) < cap
+		message := form.Items[len(form.Items)-1]
+		for _, item := range form.Items[1 : len(form.Items)-1] {
+			target, err := expectSymbol(item, "send-any target")
+			if err != nil {
+				return false
+			}
+			if rt.targetReady(target, message) {
+				return true
+			}
+		}
+		return false
 	case "recv":
 		if len(form.Items) != 2 {
 			return false
@@ -1548,7 +1612,7 @@ func (rt *Runtime) canRendezvous(target string, message Value) bool {
 	return false
 }
 
-func (rt *Runtime) rendezvous(target string, message Value) error {
+func (rt *Runtime) rendezvous(from, target string, message Value) error {
 	targetActor := rt.actorByName(target)
 	if targetActor == nil {
 		return fmt.Errorf("unknown actor %s", target)
@@ -1573,15 +1637,18 @@ func (rt *Runtime) rendezvous(target string, message Value) error {
 			TransitionName: transition.Name,
 		})
 		rt.SyncInbox[target] = message
+		rt.SyncSender[target] = from
 		rt.Tracef("step: actor=%s state=%s transition=%s", targetActor.Name, state.Name, transition.Name)
 		if transition.Action != nil {
 			if err := transition.Action(rt, targetActor); err != nil {
 				delete(rt.SyncInbox, target)
+				delete(rt.SyncSender, target)
 				return err
 			}
 		}
 		if err := rt.validateTransitionNext(transition, targetActor); err != nil {
 			delete(rt.SyncInbox, target)
+			delete(rt.SyncSender, target)
 			return err
 		}
 		return nil
@@ -1861,19 +1928,8 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 	}
 	model := &RequirementsModel{Spec: form}
 	actorTypes := map[string]*Actor{}
-	stepNames := map[string]bool{}
 	for _, item := range form.Items[1:] {
 		switch {
-		case isListHead(item, "step"):
-			step, err := buildStepDeclaration(item)
-			if err != nil {
-				return nil, err
-			}
-			if stepNames[step.Name] {
-				return nil, fmt.Errorf("duplicate step %s", step.Name)
-			}
-			stepNames[step.Name] = true
-			model.Steps = append(model.Steps, step)
 		case isListHead(item, "actor"):
 			actor, err := buildActor(item)
 			if err != nil {
@@ -1903,15 +1959,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 			}
 			model.Plots = append(model.Plots, plot)
 		default:
-			return nil, fmt.Errorf("model item must be step, actor, instance, assert, or xyplot")
-		}
-	}
-	if len(model.Steps) == 0 {
-		return nil, fmt.Errorf("model: no step declarations")
-	}
-	for _, actorType := range model.ActorTypes {
-		if err := validateActorSteps(actorType, stepNames); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("model item must be actor, instance, assert, or xyplot")
 		}
 	}
 	if len(model.Declarations) == 0 {
@@ -1941,7 +1989,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 		actor := cloneActor(actorType)
 		actor.Name = decl.Name
 		actor.Role = decl.Role
-		actor.RoleBindings = cloneStringMap(decl.RoleBindings)
+		actor.RoleBindings = cloneStringSliceMap(decl.RoleBindings)
 		actor.Spec = Value{}
 		if err := resolveActorPeerRoles(actor); err != nil {
 			return nil, err
@@ -1952,36 +2000,6 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 		return nil, fmt.Errorf("model: no actors")
 	}
 	return model, nil
-}
-
-func buildStepDeclaration(form Value) (StepDeclaration, error) {
-	if !isListHead(form, "step") || len(form.Items) != 2 {
-		return StepDeclaration{}, fmt.Errorf("step form must be (step name)")
-	}
-	name, err := expectSymbol(form.Items[1], "step name")
-	if err != nil {
-		return StepDeclaration{}, err
-	}
-	return StepDeclaration{Name: name, Spec: form}, nil
-}
-
-func validateActorSteps(actor *Actor, stepNames map[string]bool) error {
-	for _, state := range actor.States {
-		if state.Spec.Kind != KindInvalid && !stepNames[state.Name] {
-			return fmt.Errorf("actor role %s references undeclared step %s", actor.Name, state.Name)
-		}
-		for _, transition := range state.Transitions {
-			for _, next := range transition.NextStates {
-				if isGeneratedStepName(next) {
-					continue
-				}
-				if !stepNames[next] {
-					return fmt.Errorf("actor role %s references undeclared step %s", actor.Name, next)
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func isGeneratedStepName(name string) bool {
@@ -2028,9 +2046,9 @@ func walkSendTargets(form Value, visit func(string)) error {
 				return err
 			}
 		}
-	case "send":
+	case "send", "send-any":
 		if len(form.Items) != 3 {
-			return fmt.Errorf("send must be (send role message)")
+			return fmt.Errorf("%s must be (%s role message)", head, head)
 		}
 		role, err := expectSymbol(form.Items[1], "send target role")
 		if err != nil {
@@ -2048,16 +2066,18 @@ func validateActorRoleBindings(decl ActorDeclaration, actorType *Actor, actorTyp
 		if _, ok := actorTypes[role]; !ok {
 			return fmt.Errorf("actor role %s sends to unknown peer role %s", actorType.Name, role)
 		}
-		targetInstance, ok := decl.RoleBindings[role]
-		if !ok {
+		targetInstances, ok := decl.RoleBindings[role]
+		if !ok || len(targetInstances) == 0 {
 			return fmt.Errorf("instance %s must fill peer role %s", decl.Name, role)
 		}
-		targetDecl, ok := declarations[targetInstance]
-		if !ok {
-			return fmt.Errorf("instance %s fills peer role %s with unknown instance %s", decl.Name, role, targetInstance)
-		}
-		if targetDecl.Role != role {
-			return fmt.Errorf("instance %s fills peer role %s with instance %s playing role %s", decl.Name, role, targetInstance, targetDecl.Role)
+		for _, targetInstance := range targetInstances {
+			targetDecl, ok := declarations[targetInstance]
+			if !ok {
+				return fmt.Errorf("instance %s fills peer role %s with unknown instance %s", decl.Name, role, targetInstance)
+			}
+			if targetDecl.Role != role {
+				return fmt.Errorf("instance %s fills peer role %s with instance %s playing role %s", decl.Name, role, targetInstance, targetDecl.Role)
+			}
 		}
 	}
 	for role := range decl.RoleBindings {
@@ -2087,7 +2107,7 @@ func resolveActorPeerRoles(actor *Actor) error {
 	return nil
 }
 
-func resolveSendTargets(form Value, bindings map[string]string) (Value, error) {
+func resolveSendTargets(form Value, bindings map[string][]string) (Value, error) {
 	if !isList(form) || len(form.Items) == 0 {
 		return cloneValue(form), nil
 	}
@@ -2104,11 +2124,32 @@ func resolveSendTargets(form Value, bindings map[string]string) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		target, ok := bindings[role]
-		if !ok {
+		targets, ok := bindings[role]
+		if !ok || len(targets) == 0 {
 			return Value{}, fmt.Errorf("unresolved peer role %s", role)
 		}
-		return List(Symbol("send"), Symbol(target), cloneValue(form.Items[2])), nil
+		if len(targets) != 1 {
+			return Value{}, fmt.Errorf("peer role %s resolves to %d instances; use send-any", role, len(targets))
+		}
+		return List(Symbol("send"), Symbol(targets[0]), cloneValue(form.Items[2])), nil
+	case "send-any":
+		if len(form.Items) != 3 {
+			return Value{}, fmt.Errorf("send-any must be (send-any role message)")
+		}
+		role, err := expectSymbol(form.Items[1], "peer role")
+		if err != nil {
+			return Value{}, err
+		}
+		targets, ok := bindings[role]
+		if !ok || len(targets) == 0 {
+			return Value{}, fmt.Errorf("unresolved peer role %s", role)
+		}
+		items := []Value{Symbol("send-any")}
+		for _, target := range targets {
+			items = append(items, Symbol(target))
+		}
+		items = append(items, cloneValue(form.Items[2]))
+		return List(items...), nil
 	case "do", "if":
 		items := make([]Value, len(form.Items))
 		items[0] = cloneValue(form.Items[0])
@@ -2127,7 +2168,7 @@ func resolveSendTargets(form Value, bindings map[string]string) (Value, error) {
 
 func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 	if !isListHead(form, "instance") || len(form.Items) < 3 {
-		return ActorDeclaration{}, fmt.Errorf("instance form must be (instance name role (PeerRole InstanceName)...)")
+		return ActorDeclaration{}, fmt.Errorf("instance form must be (instance name role (PeerRole InstanceName...)...)")
 	}
 	name, err := expectSymbol(form.Items[1], "actor name")
 	if err != nil {
@@ -2137,23 +2178,32 @@ func buildActorDeclaration(form Value) (ActorDeclaration, error) {
 	if err != nil {
 		return ActorDeclaration{}, err
 	}
-	bindings := map[string]string{}
+	bindings := map[string][]string{}
 	for _, item := range form.Items[3:] {
-		if !isList(item) || len(item.Items) != 2 {
-			return ActorDeclaration{}, fmt.Errorf("instance binding must be (PeerRole InstanceName)")
+		if !isList(item) || len(item.Items) < 2 {
+			return ActorDeclaration{}, fmt.Errorf("instance binding must be (PeerRole InstanceName...)")
 		}
 		peerRole, err := expectSymbol(item.Items[0], "peer role")
-		if err != nil {
-			return ActorDeclaration{}, err
-		}
-		target, err := expectSymbol(item.Items[1], "peer instance")
 		if err != nil {
 			return ActorDeclaration{}, err
 		}
 		if _, exists := bindings[peerRole]; exists {
 			return ActorDeclaration{}, fmt.Errorf("instance %s repeats binding for peer role %s", name, peerRole)
 		}
-		bindings[peerRole] = target
+		targets := make([]string, 0, len(item.Items)-1)
+		seen := map[string]bool{}
+		for _, targetForm := range item.Items[1:] {
+			target, err := expectSymbol(targetForm, "peer instance")
+			if err != nil {
+				return ActorDeclaration{}, err
+			}
+			if seen[target] {
+				return ActorDeclaration{}, fmt.Errorf("instance %s repeats peer instance %s for role %s", name, target, peerRole)
+			}
+			seen[target] = true
+			targets = append(targets, target)
+		}
+		bindings[peerRole] = targets
 	}
 	return ActorDeclaration{
 		Name:         name,
@@ -2517,7 +2567,7 @@ func validateNoNestedSendRecv(form Value) error {
 		return err
 	}
 	switch head {
-	case "send", "recv":
+	case "send", "send-any", "recv":
 		return fmt.Errorf("%s must be the first action after the edge condition", head)
 	case "do":
 		for _, item := range form.Items[1:] {
@@ -2543,7 +2593,7 @@ func isSendOrRecvForm(form Value) bool {
 	if err != nil {
 		return false
 	}
-	return head == "send" || head == "recv"
+	return head == "send" || head == "send-any" || head == "recv"
 }
 
 func compileGuard(form Value) (GuardFunc, error) {
@@ -2784,6 +2834,19 @@ func compileAction(form Value) (ActionFunc, error) {
 			return nil, err
 		}
 		return Send(to, form.Items[2]), nil
+	case "send-any":
+		if len(form.Items) < 3 {
+			return nil, fmt.Errorf("send-any must be (send-any actor... message)")
+		}
+		targets := make([]string, 0, len(form.Items)-2)
+		for _, item := range form.Items[1 : len(form.Items)-1] {
+			target, err := expectSymbol(item, "send-any target")
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, target)
+		}
+		return SendAny(targets, form.Items[len(form.Items)-1]), nil
 	case "recv":
 		if len(form.Items) != 2 {
 			return nil, fmt.Errorf("recv must be (recv variable)")
@@ -3100,6 +3163,17 @@ func cloneStringMap(in map[string]string) map[string]string {
 	return out
 }
 
+func cloneStringSliceMap(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for key, value := range in {
+		out[key] = append([]string(nil), value...)
+	}
+	return out
+}
+
 func cloneStates(in []State) []State {
 	if len(in) == 0 {
 		return nil
@@ -3155,13 +3229,20 @@ func sortedValueKeys(in map[string]Value) []string {
 	return keys
 }
 
-func sortedStringKeys(in map[string]string) []string {
+func sortedStringKeys(in map[string][]string) []string {
 	keys := make([]string, 0, len(in))
 	for key := range in {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func mailboxSenderAt(senders []string, idx int) string {
+	if idx < 0 || idx >= len(senders) {
+		return ""
+	}
+	return senders[idx]
 }
 
 func valueInt(v Value) (int, error) {
@@ -3521,7 +3602,11 @@ func (a Actor) Lisp() Value {
 		items = append(items, List(Symbol("role"), Symbol(a.Role)))
 	}
 	for _, role := range sortedStringKeys(a.RoleBindings) {
-		items = append(items, List(Symbol(role), Symbol(a.RoleBindings[role])))
+		binding := []Value{Symbol(role)}
+		for _, target := range a.RoleBindings[role] {
+			binding = append(binding, Symbol(target))
+		}
+		items = append(items, List(binding...))
 	}
 	for _, state := range a.States {
 		items = append(items, state.Lisp())
@@ -3535,16 +3620,13 @@ func (d ActorDeclaration) Lisp() Value {
 	}
 	items := []Value{Symbol("instance"), Symbol(d.Name), Symbol(d.Role)}
 	for _, role := range sortedStringKeys(d.RoleBindings) {
-		items = append(items, List(Symbol(role), Symbol(d.RoleBindings[role])))
+		binding := []Value{Symbol(role)}
+		for _, target := range d.RoleBindings[role] {
+			binding = append(binding, Symbol(target))
+		}
+		items = append(items, List(binding...))
 	}
 	return List(items...)
-}
-
-func (d StepDeclaration) Lisp() Value {
-	if d.Spec.Kind != KindInvalid {
-		return d.Spec
-	}
-	return List(Symbol("step"), Symbol(d.Name))
 }
 
 func (a Assertion) Lisp() Value {
@@ -3572,9 +3654,6 @@ func (m RequirementsModel) Lisp() Value {
 		return m.Spec
 	}
 	items := []Value{Symbol("model")}
-	for _, step := range m.Steps {
-		items = append(items, step.Lisp())
-	}
 	for _, actorType := range m.ActorTypes {
 		items = append(items, actorType.Lisp())
 	}
@@ -3596,7 +3675,7 @@ func (rt *Runtime) Lisp() Value {
 		items = append(items, actor.Lisp())
 		items = append(items, runtimeActorState(actor))
 		items = append(items, runtimeActorData(actor))
-		items = append(items, runtimeMailbox(actor.Name, rt.Mailbox(actor.Name)))
+		items = append(items, runtimeMailbox(actor.Name, rt.Mailbox(actor.Name), rt.mailboxSenders(actor.Name)))
 	}
 	return List(items...)
 }
@@ -3617,9 +3696,16 @@ func runtimeActorData(actor *Actor) Value {
 	return List(items...)
 }
 
-func runtimeMailbox(name string, messages []Value) Value {
+func runtimeMailbox(name string, messages []Value, senders []string) Value {
 	items := []Value{Symbol("mailbox"), Symbol(name)}
-	items = append(items, messages...)
+	for i, message := range messages {
+		sender := mailboxSenderAt(senders, i)
+		if sender == "" {
+			items = append(items, message)
+			continue
+		}
+		items = append(items, List(Symbol("message"), List(Symbol("from"), Symbol(sender)), List(Symbol("body"), message)))
+	}
 	return List(items...)
 }
 
@@ -3890,10 +3976,14 @@ type docPlotBinding struct {
 	Runtime  func(int) (*Runtime, error)
 }
 
+type languageFormDoc struct {
+	Form      string
+	Params    string
+	Semantics string
+}
+
 const docQueueModelSource = `
 	(model
-		(step loop)
-		(step wait)
 		(actor ClientRole
 			(state loop
 				(edge (dice-range 0.0 0.5)
@@ -3938,27 +4028,27 @@ const docQueueModelSource = `
 
 const docMessageModelSource = `
 	(model
-		(step loop)
-		(step relay)
-		(step idle)
 		(actor ClientRole
-			(state loop
+			(state start
 				(edge true
 					(send RelayRole '(message (type ping)))
-					(become loop))))
+					(become done)))
+			(state done))
 
 		(actor RelayRole
 			(state relay
 				(edge true
 					(recv msg)
 					(send ServerRole msg)
-					(become relay))))
+					(become done)))
+			(state done))
 
 		(actor ServerRole
 			(state idle
 				(edge true
 					(recv received)
-					(become idle))))
+					(become done)))
+			(state done))
 
 		(instance Client ClientRole (RelayRole Relay))
 		(instance Relay RelayRole (ServerRole Server))
@@ -3969,16 +4059,71 @@ const docMessageModelSource = `
 
 		(xyplot message_outstanding
 			(title "Message Chain Outstanding Messages")
-			(steps 24)
+			(steps 4)
 			(metric sent-minus-received))
 		(xyplot message_sends
 			(title "Message Chain Sends By Step")
-			(steps 24)
+			(steps 4)
 			(metric send-count))
 		(xyplot message_receives
 			(title "Message Chain Receives By Step")
-			(steps 24)
+			(steps 4)
 			(metric receive-count)))
+`
+
+const docBakeryModelSource = `
+	(model
+		(actor ProductionRole
+			(data baked 0)
+			(state start
+				(edge true
+					(send-any TruckRole batch)
+					(add baked 1)
+					(become done)))
+			(state done))
+
+		(actor TruckRole
+			(data deliveries 0)
+			(state wait
+				(edge true
+					(recv cargo)
+					(add deliveries 1)
+					(send StoreRole cargo)
+					(become done)))
+			(state done))
+
+		(actor StoreRole
+			(data inventory 0)
+			(data sold 0)
+			(state idle
+				(edge true
+					(recv shipment)
+					(add inventory 1)
+					(become stocked)))
+			(state stocked
+				(edge true
+					(send CustomerBaseRole sale)
+					(sub inventory 1)
+					(add sold 1)
+					(become stocked))))
+
+		(actor CustomerBaseRole
+			(data served 0)
+			(state ready
+				(edge true
+					(recv sale)
+					(add served 1)
+					(become ready))))
+
+		(instance Production ProductionRole (TruckRole TruckNorth TruckSouth))
+		(instance TruckNorth TruckRole (StoreRole StoreA))
+		(instance TruckSouth TruckRole (StoreRole StoreB))
+		(instance StoreA StoreRole (CustomerBaseRole CustomerA))
+		(instance StoreB StoreRole (CustomerBaseRole CustomerB))
+		(instance StoreC StoreRole (CustomerBaseRole CustomerC))
+		(instance CustomerA CustomerBaseRole)
+		(instance CustomerB CustomerBaseRole)
+		(instance CustomerC CustomerBaseRole))
 `
 
 func docQueueModel() (*RequirementsModel, error) {
@@ -3987,6 +4132,10 @@ func docQueueModel() (*RequirementsModel, error) {
 
 func docMessageModel() (*RequirementsModel, error) {
 	return CompileModel(docMessageModelSource)
+}
+
+func docBakeryModel() (*RequirementsModel, error) {
+	return CompileModel(docBakeryModelSource)
 }
 
 func docQueueRuntime(steps int) (*Runtime, error) {
@@ -4068,6 +4217,215 @@ func docPlotBindings() (map[string]docPlotBinding, error) {
 	add(messageModel, "Runtime trace of the message-chain example.", docMessageRuntime)
 	add(queueModel, "Runtime trace of the M/M/1/5-style queue example.", docQueueRuntime)
 	return out, nil
+}
+
+func renderDocAssertionSections() (string, error) {
+	type binding struct {
+		Title string
+		Model *RequirementsModel
+	}
+	queueModel, err := docQueueModel()
+	if err != nil {
+		return "", err
+	}
+	messageModel, err := docMessageModel()
+	if err != nil {
+		return "", err
+	}
+	bindings := []binding{
+		{Title: "Message Chain Example", Model: messageModel},
+		{Title: "Queue Example", Model: queueModel},
+	}
+
+	var b strings.Builder
+	b.WriteString("# Executed CTL Outcomes\n\n")
+	b.WriteString("These results are generated by compiling the example models in this repository and running their embedded CTL assertions against the explored initial state.\n\n")
+	for _, item := range bindings {
+		fmt.Fprintf(&b, "## %s\n\n", item.Title)
+		if len(item.Model.Assertions) == 0 {
+			b.WriteString("No embedded CTL assertions.\n\n")
+			continue
+		}
+		results, err := item.Model.CheckAssertions()
+		if err != nil {
+			return "", err
+		}
+		for _, result := range results {
+			status := "FAIL"
+			if result.Holds {
+				status = "PASS"
+			}
+			fmt.Fprintf(&b, "- `%s` `%s`\n", status, result.Assertion.Spec.Items[1].String())
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+func renderDocLanguageSections() (string, error) {
+	modelForms := []languageFormDoc{
+		{Form: "`(model item...)`", Params: "`item := actor | instance | assert | xyplot`", Semantics: "Top-level container. No actors are created implicitly."},
+		{Form: "`(actor RoleName item...)`", Params: "`item := data | state`", Semantics: "Declares a reusable actor-role template."},
+		{Form: "`(data key value)`", Params: "`key` symbol, `value` literal/value form", Semantics: "Introduces actor-local data with an initial value."},
+		{Form: "`(state Name edge...)`", Params: "`Name` symbol", Semantics: "Declares a named control state. The first declared state is the initial control location."},
+		{Form: "`(edge guard action...)`", Params: "`guard` guard form", Semantics: "Declares one guarded atomic transition. At least one reachable `become` is required."},
+		{Form: "`(instance Name Role (PeerRole Target...)...)`", Params: "`Target...` concrete actor names", Semantics: "Creates one runtime actor and binds each referenced peer role to one or more concrete instances."},
+		{Form: "`(assert ctl-formula)`", Params: "CTL formula", Semantics: "Adds a branching-time requirement checked over the explored model."},
+		{Form: "`(xyplot name (title s) (steps n) (metric m))`", Params: "`metric := send-count | receive-count | sent-minus-received`", Semantics: "Requests a runtime-derived plot for the model example."},
+	}
+	guardForms := []languageFormDoc{
+		{Form: "`true`", Params: "none", Semantics: "Always enabled."},
+		{Form: "`(mailbox msg)`", Params: "`msg` message literal/value", Semantics: "True when the actor mailbox currently contains a matching message."},
+		{Form: "`(data= key value)`", Params: "`key` local variable, `value` literal/value form", Semantics: "True when the actor-local value equals the resolved right-hand side."},
+		{Form: "`(data> key value)`", Params: "numeric comparison", Semantics: "True when the actor-local numeric value is greater than the resolved right-hand side."},
+		{Form: "`(dice-range lo hi)`", Params: "floating-point bounds", Semantics: "True when the sampled `Dice` value satisfies `lo ≤ Dice < hi`."},
+		{Form: "`(dice< x)`", Params: "floating-point threshold", Semantics: "True when `Dice < x`."},
+		{Form: "`(dice>= x)`", Params: "floating-point threshold", Semantics: "True when `Dice ≥ x`."},
+		{Form: "`(dice)`", Params: "none", Semantics: "Resolves to the sampled floating-point value in `[0,1]`."},
+		{Form: "`(and g...)`, `(or g...)`, `(not g)`, `(implies p q)`", Params: "guard forms", Semantics: "Boolean composition over guard predicates."},
+	}
+	actionForms := []languageFormDoc{
+		{Form: "`(send Role msg)`", Params: "`Role` peer role with exactly one bound target", Semantics: "Sends `msg` to the single bound instance. Compile-time error if the role resolves to multiple instances."},
+		{Form: "`(send-any Role msg)`", Params: "`Role` peer role with one or more bound targets", Semantics: "Sends to the first ready concrete target in that role set."},
+		{Form: "`(recv var)`", Params: "`var` local name", Semantics: "Consumes one incoming message into `var` and also writes the sending actor name into local `sender`."},
+		{Form: "`(become State)`", Params: "`State` declared control state", Semantics: "Moves the actor into the next control location."},
+		{Form: "`(set key value)`", Params: "local name and value form", Semantics: "Stores the resolved value into actor-local data."},
+		{Form: "`(add key delta)`, `(sub key delta)`", Params: "numeric local name and numeric value form", Semantics: "Applies integer arithmetic to actor-local data."},
+		{Form: "`(if guard then [else])`", Params: "guard and action blocks", Semantics: "Conditional action execution inside an atomic transition."},
+		{Form: "`(do action...)`", Params: "action list", Semantics: "Explicit sequencing when a nested action block is needed."},
+		{Form: "`(def name (p...) body)`", Params: "actor-local pure helper", Semantics: "Defines a value-level helper callable from `set`, `send`, and other value positions."},
+		{Form: "`(md5 out source)`", Params: "destination variable and value form", Semantics: "Computes the MD5 digest of the resolved value and stores its hex string."},
+		{Form: "`(rsa-raw out modulus exponent message)`", Params: "numeric value forms", Semantics: "Computes raw modular exponentiation `message^exponent mod modulus` and stores the numeric result."},
+		{Form: "`(cryptorandom out bytes)`", Params: "destination variable and byte count", Semantics: "Generates cryptographic randomness and stores a hex string."},
+		{Form: "`(sample-exponential out rate)`", Params: "destination variable and positive rate", Semantics: "Samples an exponential variate and stores the floating-point value."},
+	}
+	valueForms := []languageFormDoc{
+		{Form: "symbols", Params: "local variable names", Semantics: "Resolve to actor-local data when present; otherwise remain symbols."},
+		{Form: "`'x`, `'(a b)`", Params: "quoted literal", Semantics: "Prevents evaluation and injects a literal symbol/list value."},
+		{Form: "`(cons a b)`", Params: "value forms", Semantics: "Prepends `a` onto list `b`."},
+		{Form: "`(car xs)`", Params: "list value form", Semantics: "Returns the first list element, or invalid/empty when absent."},
+		{Form: "`(cdr xs)`", Params: "list value form", Semantics: "Returns the tail of a list."},
+	}
+	ctlForms := []languageFormDoc{
+		{Form: "`(in-state A s)`", Params: "actor and state", Semantics: "Atomic predicate `A.state = s`."},
+		{Form: "`(data= A key value)`", Params: "actor, local name, value", Semantics: "Atomic predicate over actor-local data."},
+		{Form: "`(mailbox-has A msg)`", Params: "actor and message", Semantics: "Atomic predicate over queued messages."},
+		{Form: "`(ex p)`, `(ax p)`", Params: "CTL formula", Semantics: "Next-step possibility and necessity."},
+		{Form: "`(ef p)`, `(af p)`", Params: "CTL formula", Semantics: "Future possibility and inevitability."},
+		{Form: "`(eg p)`, `(ag p)`", Params: "CTL formula", Semantics: "Existential and universal invariance."},
+		{Form: "`(eu p q)`, `(au p q)`", Params: "CTL formulas", Semantics: "Existential and universal until."},
+		{Form: "`(not p)`, `(and p q)`, `(or p q)`, `(implies p q)`", Params: "CTL formulas", Semantics: "Boolean composition over CTL formulas."},
+	}
+	muForms := []languageFormDoc{
+		{Form: "`true`, `false`", Params: "none", Semantics: "Boolean constants for the raw modal μ-calculus layer."},
+		{Form: "`(diamond p)`, `(box p)`", Params: "μ-calculus formula", Semantics: "Existential and universal next-step modalities."},
+		{Form: "`(mu X body)`, `(nu X body)`", Params: "fixpoint variable and body", Semantics: "Least and greatest fixpoints."},
+		{Form: "`(not p)`, `(and p q)`, `(or p q)`", Params: "μ-calculus formulas", Semantics: "Boolean composition over formulas."},
+		{Form: "`(in-state A s)`, `(data= A key value)`, `(mailbox-has A msg)`", Params: "same atoms as CTL", Semantics: "State predicates shared with the CTL surface syntax."},
+	}
+
+	var b strings.Builder
+	b.WriteString("# LLM Authoring Prompt\n\n")
+	b.WriteString("```text\n")
+	b.WriteString("Write a go-ctl2 model as Lisp.\n")
+	b.WriteString("Use exactly one top-level (model ...).\n")
+	b.WriteString("Declare reusable behavior with (actor RoleName ...).\n")
+	b.WriteString("Declare runtime actors explicitly with (instance Name Role (PeerRole Target...)...).\n")
+	b.WriteString("There is no implicit actor creation.\n")
+	b.WriteString("Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.\n")
+	b.WriteString("Use (send Role msg) only when that role resolves to exactly one concrete actor.\n")
+	b.WriteString("Use (send-any Role msg) when a role may resolve to several concrete actors.\n")
+	b.WriteString("State is actor-local. The only cross-actor effect is messaging.\n")
+	b.WriteString("Each transition is (edge guard action...) inside a declared (state ...).\n")
+	b.WriteString("Every edge must eventually reach at least one (become State).\n")
+	b.WriteString("Use (recv var) to consume a message. recv also writes the sender name into local variable sender.\n")
+	b.WriteString("Use quoted literals for structured messages, for example '(message (type ping)).\n")
+	b.WriteString("Keep control flow explicit with named states and become transitions.\n")
+	b.WriteString("Put CTL requirements in (assert ...).\n")
+	b.WriteString("Use only the builtins and forms documented below.\n")
+	b.WriteString("```")
+	b.WriteString("\n\n# Language Reference\n\n")
+	writeLanguageTable(&b, "## Core Model Forms", modelForms)
+	writeLanguageTable(&b, "## Guard Forms", guardForms)
+	writeLanguageTable(&b, "## Action Forms", actionForms)
+	writeLanguageTable(&b, "## Value Forms", valueForms)
+	writeLanguageTable(&b, "## CTL Surface Forms", ctlForms)
+	writeLanguageTable(&b, "## Raw Modal μ-Calculus Forms", muForms)
+	return b.String(), nil
+}
+
+func writeLanguageTable(b *strings.Builder, title string, rows []languageFormDoc) {
+	b.WriteString(title)
+	b.WriteString("\n\n| Form | Parameters | Operational Semantics |\n| --- | --- | --- |\n")
+	for _, row := range rows {
+		fmt.Fprintf(b, "| %s | %s | %s |\n", row.Form, row.Params, row.Semantics)
+	}
+	b.WriteString("\n")
+}
+
+func renderDocExampleSections() (string, error) {
+	type example struct {
+		Title        string
+		Source       string
+		Spec         *RequirementsModel
+		StateSVG     string
+		MessageSVG   string
+		IncludeClass bool
+	}
+
+	queueModel, err := docQueueModel()
+	if err != nil {
+		return "", err
+	}
+	messageModel, err := docMessageModel()
+	if err != nil {
+		return "", err
+	}
+	bakeryModel, err := docBakeryModel()
+	if err != nil {
+		return "", err
+	}
+	examples := []example{
+		{Title: "Message Chain Example", Source: strings.TrimSpace(docMessageModelSource), Spec: messageModel, StateSVG: "generated/a_to_b_state.svg", MessageSVG: "generated/a_to_b_sequence.svg", IncludeClass: true},
+		{Title: "Queue Example", Source: strings.TrimSpace(docQueueModelSource), Spec: queueModel, StateSVG: "generated/mm1_5_queue_state.svg", MessageSVG: "generated/mm1_5_queue_flow.svg"},
+		{Title: "Bakery Role-Reuse Example", Source: strings.TrimSpace(docBakeryModelSource), Spec: bakeryModel, IncludeClass: true},
+	}
+
+	var b strings.Builder
+	for _, item := range examples {
+		fmt.Fprintf(&b, "## %s\n\n### Input Lisp\n\n```lisp\n%s\n```\n\n", item.Title, item.Source)
+		b.WriteString("### Rendered Output\n\n")
+		if item.StateSVG != "" {
+			fmt.Fprintf(&b, "![%s State Diagram](%s)\n\n", item.Title, item.StateSVG)
+		}
+		if item.MessageSVG != "" {
+			fmt.Fprintf(&b, "![%s Message Diagram](%s)\n\n", item.Title, item.MessageSVG)
+		}
+		if item.IncludeClass {
+			b.WriteString("```mermaid\n")
+			b.WriteString(renderClassDiagramMermaid(item.Spec))
+			b.WriteString("```\n\n")
+		}
+		results, err := item.Spec.CheckAssertions()
+		if err != nil {
+			return "", err
+		}
+		if len(results) > 0 {
+			b.WriteString("#### CTL Outcomes\n\n")
+			for _, result := range results {
+				status := "FAIL"
+				if result.Holds {
+					status = "PASS"
+				}
+				fmt.Fprintf(&b, "- `%s` `%s`\n", status, result.Assertion.Spec.Items[1].String())
+			}
+			b.WriteString("\n")
+		}
+		for _, plot := range item.Spec.Plots {
+			fmt.Fprintf(&b, "#### Plot: %s\n\n![%s](generated/%s.svg)\n\n", plot.Title, plot.Title, plot.Name)
+		}
+	}
+	return b.String(), nil
 }
 
 func docPlotSeries(rt *Runtime, metric string) ([]MetricPoint, string, string, error) {
@@ -4306,19 +4664,50 @@ func renderSequenceDiagramMermaid(spec *RequirementsModel) string {
 		for _, state := range actor.States {
 			for _, transition := range state.Transitions {
 				for _, item := range actionItems(transition.ActionSpec) {
-					if !isListHead(item, "send") || len(item.Items) != 3 {
+					if !isList(item) || len(item.Items) < 3 {
 						continue
 					}
-					target, err := expectSymbol(item.Items[1], "send target")
+					head, err := expectSymbol(item.Items[0], "action operator")
 					if err != nil {
 						continue
 					}
-					key := actor.Name + "->" + target + ":" + item.Items[2].String()
-					if seen[key] {
+					var targets []string
+					var message Value
+					switch head {
+					case "send":
+						if len(item.Items) != 3 {
+							continue
+						}
+						target, err := expectSymbol(item.Items[1], "send target")
+						if err != nil {
+							continue
+						}
+						targets = []string{target}
+						message = item.Items[2]
+					case "send-any":
+						if len(item.Items) < 4 {
+							continue
+						}
+						for _, targetForm := range item.Items[1 : len(item.Items)-1] {
+							target, err := expectSymbol(targetForm, "send-any target")
+							if err != nil {
+								targets = nil
+								break
+							}
+							targets = append(targets, target)
+						}
+						message = item.Items[len(item.Items)-1]
+					default:
 						continue
 					}
-					seen[key] = true
-					fmt.Fprintf(&b, "    %s-->>%s: %s\n", actor.Name, target, item.Items[2].String())
+					for _, target := range targets {
+						key := actor.Name + "->" + target + ":" + message.String()
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
+						fmt.Fprintf(&b, "    %s-->>%s: %s\n", actor.Name, target, message.String())
+					}
 				}
 			}
 		}
@@ -4340,33 +4729,15 @@ func renderClassDiagramMermaid(spec *RequirementsModel) string {
 		fmt.Fprintf(&b, "    class %s {\n", diagramID(actor.Name))
 		for _, state := range actor.States {
 			if state.Control {
-				fmt.Fprintf(&b, "        +%s : step\n", diagramID(state.Name))
+				fmt.Fprintf(&b, "        +%s : state\n", diagramID(state.Name))
 			}
 		}
 		for _, name := range usage.All {
-			fmt.Fprintf(&b, "        +%s : var\n", diagramID(name))
+			fmt.Fprintf(&b, "        +%s : data\n", diagramID(name))
 		}
 		b.WriteString("    }\n")
 		if actor.Role != "" {
 			fmt.Fprintf(&b, "    <<%s>> %s\n", actor.Role, diagramID(actor.Name))
-		}
-		for _, name := range usage.All {
-			varID := diagramID(actor.Name, "var", name)
-			fmt.Fprintf(&b, "    class %s {\n", varID)
-			fmt.Fprintf(&b, "        +%s : var\n", diagramID(name))
-			b.WriteString("    }\n")
-			label := ""
-			switch {
-			case usage.Reads[name] && usage.Writes[name]:
-				label = "reads/writes"
-			case usage.Reads[name]:
-				label = "reads"
-			case usage.Writes[name]:
-				label = "writes"
-			default:
-				label = "declares"
-			}
-			fmt.Fprintf(&b, "    %s --> %s : %s\n", diagramID(actor.Name), varID, label)
 		}
 	}
 	return b.String()
@@ -4429,6 +4800,9 @@ func collectActionWrites(form Value, writes map[string]bool) {
 			name = "state"
 		}
 		writes[name] = true
+		if head == "recv" {
+			writes["sender"] = true
+		}
 	case "if":
 		for _, item := range form.Items[2:] {
 			collectActionWrites(item, writes)
@@ -4483,13 +4857,16 @@ func collectActionReadsWrites(form Value, knownVars, reads, writes map[string]bo
 		for _, item := range form.Items[1:] {
 			collectActionReadsWrites(item, knownVars, reads, writes)
 		}
-	case "send":
+	case "send", "send-any":
 		if len(form.Items) == 3 {
 			collectValueReads(form.Items[2], knownVars, reads, nil)
+		} else if head == "send-any" && len(form.Items) >= 4 {
+			collectValueReads(form.Items[len(form.Items)-1], knownVars, reads, nil)
 		}
 	case "recv":
 		if len(form.Items) == 2 && form.Items[1].Kind == KindSymbol {
 			writes[form.Items[1].Text] = true
+			writes["sender"] = true
 		}
 	case "become":
 		writes["state"] = true
@@ -4600,6 +4977,13 @@ func mermaidLabel(text string) string {
 func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Requirements Model\n\n```lisp\n%s\n```\n\n", spec.Lisp().String())
+	b.WriteString("## State Diagram\n\n```mermaid\n")
+	b.WriteString(renderStateDiagramMermaid(spec))
+	b.WriteString("```\n\n## Message Diagram\n\n```mermaid\n")
+	b.WriteString(renderSequenceDiagramMermaid(spec))
+	b.WriteString("```\n\n## Class Diagram\n\n```mermaid\n")
+	b.WriteString(renderClassDiagramMermaid(spec))
+	b.WriteString("```\n\n")
 	results, err := spec.CheckAssertions()
 	if err != nil {
 		return "", err
@@ -4625,13 +5009,6 @@ func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
 			fmt.Fprintf(&b, "### %s\n\n```lisp\n%s\n```\n\n%s\n\n", plot.Title, plot.Lisp().String(), renderPlotSVG(data))
 		}
 	}
-	b.WriteString("## State Diagram\n\n```mermaid\n")
-	b.WriteString(renderStateDiagramMermaid(spec))
-	b.WriteString("```\n\n## Message Diagram\n\n```mermaid\n")
-	b.WriteString(renderSequenceDiagramMermaid(spec))
-	b.WriteString("```\n\n## Class Diagram\n\n```mermaid\n")
-	b.WriteString(renderClassDiagramMermaid(spec))
-	b.WriteString("```\n")
 	return b.String(), nil
 }
 
@@ -4644,6 +5021,9 @@ func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
 	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><title>Requirements Model</title></head><body>")
 	b.WriteString("<h1>Requirements Model</h1>")
 	fmt.Fprintf(&b, "<pre><code>%s</code></pre>", html.EscapeString(spec.Lisp().String()))
+	fmt.Fprintf(&b, "<h2>State Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderStateDiagramMermaid(spec)))
+	fmt.Fprintf(&b, "<h2>Message Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderSequenceDiagramMermaid(spec)))
+	fmt.Fprintf(&b, "<h2>Class Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderClassDiagramMermaid(spec)))
 	if len(results) > 0 {
 		b.WriteString("<h2>Assertions</h2><ul>")
 		for _, result := range results {
@@ -4665,9 +5045,6 @@ func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
 			fmt.Fprintf(&b, "<h3>%s</h3><pre><code>%s</code></pre>%s", html.EscapeString(plot.Title), html.EscapeString(plot.Lisp().String()), renderPlotSVG(data))
 		}
 	}
-	fmt.Fprintf(&b, "<h2>State Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderStateDiagramMermaid(spec)))
-	fmt.Fprintf(&b, "<h2>Message Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderSequenceDiagramMermaid(spec)))
-	fmt.Fprintf(&b, "<h2>Class Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderClassDiagramMermaid(spec)))
 	b.WriteString("</body></html>")
 	return b.String(), nil
 }
@@ -4754,6 +5131,48 @@ func main() {
 			if err := emitDocPlotData(os.Args[2], steps); err != nil {
 				fmt.Fprintf(os.Stderr, "doc-xyplot-data: %v\n", err)
 				os.Exit(1)
+			}
+		case "doc-assertion-sections":
+			out, err := renderDocAssertionSections()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "doc-assertion-sections: %v\n", err)
+				os.Exit(1)
+			}
+			if len(os.Args) >= 3 {
+				if err := os.WriteFile(os.Args[2], []byte(out), 0644); err != nil {
+					fmt.Fprintf(os.Stderr, "doc-assertion-sections: %v\n", err)
+					os.Exit(1)
+				}
+			} else {
+				fmt.Print(out)
+			}
+		case "doc-language-sections":
+			out, err := renderDocLanguageSections()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "doc-language-sections: %v\n", err)
+				os.Exit(1)
+			}
+			if len(os.Args) >= 3 {
+				if err := os.WriteFile(os.Args[2], []byte(out), 0644); err != nil {
+					fmt.Fprintf(os.Stderr, "doc-language-sections: %v\n", err)
+					os.Exit(1)
+				}
+			} else {
+				fmt.Print(out)
+			}
+		case "doc-example-sections":
+			out, err := renderDocExampleSections()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "doc-example-sections: %v\n", err)
+				os.Exit(1)
+			}
+			if len(os.Args) >= 3 {
+				if err := os.WriteFile(os.Args[2], []byte(out), 0644); err != nil {
+					fmt.Fprintf(os.Stderr, "doc-example-sections: %v\n", err)
+					os.Exit(1)
+				}
+			} else {
+				fmt.Print(out)
 			}
 		}
 	}

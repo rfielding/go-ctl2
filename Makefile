@@ -15,11 +15,14 @@ DOC_BUILD_SRC := $(BUILD_DIR)/ir.generated.md
 HTML_OUT := $(BUILD_DIR)/ir.html
 DIAGRAM_SNIPPETS := $(GENERATED_DIR)/diagram_sections.md
 PLOT_SNIPPETS := $(GENERATED_DIR)/plot_sections.md
+ASSERTION_SNIPPETS := $(GENERATED_DIR)/assertion_sections.md
+LANGUAGE_SNIPPETS := $(GENERATED_DIR)/language_sections.md
+EXAMPLE_SNIPPETS := $(GENERATED_DIR)/example_sections.md
 PLOT_STAMP := $(GENERATED_DIR)/xyplots.stamp
 
 MERMAID_SRC := $(wildcard $(MERMAID_DIR)/*.mmd)
 MERMAID_SVG := $(patsubst $(MERMAID_DIR)/%.mmd,$(GENERATED_DIR)/%.svg,$(MERMAID_SRC))
-DOC_ASSETS := $(MERMAID_SVG) $(PLOT_STAMP)
+DOC_ASSETS := $(MERMAID_SVG) $(PLOT_STAMP) $(ASSERTION_SNIPPETS) $(LANGUAGE_SNIPPETS) $(EXAMPLE_SNIPPETS)
 
 .PHONY: all docs diagrams test serve-docs clean
 
@@ -36,8 +39,8 @@ $(HTML_OUT): $(DOC_BUILD_SRC) $(DOC_ASSETS) $(CSS_FILE) $(MERMAID_HEADER) | $(BU
 	$(PANDOC) --standalone --toc --css ../dark.css --include-in-header $(MERMAID_HEADER) --from markdown --to html5 -o $@ $(DOC_BUILD_SRC)
 	cp $(GENERATED_DIR)/*.svg $(BUILD_GENERATED_DIR)/
 
-$(DOC_BUILD_SRC): $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(PLOT_SNIPPETS) | $(BUILD_DIR)
-	python3 scripts/build_doc.py $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(PLOT_SNIPPETS) $(DOC_BUILD_SRC)
+$(DOC_BUILD_SRC): $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(PLOT_SNIPPETS) $(ASSERTION_SNIPPETS) $(LANGUAGE_SNIPPETS) $(EXAMPLE_SNIPPETS) | $(BUILD_DIR)
+	python3 scripts/build_doc.py $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(PLOT_SNIPPETS) $(ASSERTION_SNIPPETS) $(LANGUAGE_SNIPPETS) $(EXAMPLE_SNIPPETS) $(DOC_BUILD_SRC)
 
 $(GENERATED_DIR)/%.svg: $(MERMAID_DIR)/%.mmd $(MERMAID_CONFIG) | $(GENERATED_DIR)
 	@if command -v $(MMDC) >/dev/null 2>&1; then \
@@ -57,6 +60,15 @@ $(DIAGRAM_SNIPPETS): $(MERMAID_SRC) | $(GENERATED_DIR)
 $(PLOT_STAMP): scripts/generate_xyplot.py $(wildcard *.go) | $(GENERATED_DIR)
 	python3 scripts/generate_xyplot.py $(GENERATED_DIR) $(PLOT_SNIPPETS)
 	touch $(PLOT_STAMP)
+
+$(ASSERTION_SNIPPETS): $(wildcard *.go) | $(GENERATED_DIR)
+	go run . doc-assertion-sections $(ASSERTION_SNIPPETS)
+
+$(LANGUAGE_SNIPPETS): $(wildcard *.go) | $(GENERATED_DIR)
+	go run . doc-language-sections $(LANGUAGE_SNIPPETS)
+
+$(EXAMPLE_SNIPPETS): $(wildcard *.go) | $(GENERATED_DIR)
+	go run . doc-example-sections $(EXAMPLE_SNIPPETS)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

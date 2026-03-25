@@ -7,7 +7,7 @@
 <pre><code class="language-lisp">
 (xyplot message_outstanding
   (title &quot;Message Chain Outstanding Messages&quot;)
-  (steps 24)
+  (steps 4)
   (metric sent-minus-received))
 </code></pre>
 </details>
@@ -21,7 +21,7 @@
 <pre><code class="language-lisp">
 (xyplot message_receives
   (title &quot;Message Chain Receives By Step&quot;)
-  (steps 24)
+  (steps 4)
   (metric receive-count))
 </code></pre>
 </details>
@@ -35,7 +35,7 @@
 <pre><code class="language-lisp">
 (xyplot message_sends
   (title &quot;Message Chain Sends By Step&quot;)
-  (steps 24)
+  (steps 4)
   (metric send-count))
 </code></pre>
 </details>

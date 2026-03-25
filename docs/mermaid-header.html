@@ -1,0 +1,55 @@
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+function normalizeMermaidBlocks() {
+  const blocks = [];
+
+  for (const pre of document.querySelectorAll("pre.mermaid")) {
+    const code = pre.querySelector("code");
+    const source = code ? code.textContent : pre.textContent;
+    const div = document.createElement("div");
+    div.className = "mermaid";
+    div.textContent = source.trim();
+    pre.replaceWith(div);
+    blocks.push(div);
+  }
+
+  for (const code of document.querySelectorAll("pre code.language-mermaid")) {
+    const pre = code.closest("pre");
+    if (!pre) {
+      continue;
+    }
+    const div = document.createElement("div");
+    div.className = "mermaid";
+    div.textContent = code.textContent.trim();
+    pre.replaceWith(div);
+    blocks.push(div);
+  }
+
+  return blocks;
+}
+
+window.addEventListener("DOMContentLoaded", async () => {
+  const blocks = normalizeMermaidBlocks();
+  if (blocks.length === 0) {
+    return;
+  }
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "dark",
+    securityLevel: "loose",
+    flowchart: {
+      defaultRenderer: "elk",
+    },
+    state: {
+      defaultRenderer: "elk",
+    },
+    class: {
+      defaultRenderer: "elk",
+    },
+  });
+  await mermaid.run({
+    nodes: blocks,
+  });
+});
+</script>

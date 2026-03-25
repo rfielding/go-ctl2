@@ -123,6 +123,15 @@
       startOnLoad: false,
       theme: "dark",
       securityLevel: "loose",
+      flowchart: {
+        defaultRenderer: "elk",
+      },
+      state: {
+        defaultRenderer: "elk",
+      },
+      class: {
+        defaultRenderer: "elk",
+      },
     });
     await mermaid.run({
       nodes: blocks,
@@ -188,9 +197,13 @@
 </ul></li>
 <li><a href="#reverse-mermaid-direction">Reverse Mermaid Direction</a></li>
 <li><a href="#repository-layout">Repository Layout</a></li>
-<li><a href="#example-model">Example Model</a>
+<li><a href="#example-model">Example Model</a></li>
+<li><a href="#executed-ctl-outcomes">Executed CTL Outcomes</a>
 <ul>
+<li><a href="#message-chain-example">Message Chain Example</a></li>
+<li><a href="#queue-example">Queue Example</a></li>
 <li><a href="#example-rendered-class-data">Example Rendered Class Data</a></li>
+<li><a href="#role-reuse-example">Role Reuse Example</a></li>
 <li><a href="#walkthrough-of-the-example">Walkthrough Of The Example</a></li>
 </ul></li>
 <li><a href="#message-plot">Message Plot</a>
@@ -200,13 +213,7 @@
 <li><a href="#message-sends">Message Sends</a></li>
 <li><a href="#queue-outstanding">Queue Outstanding</a></li>
 </ul></li>
-<li><a href="#mermaid-artifacts">Mermaid Artifacts</a>
-<ul>
-<li><a href="#a-to-b-sequence">A To B Sequence</a></li>
-<li><a href="#a-to-b-state">A To B State</a></li>
-<li><a href="#mm1-5-queue-flow">Mm1 5 Queue Flow</a></li>
-<li><a href="#mm1-5-queue-state">Mm1 5 Queue State</a></li>
-</ul></li>
+<li><a href="#mermaid-artifacts">Mermaid Artifacts</a></li>
 <li><a href="#build">Build</a></li>
 <li><a href="#serving-the-html">Serving The HTML</a></li>
 <li><a href="#current-limits">Current Limits</a></li>
@@ -251,9 +258,8 @@
 <ul>
 <li>actor a runtime instance bound to a name and one actor-role definition</li>
 <li>actor role a reusable behavior template declared by <code>(actor RoleName ...)</code></li>
-<li>peer role fill an instance-level mapping from a referenced role to the concrete instance that plays it</li>
-<li>step a model-wide control-state name declared once by <code>(step Name)</code></li>
-<li>state an actor-local implementation of one declared step</li>
+<li>peer role fill an instance-level mapping from a referenced role to one or more concrete instances that play it</li>
+<li>state a named control location declared directly inside an actor role</li>
 <li>transition a guarded atomic step whose successor states are derived from <code>become</code></li>
 <li>mailbox the actor-local queue or rendezvous endpoint through which messages arrive</li>
 <li>runtime the current collection of actors, local data, mailboxes, and scheduler context</li>
@@ -269,7 +275,7 @@
 <li>local data</li>
 <li>a set of named states</li>
 </ul>
-<p>Each runtime actor is created explicitly with <code>(instance ActorName RoleName (PeerRole InstanceName)...)</code>. Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.</p>
+<p>Each runtime actor is created explicitly with <code>(instance ActorName RoleName (PeerRole InstanceName...)...)</code>. Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.</p>
 <h2 id="state">State</h2>
 <p>A state is a named control location. For compiled models, the control location is explicit, not inferred from guard overlap.</p>
 <p>A state contains transitions. A transition is selectable only if:</p>
@@ -318,14 +324,17 @@
 <ul>
 <li><code>recv</code> is ready if a matching message is present</li>
 <li><code>send</code> is ready if the target mailbox has space</li>
+<li><code>send-any</code> is ready if any filled target mailbox has space</li>
 </ul>
 <h2 id="zero-capacity-channels">Zero-Capacity Channels</h2>
 <p>A mailbox capacity of <code>0</code> means synchronous rendezvous semantics.</p>
 <ul>
 <li><code>send</code> is ready only if the receiver has a matching ready <code>recv</code></li>
+<li><code>send-any</code> is ready only if at least one filled receiver has a matching ready <code>recv</code></li>
 <li><code>recv</code> is ready only if a sender is ready to rendezvous</li>
 </ul>
 <p>The runtime currently models this by checking receiver readiness before a zero-capacity send is allowed to execute.</p>
+<p>On a successful <code>recv</code>, the payload is stored in the declared variable and the local variable <code>sender</code> is also set to the sending actor name. That gives the receiver a built-in return address.</p>
 <h2 id="random-guards">Random Guards</h2>
 <p>Before attempting a step, the runtime samples a floating-point value called <code>Dice</code> in <code>[0,1]</code>.</p>
 <p>That value can be used in guards to express random branching, for example:</p>
@@ -342,48 +351,46 @@
 </ul>
 <p>Full M/M/1/5-style example:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(model</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> <span class="kw">loop</span>)</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> wait)</span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  (actor ClientRole</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>)</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;sleep&quot;</span>)</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))</span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>)</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        (send QueueRole req)</span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;arrival&quot;</span>)</span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>  (actor QueueRole</span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>    (state wait</span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">0</span>))</span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> elapsed <span class="dv">0</span>)</span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (<span class="kw">not</span> (data= <span class="kw">count</span> <span class="dv">5</span>)))</span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
-<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">5</span>))</span>
-<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>        (recv dropped)</span>
-<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>        (add dropped_count <span class="dv">1</span>)</span>
-<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>))</span>
-<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>        (sub <span class="kw">count</span> <span class="dv">1</span>)</span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;service-complete&quot;</span>)</span>
-<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>))</span>
-<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;busy&quot;</span>)</span>
-<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>        (become wait))))</span>
-<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>  (instance Client ClientRole (QueueRole Queue))</span>
-<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>  (instance Queue QueueRole)</span>
-<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>  (xyplot outstanding</span>
-<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
-<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">100</span>)</span>
-<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received)))</span></code></pre></div>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  (actor ClientRole</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>)</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;sleep&quot;</span>)</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        (send QueueRole req)</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;arrival&quot;</span>)</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  (actor QueueRole</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    (state wait</span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">0</span>))</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> elapsed <span class="dv">0</span>)</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (<span class="kw">not</span> (data= <span class="kw">count</span> <span class="dv">5</span>)))</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">5</span>))</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        (recv dropped)</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>        (add dropped_count <span class="dv">1</span>)</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>))</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>        (sub <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;service-complete&quot;</span>)</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>))</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;busy&quot;</span>)</span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>        (become wait))))</span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>  (instance Client ClientRole (QueueRole Queue))</span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>  (instance Queue QueueRole)</span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>  (xyplot outstanding</span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">100</span>)</span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received)))</span></code></pre></div>
 <p>Interpretation:</p>
 <ul>
 <li><code>Client</code> models arrivals <code>dice-range</code> makes the sleep/arrival split explicit</li>
@@ -421,6 +428,12 @@
 <li>a queue state rendition showing explicit self-loops</li>
 <li>a queue message/service rendition showing arrival and service-completion flows</li>
 </ul>
+<figure>
+<img src="/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_state.svg" alt="M/M/1/5 Queue State Diagram" /><figcaption aria-hidden="true">M/M/1/5 Queue State Diagram</figcaption>
+</figure>
+<figure>
+<img src="/home/rfielding/code/go-ctl2/docs/generated/mm1_5_queue_flow.svg" alt="M/M/1/5 Queue Flow Diagram" /><figcaption aria-hidden="true">M/M/1/5 Queue Flow Diagram</figcaption>
+</figure>
 <h2 id="decision-processes">Decision Processes</h2>
 <p>When the only source of branching is <code>Dice</code>, the operational picture is close to a Markov-chain style model.</p>
 <p>When both of these are present:</p>
@@ -851,7 +864,7 @@
 <ul>
 <li>state machine diagrams without simulation</li>
 <li>sequence diagrams without simulation</li>
-<li>UML-like class diagrams showing actor-local variable ownership plus read/write usage</li>
+<li>UML-like class diagrams showing actor-local control states and data</li>
 <li>the same input feeding both proof and presentation</li>
 </ul>
 <h1 id="repository-layout">Repository Layout</h1>
@@ -876,27 +889,27 @@
 <li>CTL predicates over the resulting model</li>
 </ul>
 <div class="sourceCode" id="cb9"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>(model</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> <span class="kw">loop</span>)</span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> relay)</span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> idle)</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  (actor ClientRole</span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
-<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>        (send RelayRole &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
-<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  (actor RelayRole</span>
-<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    (state relay</span>
-<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
-<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
-<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>        (send ServerRole msg)</span>
-<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>        (become relay))))</span>
-<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>  (actor ServerRole</span>
-<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    (state idle</span>
-<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
-<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>        (recv received)</span>
-<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>        (become idle))))</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (actor ClientRole</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    (state start</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        (send RelayRole &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>        (become done)))</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    (state done))</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>  (actor RelayRole</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>    (state relay</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>        (send ServerRole msg)</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>        (become done)))</span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>    (state done))</span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>  (actor ServerRole</span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>    (state idle</span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>        (recv received)</span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>        (become done)))</span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>    (state done))</span>
 <span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>  (instance Client ClientRole (RelayRole Relay))</span>
 <span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>  (instance Relay RelayRole (ServerRole Server))</span>
@@ -908,15 +921,15 @@
 <span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>  (xyplot message_outstanding</span>
 <span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Outstanding Messages&quot;</span>)</span>
-<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">4</span>)</span>
 <span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received))</span>
 <span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a>  (xyplot message_sends</span>
 <span id="cb9-37"><a href="#cb9-37" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Sends By Step&quot;</span>)</span>
-<span id="cb9-38"><a href="#cb9-38" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-38"><a href="#cb9-38" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">4</span>)</span>
 <span id="cb9-39"><a href="#cb9-39" aria-hidden="true" tabindex="-1"></a>    (metric send-count))</span>
 <span id="cb9-40"><a href="#cb9-40" aria-hidden="true" tabindex="-1"></a>  (xyplot message_receives</span>
 <span id="cb9-41"><a href="#cb9-41" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Receives By Step&quot;</span>)</span>
-<span id="cb9-42"><a href="#cb9-42" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-42"><a href="#cb9-42" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">4</span>)</span>
 <span id="cb9-43"><a href="#cb9-43" aria-hidden="true" tabindex="-1"></a>    (metric receive-count)))</span></code></pre></div>
 <p>The first two embedded assertions are intended to hold for the example model.</p>
 <p>The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where <code>Relay</code> is holding a <code>ping</code> message before it forwards it.</p>
@@ -926,6 +939,22 @@
 <li>the relay forwards that value unchanged to the server</li>
 <li>if a <code>recv</code> has no message available, that edge is simply not ready</li>
 </ul>
+<p>From that same model, the documentation keeps the rendered diagrams adjacent to the source:</p>
+<figure>
+<img src="/home/rfielding/code/go-ctl2/docs/generated/a_to_b_state.svg" alt="Message Chain State Diagram" /><figcaption aria-hidden="true">Message Chain State Diagram</figcaption>
+</figure>
+<figure>
+<img src="/home/rfielding/code/go-ctl2/docs/generated/a_to_b_sequence.svg" alt="Message Chain Sequence Diagram" /><figcaption aria-hidden="true">Message Chain Sequence Diagram</figcaption>
+</figure>
+<h1 id="executed-ctl-outcomes">Executed CTL Outcomes</h1>
+<p>These results are generated by compiling the example models in this repository and running their embedded CTL assertions against the explored initial state.</p>
+<h2 id="message-chain-example">Message Chain Example</h2>
+<ul>
+<li><code>PASS</code> <code>(ef (data= Server received (quote (message (type ping)))))</code></li>
+<li><code>PASS</code> <code>(af (data= Server received (quote (message (type ping)))))</code></li>
+</ul>
+<h2 id="queue-example">Queue Example</h2>
+<p>No embedded CTL assertions.</p>
 <h2 id="example-rendered-class-data">Example Rendered Class Data</h2>
 <p>From that same model, the documentation renderer can emit a Mermaid class diagram that exposes:</p>
 <ul>
@@ -933,68 +962,131 @@
 <li>the bound actor role</li>
 <li>the actor-local control states</li>
 <li>the actor-local variables inferred from declared data and transition effects</li>
-<li>whether each variable is read, written, or both</li>
 </ul>
 <p>Example:</p>
 <pre class="mermaid"><code>classDiagram
     class Client {
-        +loop : step
-        +state : var
+        +start : state
+        +done : state
+        +state : data
     }
     &lt;&lt;ClientRole&gt;&gt; Client
-    class Clientvarstate {
-        +state : var
-    }
-    Client --&gt; Clientvarstate : writes
 
     class Relay {
-        +relay : step
-        +msg : var
-        +state : var
+        +relay : state
+        +done : state
+        +msg : data
+        +sender : data
+        +state : data
     }
     &lt;&lt;RelayRole&gt;&gt; Relay
-    class Relayvarmsg {
-        +msg : var
-    }
-    class Relayvarstate {
-        +state : var
-    }
-    Relay --&gt; Relayvarmsg : writes
-    Relay --&gt; Relayvarstate : writes
 
     class Server {
-        +idle : step
-        +received : var
-        +state : var
+        +idle : state
+        +done : state
+        +received : data
+        +sender : data
+        +state : data
     }
-    &lt;&lt;ServerRole&gt;&gt; Server
-    class Servervarreceived {
-        +received : var
-    }
-    class Servervarstate {
-        +state : var
-    }
-    Server --&gt; Servervarreceived : writes
-    Server --&gt; Servervarstate : writes</code></pre>
+    &lt;&lt;ServerRole&gt;&gt; Server</code></pre>
 <p>This is intentionally actor-local. The class view does not try to infer hidden shared memory because the language does not have any. It instead makes actor-owned variables legible enough that a human reviewer can quickly see which names are introduced and which ones participate in local control logic.</p>
+<h2 id="role-reuse-example">Role Reuse Example</h2>
+<p>The same role can be instantiated multiple times without sharing variables. This bakery sketch uses:</p>
+<ul>
+<li>one <code>ProductionRole</code></li>
+<li>two <code>TruckRole</code> instances</li>
+<li>three <code>StoreRole</code> instances</li>
+<li>one <code>CustomerBaseRole</code> per store</li>
+</ul>
+<div class="sourceCode" id="cb11"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>(model</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  (actor ProductionRole</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    (data baked <span class="dv">0</span>)</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>    (state start</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>        (send-any TruckRole batch)</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>        (add baked <span class="dv">1</span>)</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>        (become done)))</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>    (state done))</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>  (actor TruckRole</span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a>    (data deliveries <span class="dv">0</span>)</span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>    (state wait</span>
+<span id="cb11-14"><a href="#cb11-14" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb11-15"><a href="#cb11-15" aria-hidden="true" tabindex="-1"></a>        (recv cargo)</span>
+<span id="cb11-16"><a href="#cb11-16" aria-hidden="true" tabindex="-1"></a>        (add deliveries <span class="dv">1</span>)</span>
+<span id="cb11-17"><a href="#cb11-17" aria-hidden="true" tabindex="-1"></a>        (send StoreRole cargo)</span>
+<span id="cb11-18"><a href="#cb11-18" aria-hidden="true" tabindex="-1"></a>        (become done)))</span>
+<span id="cb11-19"><a href="#cb11-19" aria-hidden="true" tabindex="-1"></a>    (state done))</span>
+<span id="cb11-20"><a href="#cb11-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-21"><a href="#cb11-21" aria-hidden="true" tabindex="-1"></a>  (actor StoreRole</span>
+<span id="cb11-22"><a href="#cb11-22" aria-hidden="true" tabindex="-1"></a>    (data inventory <span class="dv">0</span>)</span>
+<span id="cb11-23"><a href="#cb11-23" aria-hidden="true" tabindex="-1"></a>    (data sold <span class="dv">0</span>)</span>
+<span id="cb11-24"><a href="#cb11-24" aria-hidden="true" tabindex="-1"></a>    (state idle</span>
+<span id="cb11-25"><a href="#cb11-25" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb11-26"><a href="#cb11-26" aria-hidden="true" tabindex="-1"></a>        (recv shipment)</span>
+<span id="cb11-27"><a href="#cb11-27" aria-hidden="true" tabindex="-1"></a>        (add inventory <span class="dv">1</span>)</span>
+<span id="cb11-28"><a href="#cb11-28" aria-hidden="true" tabindex="-1"></a>        (become stocked)))</span>
+<span id="cb11-29"><a href="#cb11-29" aria-hidden="true" tabindex="-1"></a>    (state stocked</span>
+<span id="cb11-30"><a href="#cb11-30" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb11-31"><a href="#cb11-31" aria-hidden="true" tabindex="-1"></a>        (send CustomerBaseRole sale)</span>
+<span id="cb11-32"><a href="#cb11-32" aria-hidden="true" tabindex="-1"></a>        (sub inventory <span class="dv">1</span>)</span>
+<span id="cb11-33"><a href="#cb11-33" aria-hidden="true" tabindex="-1"></a>        (add sold <span class="dv">1</span>)</span>
+<span id="cb11-34"><a href="#cb11-34" aria-hidden="true" tabindex="-1"></a>        (become stocked))))</span>
+<span id="cb11-35"><a href="#cb11-35" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-36"><a href="#cb11-36" aria-hidden="true" tabindex="-1"></a>  (actor CustomerBaseRole</span>
+<span id="cb11-37"><a href="#cb11-37" aria-hidden="true" tabindex="-1"></a>    (data served <span class="dv">0</span>)</span>
+<span id="cb11-38"><a href="#cb11-38" aria-hidden="true" tabindex="-1"></a>    (state ready</span>
+<span id="cb11-39"><a href="#cb11-39" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb11-40"><a href="#cb11-40" aria-hidden="true" tabindex="-1"></a>        (recv sale)</span>
+<span id="cb11-41"><a href="#cb11-41" aria-hidden="true" tabindex="-1"></a>        (add served <span class="dv">1</span>)</span>
+<span id="cb11-42"><a href="#cb11-42" aria-hidden="true" tabindex="-1"></a>        (become ready))))</span>
+<span id="cb11-43"><a href="#cb11-43" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-44"><a href="#cb11-44" aria-hidden="true" tabindex="-1"></a>  (instance Production ProductionRole (TruckRole TruckNorth TruckSouth))</span>
+<span id="cb11-45"><a href="#cb11-45" aria-hidden="true" tabindex="-1"></a>  (instance TruckNorth TruckRole (StoreRole StoreA))</span>
+<span id="cb11-46"><a href="#cb11-46" aria-hidden="true" tabindex="-1"></a>  (instance TruckSouth TruckRole (StoreRole StoreB))</span>
+<span id="cb11-47"><a href="#cb11-47" aria-hidden="true" tabindex="-1"></a>  (instance StoreA StoreRole (CustomerBaseRole CustomerA))</span>
+<span id="cb11-48"><a href="#cb11-48" aria-hidden="true" tabindex="-1"></a>  (instance StoreB StoreRole (CustomerBaseRole CustomerB))</span>
+<span id="cb11-49"><a href="#cb11-49" aria-hidden="true" tabindex="-1"></a>  (instance StoreC StoreRole (CustomerBaseRole CustomerC))</span>
+<span id="cb11-50"><a href="#cb11-50" aria-hidden="true" tabindex="-1"></a>  (instance CustomerA CustomerBaseRole)</span>
+<span id="cb11-51"><a href="#cb11-51" aria-hidden="true" tabindex="-1"></a>  (instance CustomerB CustomerBaseRole)</span>
+<span id="cb11-52"><a href="#cb11-52" aria-hidden="true" tabindex="-1"></a>  (instance CustomerC CustomerBaseRole))</span></code></pre></div>
+<p>If you step <code>Production</code>, then <code>TruckNorth</code>, then <code>TruckNorth</code> again, then <code>StoreA</code>, then <code>StoreA</code> again, and finally <code>CustomerA</code>, the local data stays instance-specific:</p>
+<ul>
+<li><code>Production.baked = 1</code></li>
+<li><code>TruckNorth.deliveries = 1</code></li>
+<li><code>TruckSouth.deliveries = 0</code></li>
+<li><code>StoreA.sold = 1</code></li>
+<li><code>StoreB.sold = 0</code></li>
+<li><code>StoreC.sold = 0</code></li>
+<li><code>CustomerA.served = 1</code></li>
+<li><code>CustomerB.served = 0</code></li>
+<li><code>CustomerC.served = 0</code></li>
+</ul>
+<p>That is the intended semantics: roles are reusable templates, but every instantiated actor carries its own data map and current control state.</p>
+<p>The repeated actor names are real control-flow steps, not a documentation trick:</p>
+<ul>
+<li><code>Production</code> can target either truck because its <code>TruckRole</code> fill names both <code>TruckNorth</code> and <code>TruckSouth</code>, and <code>send-any</code> chooses one concrete truck.</li>
+<li><code>TruckNorth</code> first receives the batch, then sends it to <code>StoreA</code>.</li>
+<li><code>StoreA</code> first receives the shipment, then sends a sale to <code>CustomerA</code>.</li>
+</ul>
 <h2 id="walkthrough-of-the-example">Walkthrough Of The Example</h2>
 <p>The example should be read as a top-level <code>model</code> containing three small control machines plus CTL assertions that are checked against the explored graph.</p>
 <p><code>Client</code></p>
 <ul>
-<li>starts in <code>loop</code></li>
+<li>starts in <code>start</code></li>
 <li>sends one <code>ping</code>-typed message to <code>Relay</code></li>
-<li>becomes <code>loop</code> again</li>
+<li>becomes <code>done</code></li>
 </ul>
 <p><code>Relay</code></p>
 <ul>
 <li>has one explicit source state, <code>relay</code></li>
-<li>when a message is available, it consumes it, forwards it to <code>Server</code>, and becomes <code>relay</code> again</li>
+<li>when a message is available, it consumes it, forwards it to <code>Server</code>, and becomes <code>done</code></li>
 <li>the compiler inserts an internal wait substate so the compiled control graph still begins each communication step with <code>recv</code> or <code>send</code></li>
 </ul>
 <p><code>Server</code></p>
 <ul>
 <li>waits in <code>idle</code></li>
-<li>when a message is available, it consumes it, records it, and becomes <code>idle</code> again</li>
+<li>when a message is available, it consumes it, records it, and becomes <code>done</code></li>
 </ul>
 <p>This example is deliberately small, but it is enough to show:</p>
 <ul>
@@ -1008,10 +1100,10 @@
 <h1 id="message-plot">Message Plot</h1>
 <p>Because transitions, sends, and receives are now logged as structured events, the docs can render plots from an actual Runtime execution instead of from hand-written points.</p>
 <p>One such plot is declared in the model itself with:</p>
-<div class="sourceCode" id="cb11"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>(xyplot queue_outstanding</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  (steps <span class="dv">100</span>)</span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  (metric sent-minus-received))</span></code></pre></div>
+<div class="sourceCode" id="cb12"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>(xyplot queue_outstanding</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  (steps <span class="dv">100</span>)</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  (metric sent-minus-received))</span></code></pre></div>
 <p>The line charts below are rendered from every <code>xyplot</code> declaration in the example models. The queue plot is a 100-step run of the M/M/1/5-style queue example above. It starts at <code>0</code>, and the <code>sent-minus-received</code> line is positive exactly when sends are ahead of receives. It does not force the run to end at <code>0</code>, because this queue model can still have accepted work in service even after mailbox traffic has balanced out.</p>
 <h3 id="message-outstanding">Message Outstanding</h3>
 <figure>
@@ -1024,7 +1116,7 @@ XY Plot Source: <code>message_outstanding</code>
 <pre><code class="language-lisp">
 (xyplot message_outstanding
   (title &quot;Message Chain Outstanding Messages&quot;)
-  (steps 24)
+  (steps 4)
   (metric sent-minus-received))
 </code></pre>
 </details>
@@ -1039,7 +1131,7 @@ XY Plot Source: <code>message_receives</code>
 <pre><code class="language-lisp">
 (xyplot message_receives
   (title &quot;Message Chain Receives By Step&quot;)
-  (steps 24)
+  (steps 4)
   (metric receive-count))
 </code></pre>
 </details>
@@ -1054,7 +1146,7 @@ XY Plot Source: <code>message_sends</code>
 <pre><code class="language-lisp">
 (xyplot message_sends
   (title &quot;Message Chain Sends By Step&quot;)
-  (steps 24)
+  (steps 4)
   (metric send-count))
 </code></pre>
 </details>
@@ -1084,120 +1176,7 @@ XY Plot Source: <code>queue_outstanding</code>
 </ul>
 <h1 id="mermaid-artifacts">Mermaid Artifacts</h1>
 <p>The build expects Mermaid sources under <code>docs/mermaid/</code> and renders SVGs into <code>docs/generated/</code>.</p>
-<p>Example includes:</p>
-<h3 id="a-to-b-sequence">A To B Sequence</h3>
-<figure>
-<img src="../generated/a_to_b_sequence.svg" alt="A To B Sequence" /><figcaption aria-hidden="true">A To B Sequence</figcaption>
-</figure>
-<details>
-<summary>
-Mermaid Source: <code>a_to_b_sequence.mmd</code>
-</summary>
-<pre><code class="language-mermaid">
-sequenceDiagram
-    participant Client
-    participant Relay
-    participant Server
-    Client--&gt;&gt;Relay: message(type=ping)
-    Relay--&gt;&gt;Server: message(type=ping)
-</code></pre>
-</details>
-<h3 id="a-to-b-state">A To B State</h3>
-<figure>
-<img src="../generated/a_to_b_state.svg" alt="A To B State" /><figcaption aria-hidden="true">A To B State</figcaption>
-</figure>
-<details>
-<summary>
-Mermaid Source: <code>a_to_b_state.mmd</code>
-</summary>
-<pre><code class="language-mermaid">
-flowchart TD
-    subgraph Client
-        direction TB
-        C_loop([loop]) --&gt;|&quot;sent = ping&quot;| C_loop
-    end
-
-    subgraph Relay
-        direction TB
-        subgraph R_relay[&quot;relay&quot;]
-            direction TB
-            R_wait([wait])
-        end
-        R_entry(( ))
-        R_entry --&gt;|&quot;recv msg&quot;| R_wait
-        R_wait --&gt;|&quot;send msg&quot;| R_entry
-    end
-
-    subgraph Server
-        direction TB
-        S_idle([idle]) --&gt;|&quot;received = ping&quot;| S_idle
-    end
-
-    C_loop -. send ping .-&gt; R_relay
-    R_wait -. send ping .-&gt; S_idle
-</code></pre>
-</details>
-<h3 id="mm1-5-queue-flow">Mm1 5 Queue Flow</h3>
-<figure>
-<img src="../generated/mm1_5_queue_flow.svg" alt="Mm1 5 Queue Flow" /><figcaption aria-hidden="true">Mm1 5 Queue Flow</figcaption>
-</figure>
-<details>
-<summary>
-Mermaid Source: <code>mm1_5_queue_flow.mmd</code>
-</summary>
-<pre><code class="language-mermaid">
-sequenceDiagram
-    participant Client
-    participant Queue
-    Note over Client: dice branch
-    alt arrival
-        Client--&gt;&gt;Queue: req
-        alt count &lt; 5
-            Queue-&gt;&gt;Queue: count += 1
-        else count = 5
-            Queue-&gt;&gt;Queue: dropped_count += 1
-        end
-    else sleep
-        Client-&gt;&gt;Client: last = sleep
-    end
-    Note over Queue: service branch when count &gt; 0
-    alt service-complete
-        Queue-&gt;&gt;Queue: count -= 1
-        Queue-&gt;&gt;Queue: last_departure = service-complete
-    else busy
-        Queue-&gt;&gt;Queue: last_departure = busy
-    end
-</code></pre>
-</details>
-<h3 id="mm1-5-queue-state">Mm1 5 Queue State</h3>
-<figure>
-<img src="../generated/mm1_5_queue_state.svg" alt="Mm1 5 Queue State" /><figcaption aria-hidden="true">Mm1 5 Queue State</figcaption>
-</figure>
-<details>
-<summary>
-Mermaid Source: <code>mm1_5_queue_state.mmd</code>
-</summary>
-<pre><code class="language-mermaid">
-flowchart TD
-    subgraph Client
-        direction TB
-        C_loop([loop]) --&gt;|&quot;dice&amp;lt;0.5&lt;br/&gt;last = sleep&quot;| C_loop
-        C_loop --&gt;|&quot;dice&amp;gt;=0.5&lt;br/&gt;send req&lt;br/&gt;last = arrival&quot;| C_loop
-    end
-
-    subgraph Queue
-        direction TB
-        Q_wait([wait]) --&gt;|&quot;req and count = 0&lt;br/&gt;count += 1&lt;br/&gt;elapsed = 0&quot;| Q_wait
-        Q_wait --&gt;|&quot;req and 0 &amp;lt; count &amp;lt; 5&lt;br/&gt;count += 1&quot;| Q_wait
-        Q_wait --&gt;|&quot;req and count = 5&lt;br/&gt;dropped_count += 1&quot;| Q_wait
-        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;lt;0.5&lt;br/&gt;count -= 1&lt;br/&gt;last_departure = service-complete&quot;| Q_wait
-        Q_wait --&gt;|&quot;count &amp;gt; 0 and dice&amp;gt;=0.5&lt;br/&gt;last_departure = busy&quot;| Q_wait
-    end
-
-    C_loop -. arrival req .-&gt; Q_wait
-</code></pre>
-</details>
-<p>The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure.</p>
+<p>The important constraint is that the diagrams are not decorative extras. They are another view over the same declared control structure, and the examples above keep those diagrams next to the Lisp that generated them.</p>
 <h1 id="build">Build</h1>
 <p>The <code>Makefile</code> provides:</p>
 <ul>

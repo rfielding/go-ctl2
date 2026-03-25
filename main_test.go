@@ -182,7 +182,7 @@ func TestRuntimeMessageChainABC(t *testing.T) {
 								}
 								return false
 							},
-							Action: Receive(MatchMessage(ping), func(rt *Runtime, actor *Actor, message Value) error {
+							Action: Receive(MatchMessage(ping), func(rt *Runtime, actor *Actor, message Value, _ string) error {
 								return Send("C", message)(rt, actor)
 							}),
 						},
@@ -207,7 +207,7 @@ func TestRuntimeMessageChainABC(t *testing.T) {
 								}
 								return false
 							},
-							Action: Receive(MatchMessage(ping), func(rt *Runtime, actor *Actor, message Value) error {
+							Action: Receive(MatchMessage(ping), func(rt *Runtime, actor *Actor, message Value, _ string) error {
 								actor.Data["received"] = message
 								return nil
 							}),
@@ -468,8 +468,6 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
-			(step start)
-			(step done)
 			(actor Worker
 				(state start
 					(edge true
@@ -493,7 +491,7 @@ func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 	if results[1].Holds {
 		t.Fatal("expected second embedded assertion to fail")
 	}
-	want := `(model (step start) (step done) (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker) (assert (ef (in-state A done))) (assert (ag (in-state A start))))`
+	want := `(model (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker) (assert (ef (in-state A done))) (assert (ag (in-state A start))))`
 	if got := spec.Lisp().String(); got != want {
 		t.Fatalf("unexpected model serialization: %s", got)
 	}
@@ -505,7 +503,6 @@ func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 func TestCompileModelCapturesXYPlot(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
-			(step loop)
 			(actor LoopingWorker
 				(state loop
 					(edge true
@@ -538,9 +535,6 @@ func TestCompileModelCapturesXYPlot(t *testing.T) {
 func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
-			(step start)
-			(step done)
-			(step sink)
 			(actor Sender
 				(state start
 					(edge true
@@ -582,7 +576,6 @@ func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
 func TestCompileModelRejectsUnknownActorRole(t *testing.T) {
 	_, err := CompileModel(`
 		(model
-			(step start)
 			(instance A MissingRole))
 	`)
 	if err == nil {
@@ -596,8 +589,6 @@ func TestCompileModelRejectsUnknownActorRole(t *testing.T) {
 func TestCompileModelRequiresActorDeclarations(t *testing.T) {
 	_, err := CompileModel(`
 		(model
-			(step start)
-			(step done)
 			(actor Worker
 				(state start
 					(edge true
@@ -615,9 +606,6 @@ func TestCompileModelRequiresActorDeclarations(t *testing.T) {
 func TestRenderClassDiagramMermaidShowsActorVariableReadsAndWrites(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
-			(step start)
-			(step done)
-			(step idle)
 			(actor Worker
 				(data count 0)
 				(state start
@@ -640,14 +628,21 @@ func TestRenderClassDiagramMermaidShowsActorVariableReadsAndWrites(t *testing.T)
 	for _, want := range []string{
 		"classDiagram",
 		"<<Worker>> A",
-		"+start : step",
-		"+count : var",
-		"+next : var",
-		"A --> Avarcount : reads/writes",
-		"A --> Avarnext : writes",
+		"+start : state",
+		"+count : data",
+		"+next : data",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected class diagram to contain %q, got:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"reads/writes",
+		"Avarcount",
+		"Avarnext",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("did not expect class diagram to contain %q, got:\n%s", unwanted, got)
 		}
 	}
 	if strings.Contains(got, "ping") {
@@ -655,48 +650,27 @@ func TestRenderClassDiagramMermaidShowsActorVariableReadsAndWrites(t *testing.T)
 	}
 }
 
-func TestCompileModelRequiresStepDeclarations(t *testing.T) {
-	_, err := CompileModel(`
-		(model
-			(actor Worker
-				(state start
-					(edge true
-						(become done)))
-				(state done))
-			(instance A Worker))
-	`)
-	if err == nil {
-		t.Fatal("expected missing step declaration error, got nil")
+func TestRenderDocExampleSectionsReturns(t *testing.T) {
+	out, err := renderDocExampleSections()
+	if err != nil {
+		t.Fatalf("renderDocExampleSections returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no step declarations") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestCompileModelRejectsUndeclaredStepReference(t *testing.T) {
-	_, err := CompileModel(`
-		(model
-			(step start)
-			(actor Worker
-				(state start
-					(edge true
-						(become done)))
-				(state done))
-			(instance A Worker))
-	`)
-	if err == nil {
-		t.Fatal("expected undeclared step error, got nil")
-	}
-	if !strings.Contains(err.Error(), "undeclared step done") {
-		t.Fatalf("unexpected error: %v", err)
+	for _, want := range []string{
+		"## Message Chain Example",
+		"### Input Lisp",
+		"### Rendered Output",
+		"generated/message_outstanding.svg",
+		"## Bakery Role-Reuse Example",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected generated example sections to contain %q", want)
+		}
 	}
 }
 
 func TestCompileModelRequiresPeerRoleFill(t *testing.T) {
 	_, err := CompileModel(`
 		(model
-			(step start)
-			(step done)
 			(actor Sender
 				(state start
 					(edge true
@@ -721,8 +695,6 @@ func TestCompileModelRequiresPeerRoleFill(t *testing.T) {
 func TestCompileModelRejectsPeerRoleFillToWrongRole(t *testing.T) {
 	_, err := CompileModel(`
 		(model
-			(step start)
-			(step done)
 			(actor Sender
 				(state start
 					(edge true
@@ -751,7 +723,6 @@ func TestCompileModelRejectsPeerRoleFillToWrongRole(t *testing.T) {
 func TestCompileModelAllowsCircularPeerRoleFills(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
-			(step loop)
 			(actor PingRole
 				(state loop
 					(edge true
@@ -768,6 +739,180 @@ func TestCompileModelAllowsCircularPeerRoleFills(t *testing.T) {
 	if len(spec.Actors) != 2 {
 		t.Fatalf("expected 2 actors, got %d", len(spec.Actors))
 	}
+}
+
+func TestCompileModelRejectsSendToMultiBoundRole(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(actor SenderRole
+				(state start
+					(edge true
+						(send ReceiverRole ping)
+						(become done)))
+				(state done))
+			(actor ReceiverRole
+				(state ready))
+			(instance Sender SenderRole (ReceiverRole ReceiverA ReceiverB))
+			(instance ReceiverA ReceiverRole)
+			(instance ReceiverB ReceiverRole))
+	`)
+	if err == nil {
+		t.Fatal("expected ambiguous send error, got nil")
+	}
+	if !strings.Contains(err.Error(), "use send-any") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSendAnyUsesRoleSetAndRecvSetsSender(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(actor BakeryRole
+				(state start
+					(edge true
+						(send-any TruckRole batch)
+						(become done)))
+				(state done))
+			(actor TruckRole
+				(data last 0)
+				(state ready
+					(edge true
+						(recv msg)
+						(set last msg)
+						(become ready))))
+			(instance Bakery BakeryRole (TruckRole TruckA TruckB))
+			(instance TruckA TruckRole)
+			(instance TruckB TruckRole))
+	`)
+
+	runtime := spec.Runtime()
+	bakery := runtime.actorByName("Bakery")
+	if bakery == nil {
+		t.Fatal("missing Bakery actor")
+	}
+	applied, err := runtime.StepActor(bakery)
+	if err != nil {
+		t.Fatalf("bakery step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected bakery step to apply")
+	}
+	if len(runtime.Mailbox("TruckA")) != 1 {
+		t.Fatalf("expected TruckA mailbox to have one message, got %d", len(runtime.Mailbox("TruckA")))
+	}
+	if len(runtime.Mailbox("TruckB")) != 0 {
+		t.Fatalf("expected TruckB mailbox to stay empty, got %d", len(runtime.Mailbox("TruckB")))
+	}
+
+	truckA := runtime.actorByName("TruckA")
+	if truckA == nil {
+		t.Fatal("missing TruckA actor")
+	}
+	applied, err = runtime.StepActor(truckA)
+	if err != nil {
+		t.Fatalf("truck step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected truck step to apply")
+	}
+	if got := truckA.Data["last"].String(); got != "batch" {
+		t.Fatalf("TruckA.last = %s, want batch", got)
+	}
+	if got := truckA.Data["sender"].String(); got != "Bakery" {
+		t.Fatalf("TruckA.sender = %s, want Bakery", got)
+	}
+}
+
+func TestMultipleRoleInstancesKeepLocalVariablesIndependent(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(actor ProductionRole
+				(data baked 0)
+				(state start
+					(edge true
+						(send TruckRole batch)
+						(add baked 1)
+						(become done)))
+				(state done))
+			(actor TruckRole
+				(data deliveries 0)
+				(state wait
+					(edge true
+						(recv cargo)
+						(add deliveries 1)
+						(send StoreRole cargo)
+						(become done)))
+				(state done))
+			(actor StoreRole
+				(data inventory 0)
+				(data sold 0)
+				(state idle
+					(edge true
+						(recv shipment)
+						(add inventory 1)
+						(become stocked)))
+				(state stocked
+					(edge true
+						(send CustomerBaseRole sale)
+						(sub inventory 1)
+						(add sold 1)
+						(become stocked))))
+			(actor CustomerBaseRole
+				(data served 0)
+				(state ready
+					(edge true
+						(recv sale)
+						(add served 1)
+						(become ready))))
+			(instance Production ProductionRole (TruckRole TruckNorth))
+			(instance TruckNorth TruckRole (StoreRole StoreA))
+			(instance TruckSouth TruckRole (StoreRole StoreB))
+			(instance StoreA StoreRole (CustomerBaseRole CustomerA))
+			(instance StoreB StoreRole (CustomerBaseRole CustomerB))
+			(instance StoreC StoreRole (CustomerBaseRole CustomerC))
+			(instance CustomerA CustomerBaseRole)
+			(instance CustomerB CustomerBaseRole)
+			(instance CustomerC CustomerBaseRole))
+	`)
+
+	runtime := spec.Runtime()
+	order := []string{"Production", "TruckNorth", "TruckNorth", "StoreA", "StoreA", "CustomerA"}
+	for i, name := range order {
+		actor := runtime.actorByName(name)
+		if actor == nil {
+			t.Fatalf("missing actor %s", name)
+		}
+		applied, err := runtime.StepActor(actor)
+		if err != nil {
+			t.Fatalf("step %d for %s returned error: %v", i+1, name, err)
+		}
+		if !applied {
+			t.Fatalf("expected step %d for %s to apply", i+1, name)
+		}
+	}
+
+	assertData := func(actorName, key, want string) {
+		actor := runtime.actorByName(actorName)
+		if actor == nil {
+			t.Fatalf("missing actor %s", actorName)
+		}
+		if got := actor.Data[key].String(); got != want {
+			t.Fatalf("%s.%s = %s, want %s", actorName, key, got, want)
+		}
+	}
+
+	assertData("Production", "baked", "1")
+	assertData("TruckNorth", "deliveries", "1")
+	assertData("TruckSouth", "deliveries", "0")
+	assertData("StoreA", "inventory", "0")
+	assertData("StoreA", "sold", "1")
+	assertData("StoreB", "inventory", "0")
+	assertData("StoreB", "sold", "0")
+	assertData("StoreC", "inventory", "0")
+	assertData("StoreC", "sold", "0")
+	assertData("CustomerA", "served", "1")
+	assertData("CustomerB", "served", "0")
+	assertData("CustomerC", "served", "0")
 }
 
 func TestCTLDeadlockSelfLoopSupportsAX(t *testing.T) {
@@ -1368,6 +1513,29 @@ func TestPredicateDescriptionOnCTL(t *testing.T) {
 	}
 	if !model.HoldsAtInitial(formula) {
 		t.Fatal("expected described CTL predicate to hold")
+	}
+}
+
+func TestCTLDataEqualsMatchesQuotedListLiteral(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state done))
+		`),
+	)
+	runtime.Actors[0].Data["payload"] = MustRead(`(message (type ping))`)
+
+	model, err := ExploreModel(runtime)
+	if err != nil {
+		t.Fatalf("ExploreModel returned error: %v", err)
+	}
+
+	formula, err := CompileCTL(`(ef (data= A payload '(message (type ping))))`)
+	if err != nil {
+		t.Fatalf("CompileCTL returned error: %v", err)
+	}
+	if !model.HoldsAtInitial(formula) {
+		t.Fatal("expected quoted list literal predicate to hold")
 	}
 }
 

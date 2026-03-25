@@ -8,7 +8,7 @@
 - runtime execution with mailbox semantics
 - CTL model checking
 - Mermaid diagrams
-- UML-like class diagrams for actor-local variable reads and writes
+- UML-like class diagrams for actor-local control states and data
 - event-log-driven metric plots
 
 The intended workflow is:
@@ -25,8 +25,7 @@ The current repository models:
 
 - one mailbox per actor
 - actor behavior templates declared as `(actor RoleName ...)`
-- runtime actors declared as `(instance ActorName RoleName (PeerRole InstanceName)...)`
-- model-wide control steps declared once as `(step Name)`
+- runtime actors declared as `(instance ActorName RoleName (PeerRole InstanceName...)...)`
 - no implicit actor instantiation inside `(model ...)`
 - explicit named control states
 - guarded transitions
@@ -34,6 +33,8 @@ The current repository models:
 - successor sets derived from `become` calls in transition bodies
 - buffered or zero-capacity rendezvous mailbox semantics
 - atomic transitions whose communication readiness is checked before execution
+- `send` for single-target role fills and `send-any` for multi-target role fills
+- automatic `sender` data binding on `recv`
 - boolean control flow with `if`
 - tail-recursive control flow with `become`
 
