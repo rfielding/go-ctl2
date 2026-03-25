@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
+	"io"
 	"math"
 	"math/big"
 	"math/rand"
@@ -81,11 +83,13 @@ type State struct {
 }
 
 type Actor struct {
-	Name   string
-	Data   map[string]Value
-	Defs   map[string]FunctionDef
-	States []State
-	Spec   Value
+	Name         string
+	Role         string
+	RoleBindings map[string]string
+	Data         map[string]Value
+	Defs         map[string]FunctionDef
+	States       []State
+	Spec         Value
 }
 
 type Runtime struct {
@@ -200,10 +204,25 @@ type AssertionResult struct {
 }
 
 type RequirementsModel struct {
-	Actors     []*Actor
-	Assertions []Assertion
-	Plots      []XYPlot
-	Spec       Value
+	ActorTypes   []*Actor
+	Actors       []*Actor
+	Steps        []StepDeclaration
+	Declarations []ActorDeclaration
+	Assertions   []Assertion
+	Plots        []XYPlot
+	Spec         Value
+}
+
+type StepDeclaration struct {
+	Name string
+	Spec Value
+}
+
+type ActorDeclaration struct {
+	Name         string
+	Role         string
+	RoleBindings map[string]string
+	Spec         Value
 }
 
 type XYPlot struct {
@@ -549,10 +568,12 @@ func (rt *Runtime) Clone() *Runtime {
 	}
 	for i, actor := range rt.Actors {
 		cloneActor := &Actor{
-			Name:   actor.Name,
-			Data:   cloneValueMap(actor.Data),
-			Defs:   cloneFunctionDefs(actor.Defs),
-			States: actor.States,
+			Name:         actor.Name,
+			Role:         actor.Role,
+			RoleBindings: cloneStringMap(actor.RoleBindings),
+			Data:         cloneValueMap(actor.Data),
+			Defs:         cloneFunctionDefs(actor.Defs),
+			States:       cloneStates(actor.States),
 		}
 		clone.Actors[i] = cloneActor
 	}
@@ -567,11 +588,13 @@ func (rt *Runtime) Clone() *Runtime {
 
 func cloneActor(actor *Actor) *Actor {
 	return &Actor{
-		Name:   actor.Name,
-		Data:   cloneValueMap(actor.Data),
-		Defs:   cloneFunctionDefs(actor.Defs),
-		States: append([]State(nil), actor.States...),
-		Spec:   cloneValue(actor.Spec),
+		Name:         actor.Name,
+		Role:         actor.Role,
+		RoleBindings: cloneStringMap(actor.RoleBindings),
+		Data:         cloneValueMap(actor.Data),
+		Defs:         cloneFunctionDefs(actor.Defs),
+		States:       cloneStates(actor.States),
+		Spec:         cloneValue(actor.Spec),
 	}
 }
 
@@ -1805,11 +1828,25 @@ func buildActor(form Value) (*Actor, error) {
 		Spec: form,
 	}
 	for _, item := range form.Items[2:] {
-		states, err := buildState(item)
-		if err != nil {
-			return nil, fmt.Errorf("actor %s: %w", name, err)
+		switch {
+		case isListHead(item, "state"):
+			states, err := buildState(item)
+			if err != nil {
+				return nil, fmt.Errorf("actor %s: %w", name, err)
+			}
+			actor.States = append(actor.States, states...)
+		case isListHead(item, "data"):
+			if len(item.Items) != 3 {
+				return nil, fmt.Errorf("actor %s: data form must be (data key value)", name)
+			}
+			key, err := expectSymbol(item.Items[1], "data key")
+			if err != nil {
+				return nil, fmt.Errorf("actor %s: %w", name, err)
+			}
+			actor.Data[key] = cloneValue(item.Items[2])
+		default:
+			return nil, fmt.Errorf("actor %s: actor item must be state or data", name)
 		}
-		actor.States = append(actor.States, states...)
 	}
 	if len(actor.States) == 0 {
 		return nil, fmt.Errorf("actor %s: no states", name)
@@ -1823,14 +1860,36 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 		return nil, fmt.Errorf("model form must be (model item...)")
 	}
 	model := &RequirementsModel{Spec: form}
+	actorTypes := map[string]*Actor{}
+	stepNames := map[string]bool{}
 	for _, item := range form.Items[1:] {
 		switch {
+		case isListHead(item, "step"):
+			step, err := buildStepDeclaration(item)
+			if err != nil {
+				return nil, err
+			}
+			if stepNames[step.Name] {
+				return nil, fmt.Errorf("duplicate step %s", step.Name)
+			}
+			stepNames[step.Name] = true
+			model.Steps = append(model.Steps, step)
 		case isListHead(item, "actor"):
 			actor, err := buildActor(item)
 			if err != nil {
 				return nil, err
 			}
-			model.Actors = append(model.Actors, actor)
+			if _, exists := actorTypes[actor.Name]; exists {
+				return nil, fmt.Errorf("duplicate actor role %s", actor.Name)
+			}
+			actorTypes[actor.Name] = actor
+			model.ActorTypes = append(model.ActorTypes, actor)
+		case isListHead(item, "instance"):
+			decl, err := buildActorDeclaration(item)
+			if err != nil {
+				return nil, err
+			}
+			model.Declarations = append(model.Declarations, decl)
 		case isListHead(item, "assert"):
 			assertion, err := buildAssertion(item)
 			if err != nil {
@@ -1844,13 +1903,264 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 			}
 			model.Plots = append(model.Plots, plot)
 		default:
-			return nil, fmt.Errorf("model item must be actor, assert, or xyplot")
+			return nil, fmt.Errorf("model item must be step, actor, instance, assert, or xyplot")
 		}
+	}
+	if len(model.Steps) == 0 {
+		return nil, fmt.Errorf("model: no step declarations")
+	}
+	for _, actorType := range model.ActorTypes {
+		if err := validateActorSteps(actorType, stepNames); err != nil {
+			return nil, err
+		}
+	}
+	if len(model.Declarations) == 0 {
+		return nil, fmt.Errorf("model: no actor declarations")
+	}
+	seenNames := map[string]bool{}
+	declarationsByName := map[string]ActorDeclaration{}
+	for _, decl := range model.Declarations {
+		if seenNames[decl.Name] {
+			return nil, fmt.Errorf("duplicate actor name %s", decl.Name)
+		}
+		seenNames[decl.Name] = true
+		declarationsByName[decl.Name] = decl
+	}
+	for _, decl := range model.Declarations {
+		actorType, ok := actorTypes[decl.Role]
+		if !ok {
+			return nil, fmt.Errorf("instance %s references unknown actor role %s", decl.Name, decl.Role)
+		}
+		requiredPeerRoles, err := collectActorPeerRoles(actorType)
+		if err != nil {
+			return nil, fmt.Errorf("actor role %s: %w", actorType.Name, err)
+		}
+		if err := validateActorRoleBindings(decl, actorType, actorTypes, declarationsByName, requiredPeerRoles); err != nil {
+			return nil, err
+		}
+		actor := cloneActor(actorType)
+		actor.Name = decl.Name
+		actor.Role = decl.Role
+		actor.RoleBindings = cloneStringMap(decl.RoleBindings)
+		actor.Spec = Value{}
+		if err := resolveActorPeerRoles(actor); err != nil {
+			return nil, err
+		}
+		model.Actors = append(model.Actors, actor)
 	}
 	if len(model.Actors) == 0 {
 		return nil, fmt.Errorf("model: no actors")
 	}
 	return model, nil
+}
+
+func buildStepDeclaration(form Value) (StepDeclaration, error) {
+	if !isListHead(form, "step") || len(form.Items) != 2 {
+		return StepDeclaration{}, fmt.Errorf("step form must be (step name)")
+	}
+	name, err := expectSymbol(form.Items[1], "step name")
+	if err != nil {
+		return StepDeclaration{}, err
+	}
+	return StepDeclaration{Name: name, Spec: form}, nil
+}
+
+func validateActorSteps(actor *Actor, stepNames map[string]bool) error {
+	for _, state := range actor.States {
+		if state.Spec.Kind != KindInvalid && !stepNames[state.Name] {
+			return fmt.Errorf("actor role %s references undeclared step %s", actor.Name, state.Name)
+		}
+		for _, transition := range state.Transitions {
+			for _, next := range transition.NextStates {
+				if isGeneratedStepName(next) {
+					continue
+				}
+				if !stepNames[next] {
+					return fmt.Errorf("actor role %s references undeclared step %s", actor.Name, next)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func isGeneratedStepName(name string) bool {
+	return strings.Contains(name, "__wait")
+}
+
+func collectActorPeerRoles(actor *Actor) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, state := range actor.States {
+		for _, transition := range state.Transitions {
+			if err := walkSendTargets(transition.ActionSpec, func(role string) {
+				if !seen[role] {
+					seen[role] = true
+					out = append(out, role)
+				}
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func walkSendTargets(form Value, visit func(string)) error {
+	if !isList(form) || len(form.Items) == 0 {
+		return nil
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return err
+	}
+	switch head {
+	case "do":
+		for _, item := range form.Items[1:] {
+			if err := walkSendTargets(item, visit); err != nil {
+				return err
+			}
+		}
+	case "if":
+		for _, item := range form.Items[2:] {
+			if err := walkSendTargets(item, visit); err != nil {
+				return err
+			}
+		}
+	case "send":
+		if len(form.Items) != 3 {
+			return fmt.Errorf("send must be (send role message)")
+		}
+		role, err := expectSymbol(form.Items[1], "send target role")
+		if err != nil {
+			return err
+		}
+		visit(role)
+	}
+	return nil
+}
+
+func validateActorRoleBindings(decl ActorDeclaration, actorType *Actor, actorTypes map[string]*Actor, declarations map[string]ActorDeclaration, requiredPeerRoles []string) error {
+	required := map[string]bool{}
+	for _, role := range requiredPeerRoles {
+		required[role] = true
+		if _, ok := actorTypes[role]; !ok {
+			return fmt.Errorf("actor role %s sends to unknown peer role %s", actorType.Name, role)
+		}
+		targetInstance, ok := decl.RoleBindings[role]
+		if !ok {
+			return fmt.Errorf("instance %s must fill peer role %s", decl.Name, role)
+		}
+		targetDecl, ok := declarations[targetInstance]
+		if !ok {
+			return fmt.Errorf("instance %s fills peer role %s with unknown instance %s", decl.Name, role, targetInstance)
+		}
+		if targetDecl.Role != role {
+			return fmt.Errorf("instance %s fills peer role %s with instance %s playing role %s", decl.Name, role, targetInstance, targetDecl.Role)
+		}
+	}
+	for role := range decl.RoleBindings {
+		if !required[role] {
+			return fmt.Errorf("instance %s provides unused peer role fill %s", decl.Name, role)
+		}
+	}
+	return nil
+}
+
+func resolveActorPeerRoles(actor *Actor) error {
+	for i := range actor.States {
+		actor.States[i].Spec = Value{}
+		for j := range actor.States[i].Transitions {
+			resolved, err := resolveSendTargets(actor.States[i].Transitions[j].ActionSpec, actor.RoleBindings)
+			if err != nil {
+				return fmt.Errorf("instance %s: %w", actor.Name, err)
+			}
+			actor.States[i].Transitions[j].ActionSpec = resolved
+			action, err := compileAction(resolved)
+			if err != nil {
+				return fmt.Errorf("instance %s: %w", actor.Name, err)
+			}
+			actor.States[i].Transitions[j].Action = action
+		}
+	}
+	return nil
+}
+
+func resolveSendTargets(form Value, bindings map[string]string) (Value, error) {
+	if !isList(form) || len(form.Items) == 0 {
+		return cloneValue(form), nil
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return Value{}, err
+	}
+	switch head {
+	case "send":
+		if len(form.Items) != 3 {
+			return Value{}, fmt.Errorf("send must be (send role message)")
+		}
+		role, err := expectSymbol(form.Items[1], "peer role")
+		if err != nil {
+			return Value{}, err
+		}
+		target, ok := bindings[role]
+		if !ok {
+			return Value{}, fmt.Errorf("unresolved peer role %s", role)
+		}
+		return List(Symbol("send"), Symbol(target), cloneValue(form.Items[2])), nil
+	case "do", "if":
+		items := make([]Value, len(form.Items))
+		items[0] = cloneValue(form.Items[0])
+		for i := 1; i < len(form.Items); i++ {
+			item, err := resolveSendTargets(form.Items[i], bindings)
+			if err != nil {
+				return Value{}, err
+			}
+			items[i] = item
+		}
+		return List(items...), nil
+	default:
+		return cloneValue(form), nil
+	}
+}
+
+func buildActorDeclaration(form Value) (ActorDeclaration, error) {
+	if !isListHead(form, "instance") || len(form.Items) < 3 {
+		return ActorDeclaration{}, fmt.Errorf("instance form must be (instance name role (PeerRole InstanceName)...)")
+	}
+	name, err := expectSymbol(form.Items[1], "actor name")
+	if err != nil {
+		return ActorDeclaration{}, err
+	}
+	role, err := expectSymbol(form.Items[2], "actor role")
+	if err != nil {
+		return ActorDeclaration{}, err
+	}
+	bindings := map[string]string{}
+	for _, item := range form.Items[3:] {
+		if !isList(item) || len(item.Items) != 2 {
+			return ActorDeclaration{}, fmt.Errorf("instance binding must be (PeerRole InstanceName)")
+		}
+		peerRole, err := expectSymbol(item.Items[0], "peer role")
+		if err != nil {
+			return ActorDeclaration{}, err
+		}
+		target, err := expectSymbol(item.Items[1], "peer instance")
+		if err != nil {
+			return ActorDeclaration{}, err
+		}
+		if _, exists := bindings[peerRole]; exists {
+			return ActorDeclaration{}, fmt.Errorf("instance %s repeats binding for peer role %s", name, peerRole)
+		}
+		bindings[peerRole] = target
+	}
+	return ActorDeclaration{
+		Name:         name,
+		Role:         role,
+		RoleBindings: bindings,
+		Spec:         form,
+	}, nil
 }
 
 func buildAssertion(form Value) (Assertion, error) {
@@ -2779,6 +3089,52 @@ func cloneFunctionDefs(in map[string]FunctionDef) map[string]FunctionDef {
 	return out
 }
 
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneStates(in []State) []State {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]State, len(in))
+	for i, state := range in {
+		out[i] = State{
+			Name:        state.Name,
+			Guard:       state.Guard,
+			Control:     state.Control,
+			Transitions: cloneTransitions(state.Transitions),
+			Spec:        cloneValue(state.Spec),
+		}
+	}
+	return out
+}
+
+func cloneTransitions(in []Transition) []Transition {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Transition, len(in))
+	for i, transition := range in {
+		out[i] = Transition{
+			Name:       transition.Name,
+			Guard:      transition.Guard,
+			Action:     transition.Action,
+			NextStates: append([]string(nil), transition.NextStates...),
+			GuardSpec:  cloneValue(transition.GuardSpec),
+			ActionSpec: cloneValue(transition.ActionSpec),
+		}
+	}
+	return out
+}
+
 func cloneValue(in Value) Value {
 	out := Value{
 		Kind: in.Kind,
@@ -2791,6 +3147,15 @@ func cloneValue(in Value) Value {
 }
 
 func sortedValueKeys(in map[string]Value) []string {
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedStringKeys(in map[string]string) []string {
 	keys := make([]string, 0, len(in))
 	for key := range in {
 		keys = append(keys, key)
@@ -3152,10 +3517,34 @@ func (a Actor) Lisp() Value {
 		return a.Spec
 	}
 	items := []Value{Symbol("actor"), Symbol(a.Name)}
+	if a.Role != "" && a.Role != a.Name {
+		items = append(items, List(Symbol("role"), Symbol(a.Role)))
+	}
+	for _, role := range sortedStringKeys(a.RoleBindings) {
+		items = append(items, List(Symbol(role), Symbol(a.RoleBindings[role])))
+	}
 	for _, state := range a.States {
 		items = append(items, state.Lisp())
 	}
 	return List(items...)
+}
+
+func (d ActorDeclaration) Lisp() Value {
+	if d.Spec.Kind != KindInvalid {
+		return d.Spec
+	}
+	items := []Value{Symbol("instance"), Symbol(d.Name), Symbol(d.Role)}
+	for _, role := range sortedStringKeys(d.RoleBindings) {
+		items = append(items, List(Symbol(role), Symbol(d.RoleBindings[role])))
+	}
+	return List(items...)
+}
+
+func (d StepDeclaration) Lisp() Value {
+	if d.Spec.Kind != KindInvalid {
+		return d.Spec
+	}
+	return List(Symbol("step"), Symbol(d.Name))
 }
 
 func (a Assertion) Lisp() Value {
@@ -3183,8 +3572,14 @@ func (m RequirementsModel) Lisp() Value {
 		return m.Spec
 	}
 	items := []Value{Symbol("model")}
-	for _, actor := range m.Actors {
-		items = append(items, actor.Lisp())
+	for _, step := range m.Steps {
+		items = append(items, step.Lisp())
+	}
+	for _, actorType := range m.ActorTypes {
+		items = append(items, actorType.Lisp())
+	}
+	for _, decl := range m.Declarations {
+		items = append(items, decl.Lisp())
 	}
 	for _, assertion := range m.Assertions {
 		items = append(items, assertion.Lisp())
@@ -3497,17 +3892,19 @@ type docPlotBinding struct {
 
 const docQueueModelSource = `
 	(model
-		(actor Client
+		(step loop)
+		(step wait)
+		(actor ClientRole
 			(state loop
 				(edge (dice-range 0.0 0.5)
 					(set last "sleep")
 					(become loop))
 				(edge (dice-range 0.5 1.0)
-					(send Queue req)
+					(send QueueRole req)
 					(set last "arrival")
 					(become loop))))
 
-		(actor Queue
+		(actor QueueRole
 			(state wait
 				(edge (and (mailbox req) (data= count 0))
 					(recv msg)
@@ -3530,6 +3927,9 @@ const docQueueModelSource = `
 					(set last_departure "busy")
 					(become wait))))
 
+		(instance Client ClientRole (QueueRole Queue))
+		(instance Queue QueueRole)
+
 		(xyplot queue_outstanding
 			(title "Outstanding Messages By Step")
 			(steps 100)
@@ -3538,24 +3938,31 @@ const docQueueModelSource = `
 
 const docMessageModelSource = `
 	(model
-		(actor Client
+		(step loop)
+		(step relay)
+		(step idle)
+		(actor ClientRole
 			(state loop
 				(edge true
-					(send Relay '(message (type ping)))
+					(send RelayRole '(message (type ping)))
 					(become loop))))
 
-		(actor Relay
+		(actor RelayRole
 			(state relay
 				(edge true
 					(recv msg)
-					(send Server msg)
+					(send ServerRole msg)
 					(become relay))))
 
-		(actor Server
+		(actor ServerRole
 			(state idle
 				(edge true
 					(recv received)
 					(become idle))))
+
+		(instance Client ClientRole (RelayRole Relay))
+		(instance Relay RelayRole (ServerRole Server))
+		(instance Server ServerRole)
 
 		(assert (ef (data= Server received '(message (type ping)))))
 		(assert (af (data= Server received '(message (type ping)))))
@@ -3741,6 +4148,530 @@ func emitDocPlotData(name string, steps int) error {
 	return json.NewEncoder(os.Stdout).Encode(data)
 }
 
+func runModelForPlot(spec *RequirementsModel, steps int) (*Runtime, error) {
+	rt := spec.Runtime()
+	rng := rand.New(rand.NewSource(7))
+	rt.Dice = rng.Float64
+	nextActor := 0
+	rt.ChooseActorFn = func(runtime *Runtime) int {
+		index := nextActor % len(runtime.Actors)
+		nextActor++
+		return index
+	}
+	maxTicks := steps*len(rt.Actors)*4 + 64
+	for attempts := 0; rt.Step < steps && attempts < maxTicks; attempts++ {
+		if err := rt.Tick(); err != nil {
+			return nil, err
+		}
+	}
+	if rt.Step < steps {
+		return nil, fmt.Errorf("model reached only %d applied steps after %d ticks", rt.Step, maxTicks)
+	}
+	return rt, nil
+}
+
+func plotDataForModel(spec *RequirementsModel, plot XYPlot) (docPlotData, error) {
+	rt, err := runModelForPlot(spec, plot.Steps)
+	if err != nil {
+		return docPlotData{}, err
+	}
+	series, ylabel, legend, err := docPlotSeries(rt, plot.Metric)
+	if err != nil {
+		return docPlotData{}, err
+	}
+	return docPlotData{
+		Name:      plot.Name,
+		Title:     plot.Title,
+		Subtitle:  fmt.Sprintf("%d-step runtime trace.", rt.Step),
+		Steps:     rt.Step,
+		Metric:    plot.Metric,
+		YLabel:    ylabel,
+		Legend:    legend,
+		Series:    series,
+		ImageName: plot.Name + ".svg",
+	}, nil
+}
+
+func renderPlotSVG(data docPlotData) string {
+	width := 960.0
+	height := 420.0
+	marginLeft := 84.0
+	marginRight := 24.0
+	marginTop := 56.0
+	marginBottom := 54.0
+	plotW := width - marginLeft - marginRight
+	plotH := height - marginTop - marginBottom
+	xmax := 1.0
+	if data.Steps > 0 {
+		xmax = float64(data.Steps)
+	}
+	ymax := 1.0
+	for _, point := range data.Series {
+		if point.Value > ymax {
+			ymax = point.Value
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d">`, int(width), int(height), int(width), int(height))
+	fmt.Fprintf(&b, `<rect width="100%%" height="100%%" fill="#0f1115"/>`)
+	fmt.Fprintf(&b, `<rect x="20" y="20" width="%d" height="%d" rx="14" fill="#151922" stroke="#2a3140"/>`, int(width-40), int(height-40))
+	fmt.Fprintf(&b, `<text x="%.1f" y="38" fill="#e7edf5" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="22">%s</text>`, marginLeft, html.EscapeString(data.Title))
+	fmt.Fprintf(&b, `<text x="%.1f" y="58" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">%s</text>`, marginLeft, html.EscapeString(data.Subtitle))
+	fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#a9b7c8" stroke-width="1.5"/>`, marginLeft, marginTop, marginLeft, marginTop+plotH)
+	fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#a9b7c8" stroke-width="1.5"/>`, marginLeft, marginTop+plotH, marginLeft+plotW, marginTop+plotH)
+	for y := 0.0; y <= ymax; y++ {
+		py := marginTop + plotH - (y/ymax)*plotH
+		fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#2a3140" stroke-width="1"/>`, marginLeft, py, marginLeft+plotW, py)
+		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="end" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">%.0f</text>`, marginLeft-18, py+6, y)
+	}
+	for _, tick := range axisTicks(int(xmax)) {
+		px := marginLeft + (float64(tick)/xmax)*plotW
+		fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#2a3140" stroke-width="1"/>`, px, marginTop, px, marginTop+plotH)
+		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="middle" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">%d</text>`, px, marginTop+plotH+28, tick)
+	}
+	fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="middle" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">applied runtime step</text>`, marginLeft+plotW/2, height-20)
+	fmt.Fprintf(&b, `<text x="26" y="%.1f" transform="rotate(-90 26 %.1f)" text-anchor="middle" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">%s</text>`, marginTop+plotH/2, marginTop+plotH/2, html.EscapeString(data.YLabel))
+	fmt.Fprintf(&b, `<polyline fill="none" stroke="#8bc3ff" stroke-width="3" points="%s"/>`, svgPolyline(data.Series, marginLeft, marginTop, plotW, plotH, xmax, ymax))
+	for _, point := range data.Series {
+		cx := marginLeft + (float64(point.Step)/xmax)*plotW
+		cy := marginTop + plotH - (point.Value/ymax)*plotH
+		fmt.Fprintf(&b, `<circle cx="%.1f" cy="%.1f" r="3.2" fill="#8bc3ff"/>`, cx, cy)
+	}
+	fmt.Fprintf(&b, `<line x1="%.1f" y1="78" x2="%.1f" y2="78" stroke="#8bc3ff" stroke-width="3"/>`, width-260, width-224)
+	fmt.Fprintf(&b, `<text x="%.1f" y="82" fill="#e7edf5" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">%s</text>`, width-214, html.EscapeString(data.Legend))
+	b.WriteString(`</svg>`)
+	return b.String()
+}
+
+func svgPolyline(points []MetricPoint, x0, y0, w, h, xmax, ymax float64) string {
+	var coords []string
+	for _, point := range points {
+		px := x0 + (float64(point.Step)/xmax)*w
+		py := y0 + h - (point.Value/ymax)*h
+		coords = append(coords, fmt.Sprintf("%.1f,%.1f", px, py))
+	}
+	return strings.Join(coords, " ")
+}
+
+func axisTicks(count int) []int {
+	if count <= 10 {
+		out := make([]int, count+1)
+		for i := 0; i <= count; i++ {
+			out[i] = i
+		}
+		return out
+	}
+	step := count / 10
+	if step < 10 {
+		step = 10
+	}
+	var ticks []int
+	for i := 0; i <= count; i += step {
+		ticks = append(ticks, i)
+	}
+	if ticks[len(ticks)-1] != count {
+		ticks = append(ticks, count)
+	}
+	return ticks
+}
+
+func renderStateDiagramMermaid(spec *RequirementsModel) string {
+	var b strings.Builder
+	b.WriteString("flowchart TD\n")
+	for _, actor := range spec.Actors {
+		fmt.Fprintf(&b, "    subgraph %s\n", actor.Name)
+		b.WriteString("        direction TB\n")
+		for _, state := range actor.States {
+			for _, transition := range state.Transitions {
+				for _, next := range transition.NextStates {
+					fmt.Fprintf(&b, "        %s([%s]) -->|\"%s\"| %s([%s])\n",
+						diagramID(actor.Name, state.Name), state.Name, mermaidLabel(transitionLabel(transition)), diagramID(actor.Name, next), next)
+				}
+			}
+		}
+		b.WriteString("    end\n")
+	}
+	return b.String()
+}
+
+func renderSequenceDiagramMermaid(spec *RequirementsModel) string {
+	var b strings.Builder
+	b.WriteString("sequenceDiagram\n")
+	for _, actor := range spec.Actors {
+		fmt.Fprintf(&b, "    participant %s\n", actor.Name)
+	}
+	seen := map[string]bool{}
+	for _, actor := range spec.Actors {
+		for _, state := range actor.States {
+			for _, transition := range state.Transitions {
+				for _, item := range actionItems(transition.ActionSpec) {
+					if !isListHead(item, "send") || len(item.Items) != 3 {
+						continue
+					}
+					target, err := expectSymbol(item.Items[1], "send target")
+					if err != nil {
+						continue
+					}
+					key := actor.Name + "->" + target + ":" + item.Items[2].String()
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					fmt.Fprintf(&b, "    %s-->>%s: %s\n", actor.Name, target, item.Items[2].String())
+				}
+			}
+		}
+	}
+	return b.String()
+}
+
+type actorVariableUsage struct {
+	All    []string
+	Reads  map[string]bool
+	Writes map[string]bool
+}
+
+func renderClassDiagramMermaid(spec *RequirementsModel) string {
+	var b strings.Builder
+	b.WriteString("classDiagram\n")
+	for _, actor := range spec.Actors {
+		usage := analyzeActorVariableUsage(actor)
+		fmt.Fprintf(&b, "    class %s {\n", diagramID(actor.Name))
+		for _, state := range actor.States {
+			if state.Control {
+				fmt.Fprintf(&b, "        +%s : step\n", diagramID(state.Name))
+			}
+		}
+		for _, name := range usage.All {
+			fmt.Fprintf(&b, "        +%s : var\n", diagramID(name))
+		}
+		b.WriteString("    }\n")
+		if actor.Role != "" {
+			fmt.Fprintf(&b, "    <<%s>> %s\n", actor.Role, diagramID(actor.Name))
+		}
+		for _, name := range usage.All {
+			varID := diagramID(actor.Name, "var", name)
+			fmt.Fprintf(&b, "    class %s {\n", varID)
+			fmt.Fprintf(&b, "        +%s : var\n", diagramID(name))
+			b.WriteString("    }\n")
+			label := ""
+			switch {
+			case usage.Reads[name] && usage.Writes[name]:
+				label = "reads/writes"
+			case usage.Reads[name]:
+				label = "reads"
+			case usage.Writes[name]:
+				label = "writes"
+			default:
+				label = "declares"
+			}
+			fmt.Fprintf(&b, "    %s --> %s : %s\n", diagramID(actor.Name), varID, label)
+		}
+	}
+	return b.String()
+}
+
+func analyzeActorVariableUsage(actor *Actor) actorVariableUsage {
+	writes := map[string]bool{"state": true}
+	for key := range actor.Data {
+		writes[key] = true
+	}
+	for _, state := range actor.States {
+		for _, transition := range state.Transitions {
+			collectActionWrites(transition.ActionSpec, writes)
+		}
+	}
+	knownVars := copyStateSet(writes)
+	reads := map[string]bool{}
+	for _, state := range actor.States {
+		for _, transition := range state.Transitions {
+			collectGuardReads(transition.GuardSpec, knownVars, reads)
+			collectActionReadsWrites(transition.ActionSpec, knownVars, reads, writes)
+		}
+	}
+	all := sortedStateNames(writes)
+	return actorVariableUsage{
+		All:    all,
+		Reads:  reads,
+		Writes: writes,
+	}
+}
+
+func sortedStateNames(in map[string]bool) []string {
+	names := make([]string, 0, len(in))
+	for name := range in {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func collectActionWrites(form Value, writes map[string]bool) {
+	if !isList(form) || len(form.Items) == 0 {
+		return
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return
+	}
+	switch head {
+	case "do":
+		for _, item := range form.Items[1:] {
+			collectActionWrites(item, writes)
+		}
+	case "recv", "become", "set", "add", "sub", "md5", "rsa-raw", "cryptorandom", "sample-exponential":
+		if len(form.Items) < 2 || form.Items[1].Kind != KindSymbol {
+			return
+		}
+		name := form.Items[1].Text
+		if head == "become" {
+			name = "state"
+		}
+		writes[name] = true
+	case "if":
+		for _, item := range form.Items[2:] {
+			collectActionWrites(item, writes)
+		}
+	}
+}
+
+func collectGuardReads(form Value, knownVars, reads map[string]bool) {
+	if form.Kind == KindSymbol || form.Kind == KindBool || !isList(form) || len(form.Items) == 0 {
+		return
+	}
+	head, err := expectSymbol(form.Items[0], "guard operator")
+	if err != nil {
+		return
+	}
+	switch head {
+	case "and", "or":
+		items := stripOptionalDescription(form.Items, 3)
+		for _, item := range items[1:] {
+			collectGuardReads(item, knownVars, reads)
+		}
+	case "not":
+		items := stripOptionalDescription(form.Items, 2)
+		if len(items) == 2 {
+			collectGuardReads(items[1], knownVars, reads)
+		}
+	case "implies", "->":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) == 3 {
+			collectGuardReads(items[1], knownVars, reads)
+			collectGuardReads(items[2], knownVars, reads)
+		}
+	case "data=", "data>":
+		items := stripOptionalDescription(form.Items, 3)
+		if len(items) == 3 && items[1].Kind == KindSymbol {
+			reads[items[1].Text] = true
+			collectValueReads(items[2], knownVars, reads, nil)
+		}
+	}
+}
+
+func collectActionReadsWrites(form Value, knownVars, reads, writes map[string]bool) {
+	if !isList(form) || len(form.Items) == 0 {
+		return
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return
+	}
+	switch head {
+	case "do":
+		for _, item := range form.Items[1:] {
+			collectActionReadsWrites(item, knownVars, reads, writes)
+		}
+	case "send":
+		if len(form.Items) == 3 {
+			collectValueReads(form.Items[2], knownVars, reads, nil)
+		}
+	case "recv":
+		if len(form.Items) == 2 && form.Items[1].Kind == KindSymbol {
+			writes[form.Items[1].Text] = true
+		}
+	case "become":
+		writes["state"] = true
+	case "set":
+		if len(form.Items) == 3 && form.Items[1].Kind == KindSymbol {
+			writes[form.Items[1].Text] = true
+			collectValueReads(form.Items[2], knownVars, reads, nil)
+		}
+	case "def":
+		if len(form.Items) == 4 && isList(form.Items[2]) {
+			params := map[string]bool{}
+			for _, item := range form.Items[2].Items {
+				if item.Kind == KindSymbol {
+					params[item.Text] = true
+				}
+			}
+			collectValueReads(form.Items[3], knownVars, reads, params)
+		}
+	case "if":
+		if len(form.Items) >= 3 {
+			collectGuardReads(form.Items[1], knownVars, reads)
+			collectActionReadsWrites(form.Items[2], knownVars, reads, writes)
+		}
+		if len(form.Items) == 4 {
+			collectActionReadsWrites(form.Items[3], knownVars, reads, writes)
+		}
+	case "add", "sub":
+		if len(form.Items) == 3 && form.Items[1].Kind == KindSymbol {
+			key := form.Items[1].Text
+			reads[key] = true
+			writes[key] = true
+			collectValueReads(form.Items[2], knownVars, reads, nil)
+		}
+	case "md5", "cryptorandom", "sample-exponential":
+		if len(form.Items) >= 2 && form.Items[1].Kind == KindSymbol {
+			writes[form.Items[1].Text] = true
+		}
+		for _, item := range form.Items[2:] {
+			collectValueReads(item, knownVars, reads, nil)
+		}
+	case "rsa-raw":
+		if len(form.Items) == 5 && form.Items[1].Kind == KindSymbol {
+			writes[form.Items[1].Text] = true
+		}
+		for _, item := range form.Items[2:] {
+			collectValueReads(item, knownVars, reads, nil)
+		}
+	}
+}
+
+func collectValueReads(form Value, knownVars, reads, locals map[string]bool) {
+	switch form.Kind {
+	case KindSymbol:
+		if locals != nil && locals[form.Text] {
+			return
+		}
+		if knownVars[form.Text] {
+			reads[form.Text] = true
+		}
+	case KindList:
+		if len(form.Items) == 0 {
+			return
+		}
+		if isListHead(form, "quote") {
+			return
+		}
+		for _, item := range form.Items[1:] {
+			collectValueReads(item, knownVars, reads, locals)
+		}
+	}
+}
+
+func diagramID(parts ...string) string {
+	var b strings.Builder
+	for _, part := range parts {
+		for _, r := range part {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				b.WriteRune(r)
+			} else {
+				b.WriteRune('_')
+			}
+		}
+	}
+	return b.String()
+}
+
+func transitionLabel(transition Transition) string {
+	var parts []string
+	if transition.GuardSpec.String() != "true" {
+		parts = append(parts, transition.GuardSpec.String())
+	}
+	for _, item := range actionItems(transition.ActionSpec) {
+		if isListHead(item, "become") {
+			continue
+		}
+		parts = append(parts, item.String())
+	}
+	if len(parts) == 0 {
+		return "transition"
+	}
+	return strings.Join(parts, "\n")
+}
+
+func mermaidLabel(text string) string {
+	return strings.ReplaceAll(text, "\n", "<br/>")
+}
+
+func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Requirements Model\n\n```lisp\n%s\n```\n\n", spec.Lisp().String())
+	results, err := spec.CheckAssertions()
+	if err != nil {
+		return "", err
+	}
+	if len(results) > 0 {
+		b.WriteString("## Assertions\n\n")
+		for _, result := range results {
+			status := "FAIL"
+			if result.Holds {
+				status = "PASS"
+			}
+			fmt.Fprintf(&b, "- `%s` `%s`\n", status, result.Assertion.Spec.Items[1].String())
+		}
+		b.WriteString("\n")
+	}
+	if len(spec.Plots) > 0 {
+		b.WriteString("## Line Graphs\n\n")
+		for _, plot := range spec.Plots {
+			data, err := plotDataForModel(spec, plot)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "### %s\n\n```lisp\n%s\n```\n\n%s\n\n", plot.Title, plot.Lisp().String(), renderPlotSVG(data))
+		}
+	}
+	b.WriteString("## State Diagram\n\n```mermaid\n")
+	b.WriteString(renderStateDiagramMermaid(spec))
+	b.WriteString("```\n\n## Message Diagram\n\n```mermaid\n")
+	b.WriteString(renderSequenceDiagramMermaid(spec))
+	b.WriteString("```\n\n## Class Diagram\n\n```mermaid\n")
+	b.WriteString(renderClassDiagramMermaid(spec))
+	b.WriteString("```\n")
+	return b.String(), nil
+}
+
+func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
+	results, err := spec.CheckAssertions()
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><title>Requirements Model</title></head><body>")
+	b.WriteString("<h1>Requirements Model</h1>")
+	fmt.Fprintf(&b, "<pre><code>%s</code></pre>", html.EscapeString(spec.Lisp().String()))
+	if len(results) > 0 {
+		b.WriteString("<h2>Assertions</h2><ul>")
+		for _, result := range results {
+			status := "FAIL"
+			if result.Holds {
+				status = "PASS"
+			}
+			fmt.Fprintf(&b, "<li><code>%s</code> <code>%s</code></li>", status, html.EscapeString(result.Assertion.Spec.Items[1].String()))
+		}
+		b.WriteString("</ul>")
+	}
+	if len(spec.Plots) > 0 {
+		b.WriteString("<h2>Line Graphs</h2>")
+		for _, plot := range spec.Plots {
+			data, err := plotDataForModel(spec, plot)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "<h3>%s</h3><pre><code>%s</code></pre>%s", html.EscapeString(plot.Title), html.EscapeString(plot.Lisp().String()), renderPlotSVG(data))
+		}
+	}
+	fmt.Fprintf(&b, "<h2>State Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderStateDiagramMermaid(spec)))
+	fmt.Fprintf(&b, "<h2>Message Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderSequenceDiagramMermaid(spec)))
+	fmt.Fprintf(&b, "<h2>Class Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderClassDiagramMermaid(spec)))
+	b.WriteString("</body></html>")
+	return b.String(), nil
+}
+
 func docPlotDataByName(name string, steps int) (docPlotData, error) {
 	bindings, err := docPlotBindings()
 	if err != nil {
@@ -3779,6 +4710,28 @@ func docPlotDataByName(name string, steps int) (docPlotData, error) {
 func main() {
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "render-markdown", "render-html":
+			src, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "render: %v\n", err)
+				os.Exit(1)
+			}
+			spec, err := CompileModel(string(src))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "render: %v\n", err)
+				os.Exit(1)
+			}
+			var out string
+			if os.Args[1] == "render-html" {
+				out, err = renderRequirementsHTML(spec)
+			} else {
+				out, err = renderRequirementsMarkdown(spec)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "render: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Print(out)
 		case "doc-xyplots-manifest":
 			if err := emitDocPlotManifest(); err != nil {
 				fmt.Fprintf(os.Stderr, "doc-xyplots-manifest: %v\n", err)

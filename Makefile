@@ -8,6 +8,7 @@ BUILD_GENERATED_DIR := $(BUILD_DIR)/generated
 MERMAID_DIR := $(DOCS_DIR)/mermaid
 CSS_FILE := $(DOCS_DIR)/dark.css
 MERMAID_CONFIG := $(DOCS_DIR)/mermaid-config.json
+MERMAID_HEADER := $(DOCS_DIR)/mermaid-header.html
 
 DOC_SRC := $(DOCS_DIR)/ir.md
 DOC_BUILD_SRC := $(BUILD_DIR)/ir.generated.md
@@ -31,8 +32,8 @@ docs: diagrams $(HTML_OUT)
 
 diagrams: $(DOC_ASSETS)
 
-$(HTML_OUT): $(DOC_BUILD_SRC) $(DOC_ASSETS) $(CSS_FILE) | $(BUILD_DIR) $(BUILD_GENERATED_DIR)
-	$(PANDOC) --standalone --toc --css ../dark.css --from markdown --to html5 -o $@ $(DOC_BUILD_SRC)
+$(HTML_OUT): $(DOC_BUILD_SRC) $(DOC_ASSETS) $(CSS_FILE) $(MERMAID_HEADER) | $(BUILD_DIR) $(BUILD_GENERATED_DIR)
+	$(PANDOC) --standalone --toc --css ../dark.css --include-in-header $(MERMAID_HEADER) --from markdown --to html5 -o $@ $(DOC_BUILD_SRC)
 	cp $(GENERATED_DIR)/*.svg $(BUILD_GENERATED_DIR)/
 
 $(DOC_BUILD_SRC): $(DOC_SRC) $(DIAGRAM_SNIPPETS) $(PLOT_SNIPPETS) | $(BUILD_DIR)

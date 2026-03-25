@@ -4,9 +4,11 @@
 
 - a small Lisp reader
 - a compiled actor IR with explicit named control states
+- model-level actor-role declarations backed by actor behavior templates
 - runtime execution with mailbox semantics
 - CTL model checking
 - Mermaid diagrams
+- UML-like class diagrams for actor-local variable reads and writes
 - event-log-driven metric plots
 
 The intended workflow is:
@@ -22,6 +24,10 @@ The design bias is toward inspectability rather than a large specification langu
 The current repository models:
 
 - one mailbox per actor
+- actor behavior templates declared as `(actor RoleName ...)`
+- runtime actors declared as `(instance ActorName RoleName (PeerRole InstanceName)...)`
+- model-wide control steps declared once as `(step Name)`
+- no implicit actor instantiation inside `(model ...)`
 - explicit named control states
 - guarded transitions
 - one floating-point `Dice` sample in `[0,1]` per attempted step

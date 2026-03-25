@@ -8,7 +8,7 @@ This document records the current design intent for the actor IR, the declared c
 
 The central idea is:
 
-- an LLM emits actor definitions in Lisp
+- an LLM emits actor-role definitions and explicit actor declarations in Lisp
 - the Lisp compiles into a small actor/message IR
 - the same input drives:
   - runtime execution
@@ -45,9 +45,15 @@ The important constraint is inspectability. The user should be able to reject a 
 The document uses the following terms consistently:
 
 - actor
-  an independently scheduled state-owning component with one mailbox
+  a runtime instance bound to a name and one actor-role definition
+- actor role
+  a reusable behavior template declared by `(actor RoleName ...)`
+- peer role fill
+  an instance-level mapping from a referenced role to the concrete instance that plays it
+- step
+  a model-wide control-state name declared once by `(step Name)`
 - state
-  a named control location inside an actor
+  an actor-local implementation of one declared step
 - transition
   a guarded atomic step whose successor states are derived from `become`
 - mailbox
@@ -63,13 +69,14 @@ The document uses the following terms consistently:
 
 ## Actor
 
-An actor has:
+An actor role has:
 
 - one mailbox
 - one current named control state
 - local data
 - a set of named states
 
+Each runtime actor is created explicitly with `(instance ActorName RoleName (PeerRole InstanceName)...)`.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
 
 ## State
@@ -173,17 +180,19 @@ Full M/M/1/5-style example:
 
 ```lisp
 (model
-  (actor Client
+  (step loop)
+  (step wait)
+  (actor ClientRole
     (state loop
       (edge (dice-range 0.0 0.5)
         (set last "sleep")
         (become loop))
       (edge (dice-range 0.5 1.0)
-        (send Queue req)
+        (send QueueRole req)
         (set last "arrival")
         (become loop))))
 
-  (actor Queue
+  (actor QueueRole
     (state wait
       (edge (and (mailbox req) (data= count 0))
         (recv msg)
@@ -205,6 +214,9 @@ Full M/M/1/5-style example:
       (edge (and (data> count 0) (dice-range 0.5 1.0))
         (set last_departure "busy")
         (become wait))))
+
+  (instance Client ClientRole (QueueRole Queue))
+  (instance Queue QueueRole)
 
   (xyplot outstanding
     (title "Outstanding Messages By Step")
@@ -845,6 +857,7 @@ This allows:
 
 - state machine diagrams without simulation
 - sequence diagrams without simulation
+- UML-like class diagrams showing actor-local variable ownership plus read/write usage
 - the same input feeding both proof and presentation
 
 # Repository Layout
@@ -880,24 +893,31 @@ This small message-chain example is intentionally simple, but it already exercis
 
 ```lisp
 (model
-  (actor Client
+  (step loop)
+  (step relay)
+  (step idle)
+  (actor ClientRole
     (state loop
       (edge true
-        (send Relay '(message (type ping)))
+        (send RelayRole '(message (type ping)))
         (become loop))))
 
-  (actor Relay
+  (actor RelayRole
     (state relay
       (edge true
         (recv msg)
-        (send Server msg)
+        (send ServerRole msg)
         (become relay))))
 
-  (actor Server
+  (actor ServerRole
     (state idle
       (edge true
         (recv received)
         (become idle))))
+
+  (instance Client ClientRole (RelayRole Relay))
+  (instance Relay RelayRole (ServerRole Server))
+  (instance Server ServerRole)
 
   (assert (ef (data= Server received '(message (type ping)) "possibly server records the ping message")))
   (assert (af (data= Server received '(message (type ping)) "eventually server records the ping message")))
@@ -926,6 +946,65 @@ The operational intent is:
 - the client declares a message value whose `type` is `ping`
 - the relay forwards that value unchanged to the server
 - if a `recv` has no message available, that edge is simply not ready
+
+## Example Rendered Class Data
+
+From that same model, the documentation renderer can emit a Mermaid class diagram that exposes:
+
+- the runtime actor name
+- the bound actor role
+- the actor-local control states
+- the actor-local variables inferred from declared data and transition effects
+- whether each variable is read, written, or both
+
+Example:
+
+```mermaid
+classDiagram
+    class Client {
+        +loop : step
+        +state : var
+    }
+    <<ClientRole>> Client
+    class Clientvarstate {
+        +state : var
+    }
+    Client --> Clientvarstate : writes
+
+    class Relay {
+        +relay : step
+        +msg : var
+        +state : var
+    }
+    <<RelayRole>> Relay
+    class Relayvarmsg {
+        +msg : var
+    }
+    class Relayvarstate {
+        +state : var
+    }
+    Relay --> Relayvarmsg : writes
+    Relay --> Relayvarstate : writes
+
+    class Server {
+        +idle : step
+        +received : var
+        +state : var
+    }
+    <<ServerRole>> Server
+    class Servervarreceived {
+        +received : var
+    }
+    class Servervarstate {
+        +state : var
+    }
+    Server --> Servervarreceived : writes
+    Server --> Servervarstate : writes
+```
+
+This is intentionally actor-local.
+The class view does not try to infer hidden shared memory because the language does not have any.
+It instead makes actor-owned variables legible enough that a human reviewer can quickly see which names are introduced and which ones participate in local control logic.
 
 ## Walkthrough Of The Example
 

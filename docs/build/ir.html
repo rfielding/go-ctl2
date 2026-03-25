@@ -83,6 +83,52 @@
   <!--[if lt IE 9]>
     <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
   <![endif]-->
+  <script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+  function normalizeMermaidBlocks() {
+    const blocks = [];
+
+    for (const pre of document.querySelectorAll("pre.mermaid")) {
+      const code = pre.querySelector("code");
+      const source = code ? code.textContent : pre.textContent;
+      const div = document.createElement("div");
+      div.className = "mermaid";
+      div.textContent = source.trim();
+      pre.replaceWith(div);
+      blocks.push(div);
+    }
+
+    for (const code of document.querySelectorAll("pre code.language-mermaid")) {
+      const pre = code.closest("pre");
+      if (!pre) {
+        continue;
+      }
+      const div = document.createElement("div");
+      div.className = "mermaid";
+      div.textContent = code.textContent.trim();
+      pre.replaceWith(div);
+      blocks.push(div);
+    }
+
+    return blocks;
+  }
+
+  window.addEventListener("DOMContentLoaded", async () => {
+    const blocks = normalizeMermaidBlocks();
+    if (blocks.length === 0) {
+      return;
+    }
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "dark",
+      securityLevel: "loose",
+    });
+    await mermaid.run({
+      nodes: blocks,
+    });
+  });
+  </script>
 </head>
 <body>
 <header id="title-block-header">
@@ -144,6 +190,7 @@
 <li><a href="#repository-layout">Repository Layout</a></li>
 <li><a href="#example-model">Example Model</a>
 <ul>
+<li><a href="#example-rendered-class-data">Example Rendered Class Data</a></li>
 <li><a href="#walkthrough-of-the-example">Walkthrough Of The Example</a></li>
 </ul></li>
 <li><a href="#message-plot">Message Plot</a>
@@ -169,7 +216,7 @@
 <p>This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, the metric/event pipeline, and the documentation build. The target user is someone who can inspect diagrams and predicates, but does not want to learn a large formal language before getting value.</p>
 <p>The central idea is:</p>
 <ul>
-<li>an LLM emits actor definitions in Lisp</li>
+<li>an LLM emits actor-role definitions and explicit actor declarations in Lisp</li>
 <li>the Lisp compiles into a small actor/message IR</li>
 <li>the same input drives:
 <ul>
@@ -202,8 +249,11 @@
 <h1 id="terminology">Terminology</h1>
 <p>The document uses the following terms consistently:</p>
 <ul>
-<li>actor an independently scheduled state-owning component with one mailbox</li>
-<li>state a named control location inside an actor</li>
+<li>actor a runtime instance bound to a name and one actor-role definition</li>
+<li>actor role a reusable behavior template declared by <code>(actor RoleName ...)</code></li>
+<li>peer role fill an instance-level mapping from a referenced role to the concrete instance that plays it</li>
+<li>step a model-wide control-state name declared once by <code>(step Name)</code></li>
+<li>state an actor-local implementation of one declared step</li>
 <li>transition a guarded atomic step whose successor states are derived from <code>become</code></li>
 <li>mailbox the actor-local queue or rendezvous endpoint through which messages arrive</li>
 <li>runtime the current collection of actors, local data, mailboxes, and scheduler context</li>
@@ -212,14 +262,14 @@
 </ul>
 <h1 id="core-model">Core Model</h1>
 <h2 id="actor">Actor</h2>
-<p>An actor has:</p>
+<p>An actor role has:</p>
 <ul>
 <li>one mailbox</li>
 <li>one current named control state</li>
 <li>local data</li>
 <li>a set of named states</li>
 </ul>
-<p>Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.</p>
+<p>Each runtime actor is created explicitly with <code>(instance ActorName RoleName (PeerRole InstanceName)...)</code>. Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.</p>
 <h2 id="state">State</h2>
 <p>A state is a named control location. For compiled models, the control location is explicit, not inferred from guard overlap.</p>
 <p>A state contains transitions. A transition is selectable only if:</p>
@@ -292,43 +342,48 @@
 </ul>
 <p>Full M/M/1/5-style example:</p>
 <div class="sourceCode" id="cb3"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(model</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  (actor Client</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>)</span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;sleep&quot;</span>)</span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))</span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>)</span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        (send Queue req)</span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;arrival&quot;</span>)</span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
-<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>  (actor Queue</span>
-<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>    (state wait</span>
-<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">0</span>))</span>
-<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
-<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
-<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> elapsed <span class="dv">0</span>)</span>
-<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (<span class="kw">not</span> (data= <span class="kw">count</span> <span class="dv">5</span>)))</span>
-<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
-<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
-<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">5</span>))</span>
-<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        (recv dropped)</span>
-<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>        (add dropped_count <span class="dv">1</span>)</span>
-<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>))</span>
-<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>        (sub <span class="kw">count</span> <span class="dv">1</span>)</span>
-<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;service-complete&quot;</span>)</span>
-<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
-<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>))</span>
-<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;busy&quot;</span>)</span>
-<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>        (become wait))))</span>
-<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>  (xyplot outstanding</span>
-<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
-<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">100</span>)</span>
-<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received)))</span></code></pre></div>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> <span class="kw">loop</span>)</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> wait)</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  (actor ClientRole</span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>)</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;sleep&quot;</span>)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))</span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>      (edge (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>)</span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>        (send QueueRole req)</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> <span class="kw">last</span> <span class="st">&quot;arrival&quot;</span>)</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a>  (actor QueueRole</span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>    (state wait</span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">0</span>))</span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> elapsed <span class="dv">0</span>)</span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (<span class="kw">not</span> (data= <span class="kw">count</span> <span class="dv">5</span>)))</span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>        (add <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (mailbox req) (data= <span class="kw">count</span> <span class="dv">5</span>))</span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>        (recv dropped)</span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>        (add dropped_count <span class="dv">1</span>)</span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.0</span> <span class="fl">0.5</span>))</span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>        (sub <span class="kw">count</span> <span class="dv">1</span>)</span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;service-complete&quot;</span>)</span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>        (become wait))</span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a>      (edge (<span class="kw">and</span> (data&gt; <span class="kw">count</span> <span class="dv">0</span>) (dice-range <span class="fl">0.5</span> <span class="fl">1.0</span>))</span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">set</span> last_departure <span class="st">&quot;busy&quot;</span>)</span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>        (become wait))))</span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>  (instance Client ClientRole (QueueRole Queue))</span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>  (instance Queue QueueRole)</span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>  (xyplot outstanding</span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
+<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">100</span>)</span>
+<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received)))</span></code></pre></div>
 <p>Interpretation:</p>
 <ul>
 <li><code>Client</code> models arrivals <code>dice-range</code> makes the sleep/arrival split explicit</li>
@@ -796,6 +851,7 @@
 <ul>
 <li>state machine diagrams without simulation</li>
 <li>sequence diagrams without simulation</li>
+<li>UML-like class diagrams showing actor-local variable ownership plus read/write usage</li>
 <li>the same input feeding both proof and presentation</li>
 </ul>
 <h1 id="repository-layout">Repository Layout</h1>
@@ -820,41 +876,48 @@
 <li>CTL predicates over the resulting model</li>
 </ul>
 <div class="sourceCode" id="cb9"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>(model</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (actor Client</span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>        (send Relay &#39;(message (<span class="kw">type</span> ping)))</span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  (actor Relay</span>
-<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    (state relay</span>
-<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
-<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
-<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>        (send Server msg)</span>
-<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>        (become relay))))</span>
-<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>  (actor Server</span>
-<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>    (state idle</span>
-<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
-<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>        (recv received)</span>
-<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>        (become idle))))</span>
-<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ef (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;possibly server records the ping message&quot;</span>)))</span>
-<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (af (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;eventually server records the ping message&quot;</span>)))</span>
-<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ag (<span class="kw">not</span> (mailbox-has Relay &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;relay still holds ping&quot;</span>)) <span class="st">&quot;always relay mailbox is empty of ping&quot;</span>))</span>
-<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>  (xyplot message_outstanding</span>
-<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Outstanding Messages&quot;</span>)</span>
-<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
-<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received))</span>
-<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>  (xyplot message_sends</span>
-<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Sends By Step&quot;</span>)</span>
-<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
-<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>    (metric send-count))</span>
-<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>  (xyplot message_receives</span>
-<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Receives By Step&quot;</span>)</span>
-<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
-<span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a>    (metric receive-count)))</span></code></pre></div>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> <span class="kw">loop</span>)</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> relay)</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">step</span> idle)</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  (actor ClientRole</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>    (state <span class="kw">loop</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>        (send RelayRole &#39;(message (<span class="kw">type</span> ping)))</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>        (become <span class="kw">loop</span>))))</span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>  (actor RelayRole</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>    (state relay</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>        (recv msg)</span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>        (send ServerRole msg)</span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>        (become relay))))</span>
+<span id="cb9-17"><a href="#cb9-17" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-18"><a href="#cb9-18" aria-hidden="true" tabindex="-1"></a>  (actor ServerRole</span>
+<span id="cb9-19"><a href="#cb9-19" aria-hidden="true" tabindex="-1"></a>    (state idle</span>
+<span id="cb9-20"><a href="#cb9-20" aria-hidden="true" tabindex="-1"></a>      (edge true</span>
+<span id="cb9-21"><a href="#cb9-21" aria-hidden="true" tabindex="-1"></a>        (recv received)</span>
+<span id="cb9-22"><a href="#cb9-22" aria-hidden="true" tabindex="-1"></a>        (become idle))))</span>
+<span id="cb9-23"><a href="#cb9-23" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-24"><a href="#cb9-24" aria-hidden="true" tabindex="-1"></a>  (instance Client ClientRole (RelayRole Relay))</span>
+<span id="cb9-25"><a href="#cb9-25" aria-hidden="true" tabindex="-1"></a>  (instance Relay RelayRole (ServerRole Server))</span>
+<span id="cb9-26"><a href="#cb9-26" aria-hidden="true" tabindex="-1"></a>  (instance Server ServerRole)</span>
+<span id="cb9-27"><a href="#cb9-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-28"><a href="#cb9-28" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ef (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;possibly server records the ping message&quot;</span>)))</span>
+<span id="cb9-29"><a href="#cb9-29" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (af (data= Server received &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;eventually server records the ping message&quot;</span>)))</span>
+<span id="cb9-30"><a href="#cb9-30" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">assert</span> (ag (<span class="kw">not</span> (mailbox-has Relay &#39;(message (<span class="kw">type</span> ping)) <span class="st">&quot;relay still holds ping&quot;</span>)) <span class="st">&quot;always relay mailbox is empty of ping&quot;</span>))</span>
+<span id="cb9-31"><a href="#cb9-31" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-32"><a href="#cb9-32" aria-hidden="true" tabindex="-1"></a>  (xyplot message_outstanding</span>
+<span id="cb9-33"><a href="#cb9-33" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Outstanding Messages&quot;</span>)</span>
+<span id="cb9-34"><a href="#cb9-34" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-35"><a href="#cb9-35" aria-hidden="true" tabindex="-1"></a>    (metric sent-minus-received))</span>
+<span id="cb9-36"><a href="#cb9-36" aria-hidden="true" tabindex="-1"></a>  (xyplot message_sends</span>
+<span id="cb9-37"><a href="#cb9-37" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Sends By Step&quot;</span>)</span>
+<span id="cb9-38"><a href="#cb9-38" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-39"><a href="#cb9-39" aria-hidden="true" tabindex="-1"></a>    (metric send-count))</span>
+<span id="cb9-40"><a href="#cb9-40" aria-hidden="true" tabindex="-1"></a>  (xyplot message_receives</span>
+<span id="cb9-41"><a href="#cb9-41" aria-hidden="true" tabindex="-1"></a>    (title <span class="st">&quot;Message Chain Receives By Step&quot;</span>)</span>
+<span id="cb9-42"><a href="#cb9-42" aria-hidden="true" tabindex="-1"></a>    (steps <span class="dv">24</span>)</span>
+<span id="cb9-43"><a href="#cb9-43" aria-hidden="true" tabindex="-1"></a>    (metric receive-count)))</span></code></pre></div>
 <p>The first two embedded assertions are intended to hold for the example model.</p>
 <p>The third is intentionally useful as a negative example: it should fail at the initial state because there is a reachable moment where <code>Relay</code> is holding a <code>ping</code> message before it forwards it.</p>
 <p>The operational intent is:</p>
@@ -863,6 +926,57 @@
 <li>the relay forwards that value unchanged to the server</li>
 <li>if a <code>recv</code> has no message available, that edge is simply not ready</li>
 </ul>
+<h2 id="example-rendered-class-data">Example Rendered Class Data</h2>
+<p>From that same model, the documentation renderer can emit a Mermaid class diagram that exposes:</p>
+<ul>
+<li>the runtime actor name</li>
+<li>the bound actor role</li>
+<li>the actor-local control states</li>
+<li>the actor-local variables inferred from declared data and transition effects</li>
+<li>whether each variable is read, written, or both</li>
+</ul>
+<p>Example:</p>
+<pre class="mermaid"><code>classDiagram
+    class Client {
+        +loop : step
+        +state : var
+    }
+    &lt;&lt;ClientRole&gt;&gt; Client
+    class Clientvarstate {
+        +state : var
+    }
+    Client --&gt; Clientvarstate : writes
+
+    class Relay {
+        +relay : step
+        +msg : var
+        +state : var
+    }
+    &lt;&lt;RelayRole&gt;&gt; Relay
+    class Relayvarmsg {
+        +msg : var
+    }
+    class Relayvarstate {
+        +state : var
+    }
+    Relay --&gt; Relayvarmsg : writes
+    Relay --&gt; Relayvarstate : writes
+
+    class Server {
+        +idle : step
+        +received : var
+        +state : var
+    }
+    &lt;&lt;ServerRole&gt;&gt; Server
+    class Servervarreceived {
+        +received : var
+    }
+    class Servervarstate {
+        +state : var
+    }
+    Server --&gt; Servervarreceived : writes
+    Server --&gt; Servervarstate : writes</code></pre>
+<p>This is intentionally actor-local. The class view does not try to infer hidden shared memory because the language does not have any. It instead makes actor-owned variables legible enough that a human reviewer can quickly see which names are introduced and which ones participate in local control logic.</p>
 <h2 id="walkthrough-of-the-example">Walkthrough Of The Example</h2>
 <p>The example should be read as a top-level <code>model</code> containing three small control machines plus CTL assertions that are checked against the explored graph.</p>
 <p><code>Client</code></p>
@@ -894,10 +1008,10 @@
 <h1 id="message-plot">Message Plot</h1>
 <p>Because transitions, sends, and receives are now logged as structured events, the docs can render plots from an actual Runtime execution instead of from hand-written points.</p>
 <p>One such plot is declared in the model itself with:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>(xyplot queue_outstanding</span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  (steps <span class="dv">100</span>)</span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  (metric sent-minus-received))</span></code></pre></div>
+<div class="sourceCode" id="cb11"><pre class="sourceCode lisp"><code class="sourceCode commonlisp"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>(xyplot queue_outstanding</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  (title <span class="st">&quot;Outstanding Messages By Step&quot;</span>)</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  (steps <span class="dv">100</span>)</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  (metric sent-minus-received))</span></code></pre></div>
 <p>The line charts below are rendered from every <code>xyplot</code> declaration in the example models. The queue plot is a 100-step run of the M/M/1/5-style queue example above. It starts at <code>0</code>, and the <code>sent-minus-received</code> line is positive exactly when sends are ahead of receives. It does not force the run to end at <code>0</code>, because this queue model can still have accepted work in service even after mailbox traffic has balanced out.</p>
 <h3 id="message-outstanding">Message Outstanding</h3>
 <figure>

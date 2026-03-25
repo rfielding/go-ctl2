@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -467,11 +468,14 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
-			(actor A
+			(step start)
+			(step done)
+			(actor Worker
 				(state start
 					(edge true
 						(become done)))
 				(state done))
+			(instance A Worker)
 			(assert (ef (in-state A done)))
 			(assert (ag (in-state A start))))
 	`)
@@ -489,19 +493,24 @@ func TestCompileModelChecksEmbeddedAssertions(t *testing.T) {
 	if results[1].Holds {
 		t.Fatal("expected second embedded assertion to fail")
 	}
-	want := `(model (actor A (state start (edge true (become done))) (state done)) (assert (ef (in-state A done))) (assert (ag (in-state A start))))`
+	want := `(model (step start) (step done) (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker) (assert (ef (in-state A done))) (assert (ag (in-state A start))))`
 	if got := spec.Lisp().String(); got != want {
 		t.Fatalf("unexpected model serialization: %s", got)
+	}
+	if got := spec.Actors[0].Role; got != "Worker" {
+		t.Fatalf("expected actor role Worker, got %q", got)
 	}
 }
 
 func TestCompileModelCapturesXYPlot(t *testing.T) {
 	spec := MustCompileModel(`
 		(model
-			(actor A
+			(step loop)
+			(actor LoopingWorker
 				(state loop
 					(edge true
 						(become loop))))
+			(instance A LoopingWorker)
 			(xyplot outstanding
 				(title "Outstanding Messages By Step")
 				(steps 100)
@@ -523,6 +532,241 @@ func TestCompileModelCapturesXYPlot(t *testing.T) {
 	}
 	if plot.Metric != "sent-minus-received" {
 		t.Fatalf("unexpected plot metric %q", plot.Metric)
+	}
+}
+
+func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(step start)
+			(step done)
+			(step sink)
+			(actor Sender
+				(state start
+					(edge true
+						(send Receiver msg)
+						(become done)))
+				(state done))
+			(actor Receiver
+				(state sink
+					(edge true
+						(recv msg)
+						(become sink))))
+			(instance A Sender (Receiver B))
+			(instance B Receiver)
+			(xyplot sent
+				(title "Sends")
+				(steps 1)
+				(metric send-count)))
+	`)
+
+	got, err := renderRequirementsMarkdown(spec)
+	if err != nil {
+		t.Fatalf("renderRequirementsMarkdown returned error: %v", err)
+	}
+	for _, want := range []string{
+		"# Requirements Model",
+		"## Line Graphs",
+		"## State Diagram",
+		"## Message Diagram",
+		"## Class Diagram",
+		"(xyplot sent",
+		"```mermaid",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected rendered markdown to contain %q", want)
+		}
+	}
+}
+
+func TestCompileModelRejectsUnknownActorRole(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(step start)
+			(instance A MissingRole))
+	`)
+	if err == nil {
+		t.Fatal("expected unknown actor role error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown actor role") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileModelRequiresActorDeclarations(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(step start)
+			(step done)
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done)))
+	`)
+	if err == nil {
+		t.Fatal("expected missing declaration error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no actor declarations") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRenderClassDiagramMermaidShowsActorVariableReadsAndWrites(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(step start)
+			(step done)
+			(step idle)
+			(actor Worker
+				(data count 0)
+				(state start
+					(edge (data> count 0)
+						(set next count)
+						(send Sink msg)
+						(add count 1)
+						(become done)))
+				(state done))
+			(actor Sink
+				(state idle
+					(edge true
+						(recv msg)
+						(become idle))))
+			(instance A Worker (Sink B))
+			(instance B Sink))
+	`)
+
+	got := renderClassDiagramMermaid(spec)
+	for _, want := range []string{
+		"classDiagram",
+		"<<Worker>> A",
+		"+start : step",
+		"+count : var",
+		"+next : var",
+		"A --> Avarcount : reads/writes",
+		"A --> Avarnext : writes",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected class diagram to contain %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "ping") {
+		t.Fatalf("did not expect literal message symbol to appear as a variable, got:\n%s", got)
+	}
+}
+
+func TestCompileModelRequiresStepDeclarations(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker))
+	`)
+	if err == nil {
+		t.Fatal("expected missing step declaration error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no step declarations") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileModelRejectsUndeclaredStepReference(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(step start)
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker))
+	`)
+	if err == nil {
+		t.Fatal("expected undeclared step error, got nil")
+	}
+	if !strings.Contains(err.Error(), "undeclared step done") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileModelRequiresPeerRoleFill(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(step start)
+			(step done)
+			(actor Sender
+				(state start
+					(edge true
+						(send ReceiverRole ping)
+						(become done)))
+				(state done))
+			(actor ReceiverRole
+				(state done
+					(edge true
+						(become done))))
+			(instance A Sender)
+			(instance B ReceiverRole))
+	`)
+	if err == nil {
+		t.Fatal("expected missing peer role fill error, got nil")
+	}
+	if !strings.Contains(err.Error(), "must fill peer role ReceiverRole") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileModelRejectsPeerRoleFillToWrongRole(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(step start)
+			(step done)
+			(actor Sender
+				(state start
+					(edge true
+						(send ReceiverRole ping)
+						(become done)))
+				(state done))
+			(actor ReceiverRole
+				(state done
+					(edge true
+						(become done))))
+			(actor OtherRole
+				(state done
+					(edge true
+						(become done))))
+			(instance A Sender (ReceiverRole C))
+			(instance C OtherRole))
+	`)
+	if err == nil {
+		t.Fatal("expected wrong-role fill error, got nil")
+	}
+	if !strings.Contains(err.Error(), "playing role OtherRole") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileModelAllowsCircularPeerRoleFills(t *testing.T) {
+	spec := MustCompileModel(`
+		(model
+			(step loop)
+			(actor PingRole
+				(state loop
+					(edge true
+						(send PongRole ping)
+						(become loop))))
+			(actor PongRole
+				(state loop
+					(edge true
+						(send PingRole pong)
+						(become loop))))
+			(instance Ping PingRole (PongRole Pong))
+			(instance Pong PongRole (PingRole Ping)))
+	`)
+	if len(spec.Actors) != 2 {
+		t.Fatalf("expected 2 actors, got %d", len(spec.Actors))
 	}
 }
 
