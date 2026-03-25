@@ -2383,6 +2383,9 @@ func buildTransition(form Value) (Transition, error) {
 	if err != nil {
 		return Transition{}, err
 	}
+	if err := validateEdgeActionForms(form.Items[2:]); err != nil {
+		return Transition{}, err
+	}
 	actionSpec := seqForm(form.Items[2:])
 	nextStates, err := collectBecomeStates(actionSpec)
 	if err != nil {
@@ -2610,6 +2613,15 @@ func validateTransitionActionSpec(form Value) error {
 	return nil
 }
 
+func validateEdgeActionForms(items []Value) error {
+	for _, item := range items {
+		if err := validateCommunicationPlacement(item, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func actionItems(form Value) []Value {
 	if isListHead(form, "do") {
 		return form.Items[1:]
@@ -2640,6 +2652,50 @@ func validateNoNestedSendRecv(form Value) error {
 	case "if":
 		for _, item := range form.Items[2:] {
 			if err := validateNoNestedSendRecv(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateCommunicationPlacement(form Value, topLevel bool) error {
+	if !isList(form) || len(form.Items) == 0 {
+		return nil
+	}
+	if isListHead(form, "quote") {
+		return nil
+	}
+	head, err := expectSymbol(form.Items[0], "action operator")
+	if err != nil {
+		return err
+	}
+	switch head {
+	case "send", "send-any", "recv":
+		if topLevel {
+			return nil
+		}
+		return adviceError(
+			fmt.Sprintf("%s must be a top-level edge action", head),
+			"move send/recv out of `if`, `do`, or any loop-like wrapper, then use `become` to split the control flow into extra states so the blocking step is explicit at the edge level",
+		)
+	case "if":
+		for _, item := range form.Items[2:] {
+			if err := validateCommunicationPlacement(item, false); err != nil {
+				return err
+			}
+		}
+	case "do":
+		for _, item := range form.Items[1:] {
+			if err := validateCommunicationPlacement(item, false); err != nil {
+				return err
+			}
+		}
+	case "def":
+		return nil
+	default:
+		for _, item := range form.Items[1:] {
+			if err := validateCommunicationPlacement(item, false); err != nil {
 				return err
 			}
 		}
@@ -2969,6 +3025,15 @@ func compileAction(form Value) (ActionFunc, error) {
 			actor.Data[key] = evalValue(actor, value)
 			return nil
 		}, nil
+	case "print":
+		if len(form.Items) != 2 {
+			return nil, syntaxError("print", "(print value)")
+		}
+		value := form.Items[1]
+		return func(rt *Runtime, actor *Actor) error {
+			rt.Tracef("print: actor=%s value=%s", actor.Name, evalValue(actor, value).String())
+			return nil
+		}, nil
 	case "def":
 		if len(form.Items) != 4 {
 			return nil, syntaxError("def", "(def name (params...) body)")
@@ -3167,7 +3232,7 @@ func compileAction(form Value) (ActionFunc, error) {
 			return nil
 		}, nil
 	default:
-		return nil, unsupportedFormError("action form", head, []string{"`do`", "`send`", "`send-any`", "`recv`", "`become`", "`set`", "`def`", "`if`", "`add`", "`sub`", "`md5`", "`rsa-raw`", "`cryptorandom`", "`sample-exponential`"})
+		return nil, unsupportedFormError("action form", head, []string{"`do`", "`send`", "`send-any`", "`recv`", "`become`", "`set`", "`print`", "`def`", "`if`", "`add`", "`sub`", "`md5`", "`rsa-raw`", "`cryptorandom`", "`sample-exponential`"})
 	}
 }
 
@@ -4359,6 +4424,7 @@ func renderDocLanguageSections() (string, error) {
 		{Form: "`(recv $var:symbol)`", Params: "`$var` local variable name", Semantics: "Consumes one incoming message and also stores the sender in `sender`."},
 		{Form: "`(become $state:symbol)`", Params: "`$state` declared control state", Semantics: "Sets the next control location."},
 		{Form: "`(set $key:symbol $value:value)`", Params: "`$key` actor-local variable", Semantics: "Writes a resolved value into actor-local data."},
+		{Form: "`(print $value:value)`", Params: "resolved value form", Semantics: "Appends the resolved value to the runtime trace for inspection and debugging."},
 		{Form: "`(add $key:symbol $delta:int)`, `(sub $key:symbol $delta:int)`", Params: "`$key` integer variable", Semantics: "Integer arithmetic on actor-local data."},
 		{Form: "`(if $guard:guard $then:action [$else:action])`", Params: "guard plus action branches", Semantics: "Conditional execution inside one atomic transition."},
 		{Form: "`(do $action:action...)`", Params: "explicit action sequence", Semantics: "Groups nested actions when one form is required."},
@@ -4412,9 +4478,12 @@ func renderDocLanguageSections() (string, error) {
 	b.WriteString("Each transition is (edge guard action...) inside a declared (state ...).\n")
 	b.WriteString("Every edge must reach at least one (become State).\n")
 	b.WriteString("Use (recv var) to consume a message. recv also writes the sender name into local variable sender.\n")
+	b.WriteString("Use (print value) when you want a value to appear in the runtime trace.\n")
+	b.WriteString("Use (cons head tail), (car xs), and (cdr xs) for list structure instead of inventing custom list helpers.\n")
 	b.WriteString("Use quoted literals for structured messages, for example '(message (type strike) (target refinery)).\n")
 	b.WriteString("Prefer short named states such as idle, mobilizing, negotiating, retaliating, ceasefire, failed.\n")
 	b.WriteString("Put branching-time requirements in (assert ...).\n")
+	b.WriteString("If you return Lisp in chat, it may be executed locally. Return a full `(model ...)` when proposing a model, or return one CTL / raw modal mu-calculus formula to evaluate against a referenced prior model such as `A12` or against the current Model tab by default.\n")
 	b.WriteString("Use only the forms documented below.\n")
 	b.WriteString("```")
 	b.WriteString("\n\n# Language Reference\n\n")

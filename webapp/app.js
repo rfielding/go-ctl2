@@ -256,12 +256,10 @@ function renderProviderSelectors(conversation) {
 function renderMessages(messages, pending = false) {
   els.messages.innerHTML = "";
   messages.forEach((message) => els.messages.appendChild(renderMessageNode(message)));
-  let pendingNode = null;
   if (pending) {
-    pendingNode = renderPendingMessageNode(messages);
-    els.messages.appendChild(pendingNode);
+    els.messages.appendChild(renderPendingMessageNode(messages));
   }
-  scrollMessagesToBottom(pendingNode);
+  scrollMessagesToBottom(pending);
 }
 
 function renderMessageNode(message) {
@@ -298,13 +296,23 @@ function renderPendingMessageNode(messages) {
   return node;
 }
 
-function scrollMessagesToBottom(targetNode = null) {
+function scrollMessagesToBottom(preferComposer = false) {
   requestAnimationFrame(() => {
-    if (targetNode?.isConnected) {
-      targetNode.scrollIntoView({ block: "end", behavior: "auto" });
+    if (preferComposer) {
+      const sendButton = els.chatForm.querySelector('button[type="submit"]');
+      if (sendButton?.isConnected) {
+        sendButton.scrollIntoView({ block: "end", behavior: "auto" });
+        return;
+      }
+      if (els.chatForm?.isConnected) {
+        els.chatForm.scrollIntoView({ block: "end", behavior: "auto" });
+        return;
+      }
+    }
+    if (els.messages) {
+      els.messages.scrollTop = els.messages.scrollHeight;
       return;
     }
-    els.messages.scrollTop = els.messages.scrollHeight;
   });
 }
 
@@ -628,7 +636,12 @@ function buildCanvasAnimation(script) {
     }
     body.push(line);
   }
-  const runner = new Function("canvas", "ctx", "time", "frame", "width", "height", body.join("\n"));
+  const runner = new Function(
+    "env",
+    `with (env) {
+${body.join("\n")}
+}`,
+  );
   return { width, height, runner };
 }
 
@@ -641,7 +654,14 @@ function startCanvasAnimation(container, canvas, ctx, animation) {
     }
     const time = (now - started) / 1000;
     try {
-      animation.runner(canvas, ctx, time, frame, canvas.width, canvas.height);
+      animation.runner({
+        canvas,
+        ctx,
+        time,
+        frame,
+        width: canvas.width,
+        height: canvas.height,
+      });
     } catch (error) {
       container.classList.add("embedded-render-error");
       container.innerHTML = `<strong>Canvas error</strong><pre><code>${escapeHTML(error.message || "Canvas animation failed.")}</code></pre>`;

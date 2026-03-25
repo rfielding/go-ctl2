@@ -486,17 +486,25 @@ func chatWithProvider(ctx context.Context, provider, model, source string, messa
 		if err != nil {
 			return "", err
 		}
-		return maybeRepairModelReply(source, messages, content, func(retryMessages []chatTurn) (string, error) {
+		content, err = maybeRepairModelReply(source, messages, content, func(retryMessages []chatTurn) (string, error) {
 			return chatWithOpenAI(ctx, model, source, retryMessages)
 		})
+		if err != nil {
+			return "", err
+		}
+		return maybeExecuteLispReply(source, messages, content)
 	case "claude":
 		content, err := chatWithAnthropic(ctx, model, source, messages)
 		if err != nil {
 			return "", err
 		}
-		return maybeRepairModelReply(source, messages, content, func(retryMessages []chatTurn) (string, error) {
+		content, err = maybeRepairModelReply(source, messages, content, func(retryMessages []chatTurn) (string, error) {
 			return chatWithAnthropic(ctx, model, source, retryMessages)
 		})
+		if err != nil {
+			return "", err
+		}
+		return maybeExecuteLispReply(source, messages, content)
 	default:
 		return "", fmt.Errorf("unknown provider %q", provider)
 	}
@@ -589,6 +597,55 @@ func extractModelSource(content string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func maybeExecuteLispReply(defaultModelSource string, messages []chatTurn, content string) (string, error) {
+	if _, ok := extractModelSource(content); ok {
+		return content, nil
+	}
+	formulaSource, logicKind := extractLogicFormula(content)
+	if formulaSource == "" {
+		return content, nil
+	}
+	modelSource, modelLabel := resolveEvaluationModelSource(defaultModelSource, content, messages)
+	if strings.TrimSpace(modelSource) == "" {
+		return content + "\n\nEngine execution note:\n\nI found Lisp in the reply, but I do not know which model to evaluate it against. Reference a prior model message like `A12` or rely on the current Model tab.", nil
+	}
+	spec, err := CompileModel(modelSource)
+	if err != nil {
+		return content + "\n\nEngine execution note:\n\nI found Lisp in the reply, but the referenced model does not compile yet.\n\n```text\n" + err.Error() + "\n```", nil
+	}
+	explored, err := ExploreModel(spec.Runtime())
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString(content)
+	b.WriteString("\n\n## Engine Execution\n\n")
+	b.WriteString("- model source: ")
+	b.WriteString(modelLabel)
+	b.WriteString("\n")
+	switch logicKind {
+	case "mu":
+		formula, err := CompileMu(formulaSource)
+		if err != nil {
+			b.WriteString("- result: could not parse the mu-calculus formula\n\n```text\n")
+			b.WriteString(err.Error())
+			b.WriteString("\n```")
+			return b.String(), nil
+		}
+		fmt.Fprintf(&b, "- logic: raw modal mu-calculus\n- formula: `%s`\n- holds at the initial state: `%t`\n", formulaSource, explored.HoldsMuAtInitial(formula))
+	case "ctl":
+		formula, err := CompileCTL(formulaSource)
+		if err != nil {
+			b.WriteString("- result: could not parse the CTL formula\n\n```text\n")
+			b.WriteString(err.Error())
+			b.WriteString("\n```")
+			return b.String(), nil
+		}
+		fmt.Fprintf(&b, "- logic: CTL\n- formula: `%s`\n- holds at the initial state: `%t`\n", formulaSource, explored.HoldsAtInitial(formula))
+	}
+	return b.String(), nil
 }
 
 func explainChatError(err error) error {
@@ -1418,10 +1475,15 @@ func chatSystemPrompt(source string) string {
 	b.WriteString("You are helping the user reason about a go-ctl2 Lisp requirements model.\n")
 	b.WriteString("Answer in Markdown.\n")
 	b.WriteString("Answer naturally. The app renders normal Markdown text, Markdown images and gifs like ![alt](url), Mermaid fenced blocks, SVG fenced blocks, HTML fenced blocks, fenced `canvas` blocks for JavaScript canvas animations, and LaTeX math using $...$ or $$...$$.\n")
+	b.WriteString("The UI is dark mode. For SVG, HTML, Mermaid, and canvas output, make the result readable on a dark background: use explicit high-contrast colors, and for canvas especially, paint a visible background instead of assuming a white page.\n")
+	b.WriteString("For canvas animations, respect the provided `width` and `height`. Keep the drawing on-screen, choose coordinates from those dimensions, and avoid placing shapes or labels outside the visible canvas.\n")
 	b.WriteString("Be concrete and refer to the current model, not generic theory.\n")
 	b.WriteString("If asked to restate or translate the model, preserve the actual control states, mailboxes, and assertions.\n")
 	b.WriteString("When critiquing a model, explicitly check whether it is deterministic or actually branches, whether EF/AF or similar properties collapse because there is only one execution, whether queue capacities matter, whether consequences are represented as checkable state/data instead of just labels, and whether the actors really model organizations versus abstract systems.\n")
 	b.WriteString("If the model is too weak to support the requested conclusion, say exactly what is missing and propose concrete actor/data/branching/assertion changes.\n")
+	b.WriteString("Never place `send`, `send-any`, or `recv` inside `if`, `do`, or any loop-like wrapper. Keep communication as top-level edge actions, and use `become` to split control flow into extra states when you need to stage work around a potentially blocking step.\n")
+	b.WriteString("The runtime supports `(print value)` for trace output and the list operators `(cons head tail)`, `(car xs)`, and `(cdr xs)`.\n")
+	b.WriteString("If you return Lisp, keep it executable. Return a full `(model ...)` when proposing a model. If you return one CTL or raw modal mu-calculus formula, the app may evaluate it locally against a referenced prior model such as `A12` or against the current Model tab by default.\n")
 	b.WriteString("The detailed reference docs are available in the app at /docs and /docs/ir.generated.md. Point the user there when they need the full language reference or semantics.\n")
 	b.WriteString("You are given both the raw Lisp and the current rendition produced by the compiler. Prefer the rendition when discussing what the tool currently understands, but fall back to the raw Lisp when proposing edits.\n\n")
 	b.WriteString("Current Lisp model:\n\n")

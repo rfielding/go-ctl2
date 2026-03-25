@@ -683,7 +683,7 @@ func TestProviderCatalogIncludesBuiltin(t *testing.T) {
 
 func TestChatSystemPromptMentionsDocs(t *testing.T) {
 	prompt := chatSystemPrompt("(model)")
-	for _, want := range []string{"/docs", "/docs/ir.generated.md", "fenced `canvas` blocks", "deterministic or actually branches", "queue capacities matter"} {
+	for _, want := range []string{"/docs", "/docs/ir.generated.md", "fenced `canvas` blocks", "deterministic or actually branches", "queue capacities matter", "use `become` to split control flow", "(print value)", "(cons head tail)", "against a referenced prior model such as `A12`", "The UI is dark mode", "paint a visible background", "respect the provided `width` and `height`", "avoid placing shapes or labels outside the visible canvas"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected prompt to mention %q, got %s", want, prompt)
 		}
@@ -966,6 +966,46 @@ func TestMaybeRepairModelReplyRetriesUntilModelCompiles(t *testing.T) {
 	}
 }
 
+func TestMaybeExecuteLispReplyEvaluatesAgainstDefaultModel(t *testing.T) {
+	model := `
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(become done)))
+				(state done))
+			(instance A Worker (queue 1)))
+	`
+	got, err := maybeExecuteLispReply(model, nil, "```lisp\n(ef (in-state A done))\n```")
+	if err != nil {
+		t.Fatalf("maybeExecuteLispReply returned error: %v", err)
+	}
+	for _, want := range []string{"## Engine Execution", "model source: the current Model tab", "- logic: CTL", "- formula: `(ef (in-state A done))`", "- holds at the initial state: `true`"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected output to contain %q, got %s", want, got)
+		}
+	}
+}
+
+func TestMaybeExecuteLispReplyEvaluatesAgainstReferencedModel(t *testing.T) {
+	messages := []chatTurn{
+		{
+			Role:    "assistant",
+			Turn:    12,
+			Content: "```lisp\n(model (actor Worker (state start (edge true (become done))) (state done)) (instance A Worker (queue 1)))\n```",
+		},
+	}
+	got, err := maybeExecuteLispReply("", messages, "Evaluate this against A12:\n```lisp\n(ef (in-state A done))\n```")
+	if err != nil {
+		t.Fatalf("maybeExecuteLispReply returned error: %v", err)
+	}
+	for _, want := range []string{"## Engine Execution", "model source: A12", "- logic: CTL", "- holds at the initial state: `true`"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected output to contain %q, got %s", want, got)
+		}
+	}
+}
+
 func TestFallbackLLMProviderPrefersOpenAIThenClaude(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("ANTHROPIC_API_KEY", "")
@@ -1068,6 +1108,32 @@ func TestCompileModelAcceptsDoubleSemicolonComments(t *testing.T) {
 	}
 	if len(spec.Actors) != 1 {
 		t.Fatalf("expected 1 actor, got %d", len(spec.Actors))
+	}
+}
+
+func TestCompileModelRejectsNestedSendInsideIf(t *testing.T) {
+	_, err := CompileModel(`
+		(model
+			(actor Worker
+				(state start
+					(edge true
+						(if true
+							(send Peer ping)
+							(become done))
+						(become done)))
+				(state done))
+			(actor PeerRole
+				(state idle))
+			(instance A Worker (queue 1) (PeerRole B))
+			(instance B PeerRole (queue 1)))
+	`)
+	if err == nil {
+		t.Fatal("expected nested send error, got nil")
+	}
+	for _, want := range []string{"top-level edge action", "use `become` to split the control flow"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %v", want, err)
+		}
 	}
 }
 
@@ -1660,8 +1726,8 @@ func TestCompileActorNormalizesSendAfterLeadingAction(t *testing.T) {
 	}
 }
 
-func TestCompileActorAllowsNestedRecvAfterGuard(t *testing.T) {
-	actor, err := CompileActor(`
+func TestCompileActorRejectsNestedRecvAfterGuard(t *testing.T) {
+	_, err := CompileActor(`
 		(actor A
 			(state start
 				(edge true
@@ -1670,11 +1736,11 @@ func TestCompileActorAllowsNestedRecvAfterGuard(t *testing.T) {
 						(become done))))
 			(state done))
 	`)
-	if err != nil {
-		t.Fatalf("CompileActor returned error: %v", err)
+	if err == nil {
+		t.Fatal("expected nested recv error, got nil")
 	}
-	if actor == nil {
-		t.Fatal("expected actor, got nil")
+	if !strings.Contains(err.Error(), "top-level edge action") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1971,6 +2037,35 @@ func TestPureLispBuiltinsAndDef(t *testing.T) {
 	}
 	if got := runtime.Actors[0].Data["ys"].String(); got != "(z a b c)" {
 		t.Fatalf("expected ys=(z a b c), got %s", got)
+	}
+}
+
+func TestPrintBuiltinWritesRuntimeTrace(t *testing.T) {
+	runtime := NewRuntime(
+		MustCompileActor(`
+			(actor A
+				(state start
+					(edge true
+						(set xs '(b c))
+						(print (cons a xs))
+						(become done)))
+				(state done))
+		`),
+	)
+
+	applied, err := runtime.StepActor(runtime.Actors[0])
+	if err != nil {
+		t.Fatalf("step returned error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected print transition to apply")
+	}
+	if len(runtime.Trace) == 0 {
+		t.Fatal("expected print to append to runtime trace")
+	}
+	last := runtime.Trace[len(runtime.Trace)-1]
+	if !strings.Contains(last, "print: actor=A value=(a b c)") {
+		t.Fatalf("expected printed value in trace, got %s", last)
 	}
 }
 

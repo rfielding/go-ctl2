@@ -63,9 +63,12 @@ State is actor-local. The only cross-actor effect is messaging.
 Each transition is (edge guard action...) inside a declared (state ...).
 Every edge must reach at least one (become State).
 Use (recv var) to consume a message. recv also writes the sender name into local variable sender.
+Use (print value) when you want a value to appear in the runtime trace.
+Use (cons head tail), (car xs), and (cdr xs) for list structure instead of inventing custom list helpers.
 Use quoted literals for structured messages, for example '(message (type strike) (target refinery)).
 Prefer short named states such as idle, mobilizing, negotiating, retaliating, ceasefire, failed.
 Put branching-time requirements in (assert ...).
+If you return Lisp in chat, it may be executed locally. Return a full `(model ...)` when proposing a model, or return one CTL / raw modal mu-calculus formula to evaluate against a referenced prior model such as `A12` or against the current Model tab by default.
 Use only the forms documented below.
 ```
 
@@ -109,6 +112,7 @@ Documentation metavariables start with `$` and include a type tag, for example `
 | `(recv $var:symbol)` | `$var` local variable name | Consumes one incoming message and also stores the sender in `sender`. |
 | `(become $state:symbol)` | `$state` declared control state | Sets the next control location. |
 | `(set $key:symbol $value:value)` | `$key` actor-local variable | Writes a resolved value into actor-local data. |
+| `(print $value:value)` | resolved value form | Appends the resolved value to the runtime trace for inspection and debugging. |
 | `(add $key:symbol $delta:int)`, `(sub $key:symbol $delta:int)` | `$key` integer variable | Integer arithmetic on actor-local data. |
 | `(if $guard:guard $then:action [$else:action])` | guard plus action branches | Conditional execution inside one atomic transition. |
 | `(do $action:action...)` | explicit action sequence | Groups nested actions when one form is required. |
