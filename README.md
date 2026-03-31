@@ -10,7 +10,9 @@ Workflow:
 
 1. the LLM writes a Lisp model
 2. the compiler turns it into an explicit transition system
-3. you inspect the states, diagrams, and CTL claims
+3. you inspect the states, channel contents, diagrams, and CTL claims
 4. you reject or refine the model until the requirements are precise enough to check
+
+CTL ranges over visible behavior only. You can assert over named control states and mailbox contents, for example `(in-state Server done)` or `(mailbox-has Client '(event (type ping) (from Relay) (to Client) (tstamp 7) (values (kind probe))))`. Internal actor variables still drive guards and actions, but they are not part of the CTL proposition language. When the public protocol matters, write it into structured messages.
 
 Start with [docs/build/ir.generated.md](docs/build/ir.generated.md).

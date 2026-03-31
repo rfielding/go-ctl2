@@ -83,6 +83,7 @@ An actor role has:
 Each runtime actor is created explicitly with `(instance ActorName RoleName (queue N) (PeerRole InstanceName...)...)`.
 `N` is the mailbox length for that concrete actor.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
+The current control location is explicit in actor-local data and changes through `become`; it is not inferred from overlapping state predicates.
 
 ## State
 
@@ -255,19 +256,9 @@ This is not a continuous-time simulator. It is a small executable control model 
 - blocked arrivals counted as losses
 - random service completions
 
-That is usually enough for inspectable CTL properties such as:
+That is usually enough for inspectable CTL properties over visible behavior, such as whether the queue actor reaches particular control states or whether particular request messages are still buffered in the mailbox.
 
-- eventually the queue becomes non-empty
-- the queue can reach saturation
-- some executions accumulate drops
-- if arrivals stop, the system can drain
-
-Representative predicates for this queue model:
-
-- `(ef (data> Queue count 0) "eventually the queue can become non-empty")`
-- `(ef (data= Queue count 5) "the finite-capacity queue can saturate")`
-- `(ef (data> Queue dropped_count 0) "some execution can observe blocked arrivals")`
-- `(ag (implies (data= Queue count 0) (not (data> Queue dropped_count 0))) "drops only occur after the system has filled at some earlier point")`
+The internal counters in this queue model still matter operationally because they drive guards and actions, but they are not part of the CTL proposition language.
 
 The Mermaid artifacts below are a useful companion view for this example:
 
@@ -417,28 +408,28 @@ The key point is branching: one state can have several possible successors becau
 
 `E` quantifies over some branch. `A` quantifies over all branches.
 
-- `EX p`: there exists an immediate successor `t` with `s → t` and `t ⊨ p`
-- `AX p`: for every immediate successor `t`, if `s → t` then `t ⊨ p`
-- `EF p`: there exists a path on which `p` eventually holds
-- `AF p`: on every path, `p` eventually holds
-- `EG p`: there exists a path on which `p` holds forever
-- `AG p`: on every path, `p` holds forever
+- `EX p`: next possibly `p`
+- `AX p`: next always `p`
+- `EF p`: possibly `p`
+- `AF p`: eventually `p`
+- `EG p`: can keep `p` forever
+- `AG p`: always `p`
 - `E[p U q]`: there exists a path where `p` holds until `q` holds
 - `A[p U q]`: on every path, `p` holds until `q` holds
 
 That is the practical reading users need:
 
-- `EF`: possible reachability
-- `AF`: guaranteed reachability
-- `EG`: possible persistence
-- `AG`: universal invariant
+- `EF`: possibly
+- `AF`: eventually
+- `EG`: can keep forever
+- `AG`: always
 
 Examples:
 
 - `(ef (in-state Negotiator ceasefire))`
 - `(af (in-state CivilianSupply stabilized))`
 - `(ag (not (mailbox-has EarlyWarning false-alarm)))`
-- `(eg (data= Frontline status mobilizing))`
+- `(eg (in-state Frontline mobilizing))`
 
 ## CTL And μ-Calculus
 
@@ -647,8 +638,8 @@ This repository is still a skeleton. Important things are intentionally incomple
 
 - the example plots are generated from a fixed example, not yet from arbitrary models
 - the Mermaid generation is still mostly document-oriented rather than language-integrated
-- CTL formulas are present, but there is not yet a full proposition language over every part of runtime state
-- the documentation explains the intended semantics more completely than the current implementation exposes through tooling
+- CTL and raw modal mu-calculus currently range over visible behavior: control state and mailbox contents, not arbitrary internal actor variables
+- some surrounding tooling is still catching up with the implementation, so examples and helper text may lag until they are refreshed
 
 That is acceptable for this stage. The repository is already good enough to show the core thesis:
 

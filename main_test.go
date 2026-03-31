@@ -433,11 +433,11 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		want    bool
 	}{
 		{name: "ex mailbox b ping", formula: "(ex (mailbox-has B ping))", want: true},
-		{name: "ef c received ping", formula: "(ef (data= C received ping))", want: true},
-		{name: "af c received ping", formula: "(af (data= C received ping))", want: true},
+		{name: "ef mailbox c ping", formula: "(ef (mailbox-has C ping))", want: true},
+		{name: "af mailbox c ping", formula: "(af (mailbox-has C ping))", want: true},
 		{name: "ag not mailbox b ping", formula: "(ag (not (mailbox-has B ping)))", want: false},
-		{name: "eu not received until received", formula: "(eu (not (data= C received ping)) (data= C received ping))", want: true},
-		{name: "au not received until received", formula: "(au (not (data= C received ping)) (data= C received ping))", want: true},
+		{name: "eu not sink until sink", formula: "(eu (not (in-state C sink)) (in-state C sink))", want: true},
+		{name: "au not sink until sink", formula: "(au (not (in-state C sink)) (in-state C sink))", want: true},
 		{name: "ax a done", formula: "(ax (in-state A done))", want: true},
 		{name: "ef a done", formula: "(ef (in-state A done))", want: true},
 		{name: "eg a done", formula: "(eg (in-state A done))", want: false},
@@ -479,6 +479,38 @@ func TestCTLOnMessageChainABC(t *testing.T) {
 		if !seen {
 			t.Fatalf("expected explored edge metadata for %s", key)
 		}
+	}
+}
+
+func TestExploreModelProjectsOnlyVisibleBehavior(t *testing.T) {
+	spec, err := CompileModel(`
+		(model
+			(actor Queue
+				(data x 7)
+				(data cap 10)
+				(state run
+					(edge (not (data= x 10))
+						(add x 1)
+						(become run))
+					(edge (data> x 0)
+						(sub x 1)
+						(become run))))
+			(instance Q Queue (queue 10)))
+	`)
+	if err != nil {
+		t.Fatalf("CompileModel returned error: %v", err)
+	}
+	model, err := ExploreModel(spec.Runtime())
+	if err != nil {
+		t.Fatalf("ExploreModel returned error: %v", err)
+	}
+
+	if len(model.States) != 1 {
+		t.Fatalf("expected one visible state after projecting away internal variables, got %d", len(model.States))
+	}
+	succs := model.Successors[model.InitialID]
+	if len(succs) != 1 || succs[0] != model.InitialID {
+		t.Fatalf("expected one self-loop successor at the visible initial state, got %#v", succs)
 	}
 }
 
@@ -587,6 +619,41 @@ func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected rendered markdown to contain %q", want)
+		}
+	}
+}
+
+func TestDocBakeryModelAssertionsPassAsVisibleBehaviorCatalog(t *testing.T) {
+	spec, err := docBakeryModel()
+	if err != nil {
+		t.Fatalf("docBakeryModel returned error: %v", err)
+	}
+	if len(spec.Assertions) < 20 {
+		t.Fatalf("expected many bakery assertions, got %d", len(spec.Assertions))
+	}
+
+	results, err := spec.CheckAssertions()
+	if err != nil {
+		t.Fatalf("CheckAssertions returned error: %v", err)
+	}
+
+	for _, result := range results {
+		if !result.Holds {
+			t.Fatalf("expected bakery assertion to hold: %s", result.Assertion.Spec.Items[1].String())
+		}
+	}
+
+	rendered, err := renderRequirementsMarkdown(spec)
+	if err != nil {
+		t.Fatalf("renderRequirementsMarkdown returned error: %v", err)
+	}
+	for _, want := range []string{
+		"(assert (ef (in-state CustomerA bought_rye)))",
+		"`PASS` `(ef (in-state CustomerA bought_rye))`",
+		"`PASS` `(not (ef (in-state CustomerC bought_rye)))`",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered bakery markdown to contain %q", want)
 		}
 	}
 }
@@ -1261,7 +1328,7 @@ func TestRenderDocExampleSectionsReturns(t *testing.T) {
 		"#### CTL Outcomes",
 		"```mermaid",
 		"xychart-beta",
-		"## Bakery Role-Reuse Example",
+		"## Bakery Visible-Behavior Example",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected generated example sections to contain %q", want)
@@ -1573,6 +1640,26 @@ func TestCompileCTLRejectsUnknownOperator(t *testing.T) {
 	_, err := CompileCTL("(eventually (in-state A done))")
 	if err == nil {
 		t.Fatal("expected compile error, got nil")
+	}
+}
+
+func TestCompileCTLRejectsInternalDataPredicates(t *testing.T) {
+	_, err := CompileCTL("(ef (data= Q x 8))")
+	if err == nil {
+		t.Fatal("expected CompileCTL to reject internal data predicates")
+	}
+	if !strings.Contains(err.Error(), "visible behavior") {
+		t.Fatalf("expected visible behavior guidance, got %v", err)
+	}
+}
+
+func TestCompileMuRejectsInternalDataPredicates(t *testing.T) {
+	_, err := CompileMu("(mu X (or (data= Q x 8) (diamond X)))")
+	if err == nil {
+		t.Fatal("expected CompileMu to reject internal data predicates")
+	}
+	if !strings.Contains(err.Error(), "visible behavior") {
+		t.Fatalf("expected visible behavior guidance, got %v", err)
 	}
 }
 
@@ -2185,26 +2272,26 @@ func TestPredicateDescriptionOnCTL(t *testing.T) {
 	}
 }
 
-func TestCTLDataEqualsMatchesQuotedListLiteral(t *testing.T) {
+func TestCTLMailboxHasMatchesQuotedListLiteral(t *testing.T) {
 	runtime := NewRuntime(
 		MustCompileActor(`
 			(actor A
 				(state done))
 		`),
 	)
-	runtime.Actors[0].Data["payload"] = MustRead(`(message (type ping))`)
+	runtime.Enqueue("A", MustRead(`(message (type ping))`), "Sender")
 
 	model, err := ExploreModel(runtime)
 	if err != nil {
 		t.Fatalf("ExploreModel returned error: %v", err)
 	}
 
-	formula, err := CompileCTL(`(ef (data= A payload '(message (type ping))))`)
+	formula, err := CompileCTL(`(ef (mailbox-has A '(message (type ping))))`)
 	if err != nil {
 		t.Fatalf("CompileCTL returned error: %v", err)
 	}
 	if !model.HoldsAtInitial(formula) {
-		t.Fatal("expected quoted list literal predicate to hold")
+		t.Fatal("expected quoted mailbox predicate to hold")
 	}
 }
 
@@ -2567,5 +2654,33 @@ func TestRuntimeDeadlockWhenNoStepIsReady(t *testing.T) {
 
 	if runtime.HasReadyStep() {
 		t.Fatal("expected deadlock when no transitions are ready")
+	}
+}
+
+func TestCurrentStateRequiresExplicitStateValue(t *testing.T) {
+	runtime := NewRuntime(
+		&Actor{
+			Name: "A",
+			States: []State{
+				{
+					Name:  "idle",
+					Guard: func(*Runtime, *Actor) bool { return false },
+				},
+				{
+					Name:  "other",
+					Guard: func(*Runtime, *Actor) bool { return true },
+				},
+			},
+		},
+	)
+
+	if got := runtime.CurrentState(runtime.Actors[0]); got == nil || got.Name != "idle" {
+		t.Fatalf("expected initial explicit state to be idle, got %#v", got)
+	}
+
+	delete(runtime.Actors[0].Data, "state")
+
+	if got := runtime.CurrentState(runtime.Actors[0]); got != nil {
+		t.Fatalf("expected no current state without explicit actor.Data[state], got %s", got.Name)
 	}
 }

@@ -565,7 +565,7 @@ func repairPromptForModel(source, compileErr string, attempt int) string {
 	b.WriteString("- preserve the user's intent\n")
 	b.WriteString("- return only one corrected Lisp model in a ```lisp fenced block\n")
 	b.WriteString("- do not explain the error without also returning the corrected model\n")
-	b.WriteString("- use `in-state`, `data=`, and `mailbox-has` for CTL atoms when needed\n\n")
+	b.WriteString("- use `in-state` and `mailbox-has` for CTL atoms when needed\n\n")
 	b.WriteString("Current model context:\n```lisp\n")
 	b.WriteString(source)
 	b.WriteString("\n```")

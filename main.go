@@ -262,6 +262,9 @@ func NewRuntime(actors ...*Actor) *Runtime {
 		if actor.Data == nil {
 			actor.Data = map[string]Value{}
 		}
+		if _, ok := actor.Data["state"]; !ok && len(actor.States) > 0 {
+			actor.Data["state"] = Symbol(actor.States[0].Name)
+		}
 	}
 	return rt
 }
@@ -408,15 +411,6 @@ func (rt *Runtime) validateTransitionNext(transition Transition, actor *Actor) e
 func (rt *Runtime) CurrentState(actor *Actor) *State {
 	if stateName, ok := actorStateName(actor); ok {
 		if state := actorStateByName(actor, stateName); state != nil {
-			return state
-		}
-	}
-	for i := range actor.States {
-		state := &actor.States[i]
-		if state.Control {
-			continue
-		}
-		if guardHolds(state.Guard, rt, actor) {
 			return state
 		}
 	}
@@ -640,14 +634,9 @@ func (rt *Runtime) StateKey() string {
 		b.WriteString("actor:")
 		b.WriteString(actor.Name)
 		b.WriteString("{")
-		keys := sortedValueKeys(actor.Data)
-		for i, key := range keys {
-			if i > 0 {
-				b.WriteString(",")
-			}
-			b.WriteString(key)
-			b.WriteString("=")
-			b.WriteString(actor.Data[key].String())
+		if stateName, ok := actorStateName(actor); ok {
+			b.WriteString("state=")
+			b.WriteString(stateName)
 		}
 		b.WriteString("}")
 		b.WriteString("|mailbox:")
@@ -909,6 +898,20 @@ func normalizePredicateLiteral(v Value) Value {
 	return cloneValue(v)
 }
 
+func visibleCTLOnlyError(op string) error {
+	return adviceError(
+		fmt.Sprintf("%s is not available in CTL over visible behavior", op),
+		"use `in-state` and `mailbox-has` atoms, and model any checkable external outcome as a control-state or message change",
+	)
+}
+
+func visibleMuOnlyError(op string) error {
+	return adviceError(
+		fmt.Sprintf("%s is not available in raw modal mu-calculus over visible behavior", op),
+		"use `in-state` and `mailbox-has` atoms, and model any checkable external outcome as a control-state or message change",
+	)
+}
+
 func buildCTL(form Value) (CTLFormula, error) {
 	if !isList(form) || len(form.Items) == 0 {
 		return CTLFormula{}, adviceError("CTL formulas must be non-empty lists", "wrap the operator and its operands in parentheses, for example `(ef (in-state Server done))`")
@@ -1074,19 +1077,15 @@ func buildCTL(form Value) (CTLFormula, error) {
 		}
 		return Atom(ActorInState(actor, state)), nil
 	case "data=":
-		items := stripOptionalDescription(form.Items, 4)
-		if len(items) != 4 {
-			return CTLFormula{}, syntaxError("data=", "(data= ActorName key value)")
-		}
-		actor, err := expectSymbol(items[1], "actor name")
-		if err != nil {
-			return CTLFormula{}, err
-		}
-		key, err := expectSymbol(items[2], "data key")
-		if err != nil {
-			return CTLFormula{}, err
-		}
-		return Atom(ActorDataEquals(actor, key, normalizePredicateLiteral(items[3]))), nil
+		return CTLFormula{}, visibleCTLOnlyError("data=")
+	case "data>":
+		return CTLFormula{}, visibleCTLOnlyError("data>")
+	case "data>=":
+		return CTLFormula{}, visibleCTLOnlyError("data>=")
+	case "data<":
+		return CTLFormula{}, visibleCTLOnlyError("data<")
+	case "data<=":
+		return CTLFormula{}, visibleCTLOnlyError("data<=")
 	case "mailbox-has":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
@@ -1098,7 +1097,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 		}
 		return Atom(MailboxHas(actor, normalizePredicateLiteral(items[2]))), nil
 	default:
-		return CTLFormula{}, unsupportedFormError("CTL operator", head, []string{"`not`", "`and`", "`or`", "`implies`", "`ex`", "`ax`", "`ef`", "`af`", "`eg`", "`ag`", "`eu`", "`au`", "`in-state`", "`data=`", "`mailbox-has`"})
+		return CTLFormula{}, unsupportedFormError("CTL operator", head, []string{"`not`", "`and`", "`or`", "`implies`", "`ex`", "`ax`", "`ef`", "`af`", "`eg`", "`ag`", "`eu`", "`au`", "`in-state`", "`mailbox-has`"})
 	}
 }
 
@@ -1223,19 +1222,15 @@ func buildMu(form Value) (MuFormula, error) {
 		}
 		return MuAtomFormula(ActorInState(actor, state)), nil
 	case "data=":
-		items := stripOptionalDescription(form.Items, 4)
-		if len(items) != 4 {
-			return MuFormula{}, syntaxError("data=", "(data= ActorName key value)")
-		}
-		actor, err := expectSymbol(items[1], "actor name")
-		if err != nil {
-			return MuFormula{}, err
-		}
-		key, err := expectSymbol(items[2], "data key")
-		if err != nil {
-			return MuFormula{}, err
-		}
-		return MuAtomFormula(ActorDataEquals(actor, key, normalizePredicateLiteral(items[3]))), nil
+		return MuFormula{}, visibleMuOnlyError("data=")
+	case "data>":
+		return MuFormula{}, visibleMuOnlyError("data>")
+	case "data>=":
+		return MuFormula{}, visibleMuOnlyError("data>=")
+	case "data<":
+		return MuFormula{}, visibleMuOnlyError("data<")
+	case "data<=":
+		return MuFormula{}, visibleMuOnlyError("data<=")
 	case "mailbox-has":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
@@ -1247,7 +1242,7 @@ func buildMu(form Value) (MuFormula, error) {
 		}
 		return MuAtomFormula(MailboxHas(actor, normalizePredicateLiteral(items[2]))), nil
 	default:
-		return MuFormula{}, unsupportedFormError("mu operator", head, []string{"`true`", "`false`", "`not`", "`and`", "`or`", "`diamond`", "`box`", "`mu`", "`nu`", "`in-state`", "`data=`", "`mailbox-has`"})
+		return MuFormula{}, unsupportedFormError("mu operator", head, []string{"`true`", "`false`", "`not`", "`and`", "`or`", "`diamond`", "`box`", "`mu`", "`nu`", "`in-state`", "`mailbox-has`"})
 	}
 }
 
@@ -1431,6 +1426,51 @@ func ActorDataEquals(actorName, key string, want Value) StatePredicate {
 		}
 		return false
 	}
+}
+
+func resolveActorNumericPredicateValue(actor *Actor, raw Value) (int, error) {
+	if raw.Kind == KindSymbol {
+		if value, ok := actor.Data[raw.Text]; ok {
+			return valueInt(value)
+		}
+	}
+	return valueInt(raw)
+}
+
+func ActorDataCompareInt(actorName, key string, want Value, cmp func(int, int) bool) StatePredicate {
+	return func(rt *Runtime) bool {
+		for _, actor := range rt.Actors {
+			if actor.Name != actorName {
+				continue
+			}
+			got, err := valueInt(actor.Data[key])
+			if err != nil {
+				return false
+			}
+			right, err := resolveActorNumericPredicateValue(actor, want)
+			if err != nil {
+				return false
+			}
+			return cmp(got, right)
+		}
+		return false
+	}
+}
+
+func ActorDataGreater(actorName, key string, want Value) StatePredicate {
+	return ActorDataCompareInt(actorName, key, want, func(got, right int) bool { return got > right })
+}
+
+func ActorDataGreaterEqual(actorName, key string, want Value) StatePredicate {
+	return ActorDataCompareInt(actorName, key, want, func(got, right int) bool { return got >= right })
+}
+
+func ActorDataLess(actorName, key string, want Value) StatePredicate {
+	return ActorDataCompareInt(actorName, key, want, func(got, right int) bool { return got < right })
+}
+
+func ActorDataLessEqual(actorName, key string, want Value) StatePredicate {
+	return ActorDataCompareInt(actorName, key, want, func(got, right int) bool { return got <= right })
 }
 
 func MailboxHas(actorName string, want Value) StatePredicate {
@@ -1853,7 +1893,7 @@ func (rt *Runtime) evalGuardSpec(form Value, actor *Actor, offered *Value) (bool
 		if err != nil {
 			return false, err
 		}
-		return actor.Data[key].Equal(items[2]), nil
+		return actor.Data[key].Equal(normalizePredicateLiteral(items[2])), nil
 	case "data>":
 		items := stripOptionalDescription(form.Items, 3)
 		if len(items) != 3 {
@@ -2913,7 +2953,7 @@ func compileGuard(form Value) (GuardFunc, error) {
 		if err != nil {
 			return nil, err
 		}
-		want := items[2]
+		want := normalizePredicateLiteral(items[2])
 		return func(_ *Runtime, actor *Actor) bool {
 			return actor.Data[key].Equal(want)
 		}, nil
@@ -4231,8 +4271,8 @@ const docMessageModelSource = `
 		(instance Relay RelayRole (queue 1) (ServerRole Server))
 		(instance Server ServerRole (queue 1))
 
-		(assert (ef (data= Server received '(message (type ping)))))
-		(assert (af (data= Server received '(message (type ping)))))
+		(assert (ef (in-state Server done)))
+		(assert (af (in-state Server done)))
 
 		(xyplot message_outstanding
 			(title "Message Chain Backlog By Step")
@@ -4251,56 +4291,217 @@ const docMessageModelSource = `
 const docBakeryModelSource = `
 	(model
 		(actor ProductionRole
-			(data baked 0)
-			(state start
+			(state prep
 				(edge true
-					(send-any TruckRole batch)
-					(add baked 1)
+					(send NorthTruckRole
+						'(event
+							(type shipment)
+							(from Production)
+							(to TruckNorth)
+							(tstamp 1)
+							(values (kind rye) (batch morning))))
+					(become dispatched_north)))
+			(state dispatched_north
+				(edge true
+					(send SouthTruckRole
+						'(event
+							(type shipment)
+							(from Production)
+							(to TruckSouth)
+							(tstamp 2)
+							(values (kind wheat) (batch afternoon))))
+					(become dispatched_south)))
+			(state dispatched_south
+				(edge true
 					(become done)))
 			(state done))
 
-		(actor TruckRole
-			(data deliveries 0)
-			(state wait
-				(edge true
-					(recv cargo)
-					(add deliveries 1)
-					(send StoreRole cargo)
-					(become done)))
-			(state done))
-
-		(actor StoreRole
-			(data inventory 0)
-			(data sold 0)
+		(actor NorthTruckRole
 			(state idle
 				(edge true
+					(recv cargo)
+					(send StoreRole
+						'(event
+							(type delivery)
+							(from TruckNorth)
+							(to Store)
+							(tstamp 3)
+							(values (kind rye) (batch morning))))
+					(become delivered_a)))
+			(state delivered_a))
+
+		(actor SouthTruckRole
+			(state idle
+				(edge true
+					(recv cargo)
+					(send StoreRole
+						'(event
+							(type delivery)
+							(from TruckSouth)
+							(to Store)
+							(tstamp 4)
+							(values (kind wheat) (batch afternoon))))
+					(become delivered_b)))
+			(state delivered_b))
+
+		(actor StoreRole
+			(state waiting
+				(edge true
 					(recv shipment)
-					(add inventory 1)
-					(become stocked)))
-			(state stocked
+					(if (data= shipment
+							'(event
+								(type delivery)
+								(from TruckNorth)
+								(to Store)
+								(tstamp 3)
+								(values (kind rye) (batch morning))))
+						(become stocked_rye)
+						(become stocked_wheat))))
+			(state stocked_rye
 				(edge true
-					(send CustomerBaseRole sale)
-					(sub inventory 1)
-					(add sold 1)
-					(become stocked))))
-
-		(actor CustomerBaseRole
-			(data served 0)
-			(state ready
+					(send CustomerRole
+						'(event
+							(type offer)
+							(from Store)
+							(to Customer)
+							(tstamp 5)
+							(values (kind rye) (batch morning))))
+					(become sold_rye)))
+			(state stocked_wheat
 				(edge true
-					(recv sale)
-					(add served 1)
-					(become ready))))
+					(send CustomerRole
+						'(event
+							(type offer)
+							(from Store)
+							(to Customer)
+							(tstamp 6)
+							(values (kind wheat) (batch afternoon))))
+					(become sold_wheat)))
+			(state sold_rye)
+			(state sold_wheat))
 
-		(instance Production ProductionRole (queue 1) (TruckRole TruckNorth TruckSouth))
-		(instance TruckNorth TruckRole (queue 1) (StoreRole StoreA))
-		(instance TruckSouth TruckRole (queue 1) (StoreRole StoreB))
-		(instance StoreA StoreRole (queue 1) (CustomerBaseRole CustomerA))
-		(instance StoreB StoreRole (queue 1) (CustomerBaseRole CustomerB))
-		(instance StoreC StoreRole (queue 1) (CustomerBaseRole CustomerC))
-		(instance CustomerA CustomerBaseRole (queue 1))
-		(instance CustomerB CustomerBaseRole (queue 1))
-		(instance CustomerC CustomerBaseRole (queue 1)))
+		(actor CustomerRole
+			(state browsing
+				(edge true
+					(recv offer)
+					(if (data= offer
+							'(event
+								(type offer)
+								(from Store)
+								(to Customer)
+								(tstamp 5)
+								(values (kind rye) (batch morning))))
+						(become bought_rye)
+						(become bought_wheat))))
+			(state bought_rye)
+			(state bought_wheat))
+
+		(instance Production ProductionRole
+			(queue 1)
+			(NorthTruckRole TruckNorth)
+			(SouthTruckRole TruckSouth))
+		(instance TruckNorth NorthTruckRole
+			(queue 1)
+			(StoreRole StoreA))
+		(instance TruckSouth SouthTruckRole
+			(queue 1)
+			(StoreRole StoreB))
+		(instance StoreA StoreRole
+			(queue 1)
+			(CustomerRole CustomerA))
+		(instance StoreB StoreRole
+			(queue 1)
+			(CustomerRole CustomerB))
+		(instance StoreC StoreRole
+			(queue 1)
+			(CustomerRole CustomerC))
+		(instance CustomerA CustomerRole (queue 1))
+		(instance CustomerB CustomerRole (queue 1))
+		(instance CustomerC CustomerRole (queue 1))
+
+		(assert (ax (in-state Production dispatched_north)))
+		(assert (ef (in-state Production dispatched_north)))
+		(assert (ef (in-state Production dispatched_south)))
+		(assert (af (in-state Production done)))
+		(assert (ef (mailbox-has TruckNorth
+			'(event
+				(type shipment)
+				(from Production)
+				(to TruckNorth)
+				(tstamp 1)
+				(values (kind rye) (batch morning))))))
+		(assert (ef (mailbox-has TruckSouth
+			'(event
+				(type shipment)
+				(from Production)
+				(to TruckSouth)
+				(tstamp 2)
+				(values (kind wheat) (batch afternoon))))))
+		(assert (not (ef (mailbox-has TruckSouth
+			'(event
+				(type shipment)
+				(from Production)
+				(to TruckSouth)
+				(tstamp 1)
+				(values (kind rye) (batch morning)))))))
+		(assert (ef (in-state TruckNorth delivered_a)))
+		(assert (ef (in-state TruckSouth delivered_b)))
+		(assert (af (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+		(assert (not (ef (in-state TruckNorth delivered_b))))
+		(assert (ef (in-state StoreA stocked_rye)))
+		(assert (ef (in-state StoreB stocked_wheat)))
+		(assert (ag (in-state StoreC waiting)))
+		(assert (ag (in-state CustomerC browsing)))
+		(assert (ag (not (or
+			(mailbox-has StoreC
+				'(event
+					(type delivery)
+					(from TruckNorth)
+					(to Store)
+					(tstamp 3)
+					(values (kind rye) (batch morning))))
+			(mailbox-has StoreC
+				'(event
+					(type delivery)
+					(from TruckSouth)
+					(to Store)
+					(tstamp 4)
+					(values (kind wheat) (batch afternoon))))))))
+		(assert (ef (mailbox-has CustomerA
+			'(event
+				(type offer)
+				(from Store)
+				(to Customer)
+				(tstamp 5)
+				(values (kind rye) (batch morning))))))
+		(assert (ef (mailbox-has CustomerB
+			'(event
+				(type offer)
+				(from Store)
+				(to Customer)
+				(tstamp 6)
+				(values (kind wheat) (batch afternoon))))))
+		(assert (ef (in-state CustomerA bought_rye)))
+		(assert (ef (in-state CustomerB bought_wheat)))
+		(assert (af (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (af (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat))))
+		(assert (ef (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (not (ef (in-state StoreC stocked_rye))))
+		(assert (not (ef (in-state CustomerC bought_rye))))
+		(assert (ef (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+
+		(xyplot bakery_outstanding
+			(title "Bakery Outstanding Messages By Step")
+			(steps 11)
+			(metric sent-minus-received))
+		(xyplot bakery_sends
+			(title "Bakery Send Rate")
+			(steps 11)
+			(metric send-rate))
+		(xyplot bakery_receives
+			(title "Bakery Receive Rate")
+			(steps 11)
+			(metric receive-rate)))
 `
 
 func docQueueModel() (*RequirementsModel, error) {
@@ -4442,8 +4643,7 @@ func renderDocLanguageSections() (string, error) {
 		{Form: "`(cdr $xs:value)`", Params: "`$xs` list value", Semantics: "Returns the tail of a list."},
 	}
 	ctlForms := []languageFormDoc{
-		{Form: "`(in-state $actor:symbol $state:symbol)`", Params: "atomic state predicate", Semantics: "Asserts `$actor.state = $state`."},
-		{Form: "`(data= $actor:symbol $key:symbol $value:value)`", Params: "atomic data predicate", Semantics: "Asserts one actor-local value equals `$value`."},
+		{Form: "`(in-state $actor:symbol $state:symbol)`", Params: "atomic state predicate", Semantics: "Asserts `$actor.state = $state` in the visible control graph."},
 		{Form: "`(mailbox-has $actor:symbol $msg:value)`", Params: "atomic mailbox predicate", Semantics: "Asserts the mailbox currently contains `$msg`."},
 		{Form: "`(ex $p:ctl)`, `(ax $p:ctl)`", Params: "next-step modalities", Semantics: "`EX` and `AX`."},
 		{Form: "`(ef $p:ctl)`, `(af $p:ctl)`", Params: "eventual modalities", Semantics: "`EF` and `AF`."},
@@ -4456,7 +4656,7 @@ func renderDocLanguageSections() (string, error) {
 		{Form: "`(diamond $p:mu)`, `(box $p:mu)`", Params: "next-step modalities", Semantics: "Existential and universal modal operators."},
 		{Form: "`(mu $X:symbol $body:mu)`, `(nu $X:symbol $body:mu)`", Params: "fixpoint variable plus body", Semantics: "Least and greatest fixpoints."},
 		{Form: "`(not $p:mu)`, `(and $p:mu $q:mu)`, `(or $p:mu $q:mu)`", Params: "Boolean mu structure", Semantics: "Boolean composition over formulas."},
-		{Form: "`(in-state $actor:symbol $state:symbol)`, `(data= $actor:symbol $key:symbol $value:value)`, `(mailbox-has $actor:symbol $msg:value)`", Params: "same atoms as CTL", Semantics: "State predicates shared with the CTL surface syntax."},
+		{Form: "`(in-state $actor:symbol $state:symbol)`, `(mailbox-has $actor:symbol $msg:value)`", Params: "same atoms as CTL", Semantics: "Visible-behavior predicates shared with the CTL surface syntax."},
 	}
 
 	var b strings.Builder
@@ -4470,7 +4670,7 @@ func renderDocLanguageSections() (string, error) {
 	b.WriteString("There is no implicit actor creation, implicit topology, or implicit next state.\n")
 	b.WriteString("Model the situation as a state machine, not as loose propositions.\n")
 	b.WriteString("For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.\n")
-	b.WriteString("Only assert propositions that are grounded in named states, mailbox contents, or actor-local data.\n")
+	b.WriteString("Only assert propositions that are grounded in named states and mailbox contents.\n")
 	b.WriteString("Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.\n")
 	b.WriteString("Use (send Role msg) only when that role resolves to exactly one concrete actor.\n")
 	b.WriteString("Use (send-any Role msg) when a role may resolve to several concrete actors.\n")
@@ -4523,8 +4723,66 @@ func docExamples() ([]docExample, error) {
 	return []docExample{
 		{Title: "Message Chain Example", Source: strings.TrimSpace(docMessageModelSource), Spec: messageModel},
 		{Title: "Queue Example", Source: strings.TrimSpace(docQueueModelSource), Spec: queueModel},
-		{Title: "Bakery Role-Reuse Example", Source: strings.TrimSpace(docBakeryModelSource), Spec: bakeryModel},
+		{Title: "Bakery Visible-Behavior Example", Source: strings.TrimSpace(docBakeryModelSource), Spec: bakeryModel},
 	}, nil
+}
+
+func humanizeCTLValue(form Value) string {
+	if !isList(form) || len(form.Items) == 0 || form.Items[0].Kind != KindSymbol {
+		return form.String()
+	}
+	head := form.Items[0].Text
+	switch head {
+	case "ef":
+		if len(form.Items) == 2 {
+			return "Possibly " + humanizeCTLValue(form.Items[1])
+		}
+	case "ag":
+		if len(form.Items) == 2 {
+			return "Always " + humanizeCTLValue(form.Items[1])
+		}
+	case "af":
+		if len(form.Items) == 2 {
+			return "Eventually " + humanizeCTLValue(form.Items[1])
+		}
+	case "ex":
+		if len(form.Items) == 2 {
+			return "Next possibly " + humanizeCTLValue(form.Items[1])
+		}
+	case "ax":
+		if len(form.Items) == 2 {
+			return "Next always " + humanizeCTLValue(form.Items[1])
+		}
+	case "eg":
+		if len(form.Items) == 2 {
+			return "Can keep " + humanizeCTLValue(form.Items[1]) + " forever"
+		}
+	case "not":
+		if len(form.Items) == 2 {
+			return "Not " + humanizeCTLValue(form.Items[1])
+		}
+	case "and":
+		if len(form.Items) == 3 {
+			return "(" + humanizeCTLValue(form.Items[1]) + ") and (" + humanizeCTLValue(form.Items[2]) + ")"
+		}
+	case "or":
+		if len(form.Items) == 3 {
+			return "(" + humanizeCTLValue(form.Items[1]) + ") or (" + humanizeCTLValue(form.Items[2]) + ")"
+		}
+	case "implies":
+		if len(form.Items) == 3 {
+			return "If " + humanizeCTLValue(form.Items[1]) + ", then " + humanizeCTLValue(form.Items[2])
+		}
+	case "in-state":
+		if len(form.Items) == 3 {
+			return form.Items[1].String() + " is in state " + form.Items[2].String()
+		}
+	case "mailbox-has":
+		if len(form.Items) == 3 {
+			return form.Items[1].String() + " mailbox has " + form.Items[2].String()
+		}
+	}
+	return form.String()
 }
 
 func renderDocExampleMarkdown(item docExample) (string, error) {
@@ -4549,7 +4807,7 @@ func renderDocExampleMarkdown(item docExample) (string, error) {
 				if result.Holds {
 					status = "PASS"
 				}
-				fmt.Fprintf(&b, "- `%s` `%s`\n", status, result.Assertion.Spec.Items[1].String())
+				fmt.Fprintf(&b, "- `%s` `%s`: %s\n", status, result.Assertion.Spec.Items[1].String(), humanizeCTLValue(result.Assertion.Spec.Items[1]))
 			}
 			b.WriteString("\n")
 		}
@@ -5262,7 +5520,7 @@ func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
 				if result.Holds {
 					status = "PASS"
 				}
-				fmt.Fprintf(&b, "- `%s` `%s`\n", status, result.Assertion.Spec.Items[1].String())
+				fmt.Fprintf(&b, "- `%s` `%s`: %s\n", status, result.Assertion.Spec.Items[1].String(), humanizeCTLValue(result.Assertion.Spec.Items[1]))
 			}
 			b.WriteString("\n")
 		}
@@ -5310,7 +5568,7 @@ func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
 				if result.Holds {
 					status = "PASS"
 				}
-				fmt.Fprintf(&b, "<li><code>%s</code> <code>%s</code></li>", status, html.EscapeString(result.Assertion.Spec.Items[1].String()))
+				fmt.Fprintf(&b, "<li><code>%s</code> <code>%s</code>: %s</li>", status, html.EscapeString(result.Assertion.Spec.Items[1].String()), html.EscapeString(humanizeCTLValue(result.Assertion.Spec.Items[1])))
 			}
 			b.WriteString("</ul>")
 		}

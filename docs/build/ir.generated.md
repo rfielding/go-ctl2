@@ -55,7 +55,7 @@ Every instance must declare its mailbox length with `(queue n)`. Use `0` for ren
 There is no implicit actor creation, implicit topology, or implicit next state.
 Model the situation as a state machine, not as loose propositions.
 For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.
-Only assert propositions that are grounded in named states, mailbox contents, or actor-local data.
+Only assert propositions that are grounded in named states and mailbox contents.
 Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.
 Use (send Role msg) only when that role resolves to exactly one concrete actor.
 Use (send-any Role msg) when a role may resolve to several concrete actors.
@@ -138,8 +138,7 @@ Documentation metavariables start with `$` and include a type tag, for example `
 
 | Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
-| `(in-state $actor:symbol $state:symbol)` | atomic state predicate | Asserts `$actor.state = $state`. |
-| `(data= $actor:symbol $key:symbol $value:value)` | atomic data predicate | Asserts one actor-local value equals `$value`. |
+| `(in-state $actor:symbol $state:symbol)` | atomic state predicate | Asserts `$actor.state = $state` in the visible control graph. |
 | `(mailbox-has $actor:symbol $msg:value)` | atomic mailbox predicate | Asserts the mailbox currently contains `$msg`. |
 | `(ex $p:ctl)`, `(ax $p:ctl)` | next-step modalities | `EX` and `AX`. |
 | `(ef $p:ctl)`, `(af $p:ctl)` | eventual modalities | `EF` and `AF`. |
@@ -155,7 +154,7 @@ Documentation metavariables start with `$` and include a type tag, for example `
 | `(diamond $p:mu)`, `(box $p:mu)` | next-step modalities | Existential and universal modal operators. |
 | `(mu $X:symbol $body:mu)`, `(nu $X:symbol $body:mu)` | fixpoint variable plus body | Least and greatest fixpoints. |
 | `(not $p:mu)`, `(and $p:mu $q:mu)`, `(or $p:mu $q:mu)` | Boolean mu structure | Boolean composition over formulas. |
-| `(in-state $actor:symbol $state:symbol)`, `(data= $actor:symbol $key:symbol $value:value)`, `(mailbox-has $actor:symbol $msg:value)` | same atoms as CTL | State predicates shared with the CTL surface syntax. |
+| `(in-state $actor:symbol $state:symbol)`, `(mailbox-has $actor:symbol $msg:value)` | same atoms as CTL | Visible-behavior predicates shared with the CTL surface syntax. |
 
 
 
@@ -196,6 +195,7 @@ An actor role has:
 Each runtime actor is created explicitly with `(instance ActorName RoleName (queue N) (PeerRole InstanceName...)...)`.
 `N` is the mailbox length for that concrete actor.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
+The current control location is explicit in actor-local data and changes through `become`; it is not inferred from overlapping state predicates.
 
 ## State
 
@@ -368,19 +368,9 @@ This is not a continuous-time simulator. It is a small executable control model 
 - blocked arrivals counted as losses
 - random service completions
 
-That is usually enough for inspectable CTL properties such as:
+That is usually enough for inspectable CTL properties over visible behavior, such as whether the queue actor reaches particular control states or whether particular request messages are still buffered in the mailbox.
 
-- eventually the queue becomes non-empty
-- the queue can reach saturation
-- some executions accumulate drops
-- if arrivals stop, the system can drain
-
-Representative predicates for this queue model:
-
-- `(ef (data> Queue count 0) "eventually the queue can become non-empty")`
-- `(ef (data= Queue count 5) "the finite-capacity queue can saturate")`
-- `(ef (data> Queue dropped_count 0) "some execution can observe blocked arrivals")`
-- `(ag (implies (data= Queue count 0) (not (data> Queue dropped_count 0))) "drops only occur after the system has filled at some earlier point")`
+The internal counters in this queue model still matter operationally because they drive guards and actions, but they are not part of the CTL proposition language.
 
 The Mermaid artifacts below are a useful companion view for this example:
 
@@ -530,28 +520,28 @@ The key point is branching: one state can have several possible successors becau
 
 `E` quantifies over some branch. `A` quantifies over all branches.
 
-- `EX p`: there exists an immediate successor `t` with `s → t` and `t ⊨ p`
-- `AX p`: for every immediate successor `t`, if `s → t` then `t ⊨ p`
-- `EF p`: there exists a path on which `p` eventually holds
-- `AF p`: on every path, `p` eventually holds
-- `EG p`: there exists a path on which `p` holds forever
-- `AG p`: on every path, `p` holds forever
+- `EX p`: next possibly `p`
+- `AX p`: next always `p`
+- `EF p`: possibly `p`
+- `AF p`: eventually `p`
+- `EG p`: can keep `p` forever
+- `AG p`: always `p`
 - `E[p U q]`: there exists a path where `p` holds until `q` holds
 - `A[p U q]`: on every path, `p` holds until `q` holds
 
 That is the practical reading users need:
 
-- `EF`: possible reachability
-- `AF`: guaranteed reachability
-- `EG`: possible persistence
-- `AG`: universal invariant
+- `EF`: possibly
+- `AF`: eventually
+- `EG`: can keep forever
+- `AG`: always
 
 Examples:
 
 - `(ef (in-state Negotiator ceasefire))`
 - `(af (in-state CivilianSupply stabilized))`
 - `(ag (not (mailbox-has EarlyWarning false-alarm)))`
-- `(eg (data= Frontline status mobilizing))`
+- `(eg (in-state Frontline mobilizing))`
 
 ## CTL And μ-Calculus
 
@@ -723,8 +713,8 @@ The canonical examples are generated as exact input/output pairs: the literal Li
 		(instance Relay RelayRole (queue 1) (ServerRole Server))
 		(instance Server ServerRole (queue 1))
 
-		(assert (ef (data= Server received '(message (type ping)))))
-		(assert (af (data= Server received '(message (type ping)))))
+		(assert (ef (in-state Server done)))
+		(assert (af (in-state Server done)))
 
 		(xyplot message_outstanding
 			(title "Message Chain Backlog By Step")
@@ -803,8 +793,8 @@ classDiagram
 
 #### CTL Outcomes
 
-- `PASS` `(ef (data= Server received (quote (message (type ping)))))`
-- `PASS` `(af (data= Server received (quote (message (type ping)))))`
+- `PASS` `(ef (in-state Server done))`: Possibly Server is in state done
+- `PASS` `(af (in-state Server done))`: Eventually Server is in state done
 
 #### Line Graphs
 
@@ -1022,63 +1012,224 @@ xychart-beta
     line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5]
 ```
 
-## Bakery Role-Reuse Example
+## Bakery Visible-Behavior Example
 
 ### Input Lisp
 
 ```lisp
 (model
 		(actor ProductionRole
-			(data baked 0)
-			(state start
+			(state prep
 				(edge true
-					(send-any TruckRole batch)
-					(add baked 1)
+					(send NorthTruckRole
+						'(event
+							(type shipment)
+							(from Production)
+							(to TruckNorth)
+							(tstamp 1)
+							(values (kind rye) (batch morning))))
+					(become dispatched_north)))
+			(state dispatched_north
+				(edge true
+					(send SouthTruckRole
+						'(event
+							(type shipment)
+							(from Production)
+							(to TruckSouth)
+							(tstamp 2)
+							(values (kind wheat) (batch afternoon))))
+					(become dispatched_south)))
+			(state dispatched_south
+				(edge true
 					(become done)))
 			(state done))
 
-		(actor TruckRole
-			(data deliveries 0)
-			(state wait
-				(edge true
-					(recv cargo)
-					(add deliveries 1)
-					(send StoreRole cargo)
-					(become done)))
-			(state done))
-
-		(actor StoreRole
-			(data inventory 0)
-			(data sold 0)
+		(actor NorthTruckRole
 			(state idle
 				(edge true
+					(recv cargo)
+					(send StoreRole
+						'(event
+							(type delivery)
+							(from TruckNorth)
+							(to Store)
+							(tstamp 3)
+							(values (kind rye) (batch morning))))
+					(become delivered_a)))
+			(state delivered_a))
+
+		(actor SouthTruckRole
+			(state idle
+				(edge true
+					(recv cargo)
+					(send StoreRole
+						'(event
+							(type delivery)
+							(from TruckSouth)
+							(to Store)
+							(tstamp 4)
+							(values (kind wheat) (batch afternoon))))
+					(become delivered_b)))
+			(state delivered_b))
+
+		(actor StoreRole
+			(state waiting
+				(edge true
 					(recv shipment)
-					(add inventory 1)
-					(become stocked)))
-			(state stocked
+					(if (data= shipment
+							'(event
+								(type delivery)
+								(from TruckNorth)
+								(to Store)
+								(tstamp 3)
+								(values (kind rye) (batch morning))))
+						(become stocked_rye)
+						(become stocked_wheat))))
+			(state stocked_rye
 				(edge true
-					(send CustomerBaseRole sale)
-					(sub inventory 1)
-					(add sold 1)
-					(become stocked))))
-
-		(actor CustomerBaseRole
-			(data served 0)
-			(state ready
+					(send CustomerRole
+						'(event
+							(type offer)
+							(from Store)
+							(to Customer)
+							(tstamp 5)
+							(values (kind rye) (batch morning))))
+					(become sold_rye)))
+			(state stocked_wheat
 				(edge true
-					(recv sale)
-					(add served 1)
-					(become ready))))
+					(send CustomerRole
+						'(event
+							(type offer)
+							(from Store)
+							(to Customer)
+							(tstamp 6)
+							(values (kind wheat) (batch afternoon))))
+					(become sold_wheat)))
+			(state sold_rye)
+			(state sold_wheat))
 
-		(instance Production ProductionRole (queue 1) (TruckRole TruckNorth TruckSouth))
-		(instance TruckNorth TruckRole (queue 1) (StoreRole StoreA))
-		(instance TruckSouth TruckRole (queue 1) (StoreRole StoreB))
-		(instance StoreA StoreRole (queue 1) (CustomerBaseRole CustomerA))
-		(instance StoreB StoreRole (queue 1) (CustomerBaseRole CustomerB))
-		(instance StoreC StoreRole (queue 1) (CustomerBaseRole CustomerC))
-		(instance CustomerA CustomerBaseRole (queue 1))
-		(instance CustomerB CustomerBaseRole (queue 1))
-		(instance CustomerC CustomerBaseRole (queue 1)))
+		(actor CustomerRole
+			(state browsing
+				(edge true
+					(recv offer)
+					(if (data= offer
+							'(event
+								(type offer)
+								(from Store)
+								(to Customer)
+								(tstamp 5)
+								(values (kind rye) (batch morning))))
+						(become bought_rye)
+						(become bought_wheat))))
+			(state bought_rye)
+			(state bought_wheat))
+
+		(instance Production ProductionRole
+			(queue 1)
+			(NorthTruckRole TruckNorth)
+			(SouthTruckRole TruckSouth))
+		(instance TruckNorth NorthTruckRole
+			(queue 1)
+			(StoreRole StoreA))
+		(instance TruckSouth SouthTruckRole
+			(queue 1)
+			(StoreRole StoreB))
+		(instance StoreA StoreRole
+			(queue 1)
+			(CustomerRole CustomerA))
+		(instance StoreB StoreRole
+			(queue 1)
+			(CustomerRole CustomerB))
+		(instance StoreC StoreRole
+			(queue 1)
+			(CustomerRole CustomerC))
+		(instance CustomerA CustomerRole (queue 1))
+		(instance CustomerB CustomerRole (queue 1))
+		(instance CustomerC CustomerRole (queue 1))
+
+		(assert (ax (in-state Production dispatched_north)))
+		(assert (ef (in-state Production dispatched_north)))
+		(assert (ef (in-state Production dispatched_south)))
+		(assert (af (in-state Production done)))
+		(assert (ef (mailbox-has TruckNorth
+			'(event
+				(type shipment)
+				(from Production)
+				(to TruckNorth)
+				(tstamp 1)
+				(values (kind rye) (batch morning))))))
+		(assert (ef (mailbox-has TruckSouth
+			'(event
+				(type shipment)
+				(from Production)
+				(to TruckSouth)
+				(tstamp 2)
+				(values (kind wheat) (batch afternoon))))))
+		(assert (not (ef (mailbox-has TruckSouth
+			'(event
+				(type shipment)
+				(from Production)
+				(to TruckSouth)
+				(tstamp 1)
+				(values (kind rye) (batch morning)))))))
+		(assert (ef (in-state TruckNorth delivered_a)))
+		(assert (ef (in-state TruckSouth delivered_b)))
+		(assert (af (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+		(assert (not (ef (in-state TruckNorth delivered_b))))
+		(assert (ef (in-state StoreA stocked_rye)))
+		(assert (ef (in-state StoreB stocked_wheat)))
+		(assert (ag (in-state StoreC waiting)))
+		(assert (ag (in-state CustomerC browsing)))
+		(assert (ag (not (or
+			(mailbox-has StoreC
+				'(event
+					(type delivery)
+					(from TruckNorth)
+					(to Store)
+					(tstamp 3)
+					(values (kind rye) (batch morning))))
+			(mailbox-has StoreC
+				'(event
+					(type delivery)
+					(from TruckSouth)
+					(to Store)
+					(tstamp 4)
+					(values (kind wheat) (batch afternoon))))))))
+		(assert (ef (mailbox-has CustomerA
+			'(event
+				(type offer)
+				(from Store)
+				(to Customer)
+				(tstamp 5)
+				(values (kind rye) (batch morning))))))
+		(assert (ef (mailbox-has CustomerB
+			'(event
+				(type offer)
+				(from Store)
+				(to Customer)
+				(tstamp 6)
+				(values (kind wheat) (batch afternoon))))))
+		(assert (ef (in-state CustomerA bought_rye)))
+		(assert (ef (in-state CustomerB bought_wheat)))
+		(assert (af (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (af (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat))))
+		(assert (ef (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (not (ef (in-state StoreC stocked_rye))))
+		(assert (not (ef (in-state CustomerC bought_rye))))
+		(assert (ef (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+
+		(xyplot bakery_outstanding
+			(title "Bakery Outstanding Messages By Step")
+			(steps 11)
+			(metric sent-minus-received))
+		(xyplot bakery_sends
+			(title "Bakery Send Rate")
+			(steps 11)
+			(metric send-rate))
+		(xyplot bakery_receives
+			(title "Bakery Receive Rate")
+			(steps 11)
+			(metric receive-rate)))
 ```
 
 ### Rendered Output
@@ -1089,44 +1240,55 @@ xychart-beta
 flowchart TD
     subgraph Production
         direction TB
-        Productionstart([start]) -->|"(send-any TruckNorth TruckSouth batch)<br/>(add baked 1)"| Productiondone([done])
+        Productionprep([prep]) -->|"(send TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning)))))"| Productiondispatched_north([dispatched_north])
+        Productiondispatched_north([dispatched_north]) -->|"(send TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon)))))"| Productiondispatched_south([dispatched_south])
+        Productiondispatched_south([dispatched_south]) -->|"transition"| Productiondone([done])
     end
     subgraph TruckNorth
         direction TB
-        TruckNorthwait([wait]) -->|"(recv cargo)<br/>(add deliveries 1)"| TruckNorthwait__wait([wait__wait])
-        TruckNorthwait__wait([wait__wait]) -->|"(send StoreA cargo)"| TruckNorthdone([done])
+        TruckNorthidle([idle]) -->|"(recv cargo)"| TruckNorthidle__wait([idle__wait])
+        TruckNorthidle__wait([idle__wait]) -->|"(send StoreA (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning)))))"| TruckNorthdelivered_a([delivered_a])
     end
     subgraph TruckSouth
         direction TB
-        TruckSouthwait([wait]) -->|"(recv cargo)<br/>(add deliveries 1)"| TruckSouthwait__wait([wait__wait])
-        TruckSouthwait__wait([wait__wait]) -->|"(send StoreB cargo)"| TruckSouthdone([done])
+        TruckSouthidle([idle]) -->|"(recv cargo)"| TruckSouthidle__wait([idle__wait])
+        TruckSouthidle__wait([idle__wait]) -->|"(send StoreB (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon)))))"| TruckSouthdelivered_b([delivered_b])
     end
     subgraph StoreA
         direction TB
-        StoreAidle([idle]) -->|"(recv shipment)<br/>(add inventory 1)"| StoreAstocked([stocked])
-        StoreAstocked([stocked]) -->|"(send CustomerA sale)<br/>(sub inventory 1)<br/>(add sold 1)"| StoreAstocked([stocked])
+        StoreAwaiting([waiting]) -->|"(recv shipment)<br/>(if (data= shipment (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (become stocked_rye) (become stocked_wheat))"| StoreAstocked_rye([stocked_rye])
+        StoreAwaiting([waiting]) -->|"(recv shipment)<br/>(if (data= shipment (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (become stocked_rye) (become stocked_wheat))"| StoreAstocked_wheat([stocked_wheat])
+        StoreAstocked_rye([stocked_rye]) -->|"(send CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning)))))"| StoreAsold_rye([sold_rye])
+        StoreAstocked_wheat([stocked_wheat]) -->|"(send CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon)))))"| StoreAsold_wheat([sold_wheat])
     end
     subgraph StoreB
         direction TB
-        StoreBidle([idle]) -->|"(recv shipment)<br/>(add inventory 1)"| StoreBstocked([stocked])
-        StoreBstocked([stocked]) -->|"(send CustomerB sale)<br/>(sub inventory 1)<br/>(add sold 1)"| StoreBstocked([stocked])
+        StoreBwaiting([waiting]) -->|"(recv shipment)<br/>(if (data= shipment (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (become stocked_rye) (become stocked_wheat))"| StoreBstocked_rye([stocked_rye])
+        StoreBwaiting([waiting]) -->|"(recv shipment)<br/>(if (data= shipment (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (become stocked_rye) (become stocked_wheat))"| StoreBstocked_wheat([stocked_wheat])
+        StoreBstocked_rye([stocked_rye]) -->|"(send CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning)))))"| StoreBsold_rye([sold_rye])
+        StoreBstocked_wheat([stocked_wheat]) -->|"(send CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon)))))"| StoreBsold_wheat([sold_wheat])
     end
     subgraph StoreC
         direction TB
-        StoreCidle([idle]) -->|"(recv shipment)<br/>(add inventory 1)"| StoreCstocked([stocked])
-        StoreCstocked([stocked]) -->|"(send CustomerC sale)<br/>(sub inventory 1)<br/>(add sold 1)"| StoreCstocked([stocked])
+        StoreCwaiting([waiting]) -->|"(recv shipment)<br/>(if (data= shipment (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (become stocked_rye) (become stocked_wheat))"| StoreCstocked_rye([stocked_rye])
+        StoreCwaiting([waiting]) -->|"(recv shipment)<br/>(if (data= shipment (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (become stocked_rye) (become stocked_wheat))"| StoreCstocked_wheat([stocked_wheat])
+        StoreCstocked_rye([stocked_rye]) -->|"(send CustomerC (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning)))))"| StoreCsold_rye([sold_rye])
+        StoreCstocked_wheat([stocked_wheat]) -->|"(send CustomerC (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon)))))"| StoreCsold_wheat([sold_wheat])
     end
     subgraph CustomerA
         direction TB
-        CustomerAready([ready]) -->|"(recv sale)<br/>(add served 1)"| CustomerAready([ready])
+        CustomerAbrowsing([browsing]) -->|"(recv offer)<br/>(if (data= offer (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))) (become bought_rye) (become bought_wheat))"| CustomerAbought_rye([bought_rye])
+        CustomerAbrowsing([browsing]) -->|"(recv offer)<br/>(if (data= offer (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))) (become bought_rye) (become bought_wheat))"| CustomerAbought_wheat([bought_wheat])
     end
     subgraph CustomerB
         direction TB
-        CustomerBready([ready]) -->|"(recv sale)<br/>(add served 1)"| CustomerBready([ready])
+        CustomerBbrowsing([browsing]) -->|"(recv offer)<br/>(if (data= offer (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))) (become bought_rye) (become bought_wheat))"| CustomerBbought_rye([bought_rye])
+        CustomerBbrowsing([browsing]) -->|"(recv offer)<br/>(if (data= offer (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))) (become bought_rye) (become bought_wheat))"| CustomerBbought_wheat([bought_wheat])
     end
     subgraph CustomerC
         direction TB
-        CustomerCready([ready]) -->|"(recv sale)<br/>(add served 1)"| CustomerCready([ready])
+        CustomerCbrowsing([browsing]) -->|"(recv offer)<br/>(if (data= offer (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))) (become bought_rye) (become bought_wheat))"| CustomerCbought_rye([bought_rye])
+        CustomerCbrowsing([browsing]) -->|"(recv offer)<br/>(if (data= offer (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))) (become bought_rye) (become bought_wheat))"| CustomerCbought_wheat([bought_wheat])
     end
 ```
 
@@ -1143,13 +1305,16 @@ sequenceDiagram
     participant CustomerA
     participant CustomerB
     participant CustomerC
-    Production-->>TruckNorth: batch
-    Production-->>TruckSouth: batch
-    TruckNorth-->>StoreA: cargo
-    TruckSouth-->>StoreB: cargo
-    StoreA-->>CustomerA: sale
-    StoreB-->>CustomerB: sale
-    StoreC-->>CustomerC: sale
+    Production-->>TruckNorth: (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))
+    Production-->>TruckSouth: (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))
+    TruckNorth-->>StoreA: (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))
+    TruckSouth-->>StoreB: (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))
+    StoreA-->>CustomerA: (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))
+    StoreA-->>CustomerA: (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))
+    StoreB-->>CustomerB: (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))
+    StoreB-->>CustomerB: (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))
+    StoreC-->>CustomerC: (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))
+    StoreC-->>CustomerC: (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))
 ```
 
 #### Class Diagram
@@ -1157,86 +1322,164 @@ sequenceDiagram
 ```mermaid
 classDiagram
     class Production {
-        +start : state
+        +prep : state
+        +dispatched_north : state
+        +dispatched_south : state
         +done : state
-        +baked : data
         +state : data
     }
     <<ProductionRole>> Production
     class TruckNorth {
-        +wait : state
-        +wait__wait : state
-        +done : state
-        +cargo : data
-        +deliveries : data
-        +sender : data
-        +state : data
-    }
-    <<TruckRole>> TruckNorth
-    class TruckSouth {
-        +wait : state
-        +wait__wait : state
-        +done : state
-        +cargo : data
-        +deliveries : data
-        +sender : data
-        +state : data
-    }
-    <<TruckRole>> TruckSouth
-    class StoreA {
         +idle : state
-        +stocked : state
-        +inventory : data
+        +idle__wait : state
+        +delivered_a : state
+        +cargo : data
+        +sender : data
+        +state : data
+    }
+    <<NorthTruckRole>> TruckNorth
+    class TruckSouth {
+        +idle : state
+        +idle__wait : state
+        +delivered_b : state
+        +cargo : data
+        +sender : data
+        +state : data
+    }
+    <<SouthTruckRole>> TruckSouth
+    class StoreA {
+        +waiting : state
+        +stocked_rye : state
+        +stocked_wheat : state
+        +sold_rye : state
+        +sold_wheat : state
         +sender : data
         +shipment : data
-        +sold : data
         +state : data
     }
     <<StoreRole>> StoreA
     class StoreB {
-        +idle : state
-        +stocked : state
-        +inventory : data
+        +waiting : state
+        +stocked_rye : state
+        +stocked_wheat : state
+        +sold_rye : state
+        +sold_wheat : state
         +sender : data
         +shipment : data
-        +sold : data
         +state : data
     }
     <<StoreRole>> StoreB
     class StoreC {
-        +idle : state
-        +stocked : state
-        +inventory : data
+        +waiting : state
+        +stocked_rye : state
+        +stocked_wheat : state
+        +sold_rye : state
+        +sold_wheat : state
         +sender : data
         +shipment : data
-        +sold : data
         +state : data
     }
     <<StoreRole>> StoreC
     class CustomerA {
-        +ready : state
-        +sale : data
+        +browsing : state
+        +bought_rye : state
+        +bought_wheat : state
+        +offer : data
         +sender : data
-        +served : data
         +state : data
     }
-    <<CustomerBaseRole>> CustomerA
+    <<CustomerRole>> CustomerA
     class CustomerB {
-        +ready : state
-        +sale : data
+        +browsing : state
+        +bought_rye : state
+        +bought_wheat : state
+        +offer : data
         +sender : data
-        +served : data
         +state : data
     }
-    <<CustomerBaseRole>> CustomerB
+    <<CustomerRole>> CustomerB
     class CustomerC {
-        +ready : state
-        +sale : data
+        +browsing : state
+        +bought_rye : state
+        +bought_wheat : state
+        +offer : data
         +sender : data
-        +served : data
         +state : data
     }
-    <<CustomerBaseRole>> CustomerC
+    <<CustomerRole>> CustomerC
+```
+
+#### CTL Outcomes
+
+- `PASS` `(ax (in-state Production dispatched_north))`: Next always Production is in state dispatched_north
+- `PASS` `(ef (in-state Production dispatched_north))`: Possibly Production is in state dispatched_north
+- `PASS` `(ef (in-state Production dispatched_south))`: Possibly Production is in state dispatched_south
+- `PASS` `(af (in-state Production done))`: Eventually Production is in state done
+- `PASS` `(ef (mailbox-has TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))))`: Possibly TruckNorth mailbox has (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))
+- `PASS` `(ef (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))))`: Possibly TruckSouth mailbox has (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))
+- `PASS` `(not (ef (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning)))))))`: Not Possibly TruckSouth mailbox has (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning))))
+- `PASS` `(ef (in-state TruckNorth delivered_a))`: Possibly TruckNorth is in state delivered_a
+- `PASS` `(ef (in-state TruckSouth delivered_b))`: Possibly TruckSouth is in state delivered_b
+- `PASS` `(af (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: Eventually (TruckNorth is in state delivered_a) and (TruckSouth is in state delivered_b)
+- `PASS` `(not (ef (in-state TruckNorth delivered_b)))`: Not Possibly TruckNorth is in state delivered_b
+- `PASS` `(ef (in-state StoreA stocked_rye))`: Possibly StoreA is in state stocked_rye
+- `PASS` `(ef (in-state StoreB stocked_wheat))`: Possibly StoreB is in state stocked_wheat
+- `PASS` `(ag (in-state StoreC waiting))`: Always StoreC is in state waiting
+- `PASS` `(ag (in-state CustomerC browsing))`: Always CustomerC is in state browsing
+- `PASS` `(ag (not (or (mailbox-has StoreC (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (mailbox-has StoreC (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))))))`: Always Not (StoreC mailbox has (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) or (StoreC mailbox has (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon)))))
+- `PASS` `(ef (mailbox-has CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))))`: Possibly CustomerA mailbox has (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))
+- `PASS` `(ef (mailbox-has CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))))`: Possibly CustomerB mailbox has (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))
+- `PASS` `(ef (in-state CustomerA bought_rye))`: Possibly CustomerA is in state bought_rye
+- `PASS` `(ef (in-state CustomerB bought_wheat))`: Possibly CustomerB is in state bought_wheat
+- `PASS` `(af (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: Eventually (CustomerA is in state bought_rye) and (CustomerB is in state bought_wheat)
+- `PASS` `(af (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat)))`: Eventually (StoreA is in state sold_rye) and (StoreB is in state sold_wheat)
+- `PASS` `(ef (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: Possibly (CustomerA is in state bought_rye) and (CustomerB is in state bought_wheat)
+- `PASS` `(not (ef (in-state StoreC stocked_rye)))`: Not Possibly StoreC is in state stocked_rye
+- `PASS` `(not (ef (in-state CustomerC bought_rye)))`: Not Possibly CustomerC is in state bought_rye
+- `PASS` `(ef (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: Possibly (TruckNorth is in state delivered_a) and (TruckSouth is in state delivered_b)
+
+#### Line Graphs
+
+##### Bakery Outstanding Messages By Step
+
+```lisp
+(xyplot bakery_outstanding (title "Bakery Outstanding Messages By Step") (steps 11) (metric sent-minus-received))
+```
+
+```mermaid
+xychart-beta
+    title "Bakery Outstanding Messages By Step"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    y-axis "sent - received" 0 --> 2
+    line [0, 1, 0, 1, 2, 1, 0, 0, 1, 2, 1, 0]
+```
+
+##### Bakery Send Rate
+
+```lisp
+(xyplot bakery_sends (title "Bakery Send Rate") (steps 11) (metric send-rate))
+```
+
+```mermaid
+xychart-beta
+    title "Bakery Send Rate"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    y-axis "sends per step" 0 --> 1
+    line [0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0]
+```
+
+##### Bakery Receive Rate
+
+```lisp
+(xyplot bakery_receives (title "Bakery Receive Rate") (steps 11) (metric receive-rate))
+```
+
+```mermaid
+xychart-beta
+    title "Bakery Receive Rate"
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    y-axis "receives per step" 0 --> 1
+    line [0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1]
 ```
 
 #### Channel Sizes
@@ -1246,9 +1489,9 @@ classDiagram
 ```mermaid
 xychart-beta
     title "Production Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### TruckNorth Channel Size
@@ -1256,9 +1499,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "TruckNorth Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### TruckSouth Channel Size
@@ -1266,9 +1509,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "TruckSouth Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### StoreA Channel Size
@@ -1276,9 +1519,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "StoreA Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### StoreB Channel Size
@@ -1286,9 +1529,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "StoreB Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
 ```
 
 ##### StoreC Channel Size
@@ -1296,9 +1539,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "StoreC Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### CustomerA Channel Size
@@ -1306,9 +1549,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "CustomerA Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0]
 ```
 
 ##### CustomerB Channel Size
@@ -1316,9 +1559,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "CustomerB Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
 ```
 
 ##### CustomerC Channel Size
@@ -1326,9 +1569,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "CustomerC Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 
@@ -1479,8 +1722,8 @@ This repository is still a skeleton. Important things are intentionally incomple
 
 - the example plots are generated from a fixed example, not yet from arbitrary models
 - the Mermaid generation is still mostly document-oriented rather than language-integrated
-- CTL formulas are present, but there is not yet a full proposition language over every part of runtime state
-- the documentation explains the intended semantics more completely than the current implementation exposes through tooling
+- CTL and raw modal mu-calculus currently range over visible behavior: control state and mailbox contents, not arbitrary internal actor variables
+- some surrounding tooling is still catching up with the implementation, so examples and helper text may lag until they are refreshed
 
 That is acceptable for this stage. The repository is already good enough to show the core thesis:
 
