@@ -4,7 +4,7 @@
 
 # Goal
 
-This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, the metric/event pipeline, and the documentation build. The target user is someone who can inspect diagrams and predicates, but does not want to learn a large formal language before getting value.
+This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, the metric/event pipeline, and the documentation build. The target user is someone who can inspect diagrams and checks, but does not want to learn a large formal language before getting value.
 
 The central idea is:
 
@@ -27,10 +27,10 @@ The intended workflow is:
 
 1. describe a requirement in actor/message terms
 2. let an LLM draft the Lisp model
-3. inspect the generated control states, transitions, predicates, and diagrams
+3. inspect the generated control states, transitions, checks, and diagrams
 4. run execution, exploration, and CTL checks on the same artifact
 
-The important constraint is inspectability. The user should be able to reject a bad model by reading the states, guards, transitions, predicates, and generated diagrams.
+The important constraint is inspectability. The user should be able to reject a bad model by reading the states, guards, transitions, assertions, and generated diagrams.
 
 # Design Principles
 
@@ -83,7 +83,7 @@ An actor role has:
 Each runtime actor is created explicitly with `(instance ActorName RoleName (queue N) (PeerRole InstanceName...)...)`.
 `N` is the mailbox length for that concrete actor.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
-The current control location is explicit in actor-local data and changes through `become`; it is not inferred from overlapping state predicates.
+The current control location is explicit in actor-local data and changes through `become`; it is not inferred from overlapping state-selection rules.
 
 ## State
 
@@ -258,7 +258,7 @@ This is not a continuous-time simulator. It is a small executable control model 
 
 That is usually enough for inspectable CTL properties over visible behavior, such as whether the queue actor reaches particular control states or whether particular request messages are still buffered in the mailbox.
 
-The internal counters in this queue model still matter operationally because they drive guards and actions, but they are not part of the CTL proposition language.
+The internal counters in this queue model still matter operationally because they drive guards and actions, but they are not part of the CTL assertion language.
 
 The Mermaid artifacts below are a useful companion view for this example:
 
@@ -426,10 +426,10 @@ That is the practical reading users need:
 
 Examples:
 
-- `(ef (in-state Negotiator ceasefire))`
-- `(af (in-state CivilianSupply stabilized))`
-- `(ag (not (mailbox-has EarlyWarning false-alarm)))`
-- `(eg (in-state Frontline mobilizing))`
+- `(possibly (in-state Negotiator ceasefire))`
+- `(eventually (in-state CivilianSupply stabilized))`
+- `(always (not (mailbox-has EarlyWarning false-alarm)))`
+- `(can-keep (in-state Frontline mobilizing))`
 
 ## CTL And μ-Calculus
 

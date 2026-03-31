@@ -721,7 +721,7 @@ func maybeEvaluateLogicRequest(source string, messages []chatTurn) (string, bool
 	}
 	formulaSource, logicKind, formulaLabel := resolveEvaluationFormula(last.Content, messages)
 	if formulaSource == "" {
-		return "I can evaluate logic against the model, but I do not know which formula you want.\n\nGive me a formula directly, for example `check (ef (in-state Server done))`, or reference a prior message like `A7` that contains the CTL or mu-calculus formula.", true, nil
+		return "I can evaluate logic against the model, but I do not know which formula you want.\n\nGive me a formula directly, for example `check (possibly (in-state Server done))`, or reference a prior message like `A7` that contains the CTL or mu-calculus formula.", true, nil
 	}
 	spec, err := CompileModel(modelSource)
 	if err != nil {
@@ -748,7 +748,7 @@ func maybeEvaluateLogicRequest(source string, messages []chatTurn) (string, bool
 	case "ctl":
 		formula, err := CompileCTL(formulaSource)
 		if err != nil {
-			return "I found the model, but the CTL formula does not parse.\n\nDo this: rewrite it as a CTL formula such as `(ef (in-state Server done))`.\n\n```text\n" + err.Error() + "\n```", true, nil
+			return "I found the model, but the CTL formula does not parse.\n\nDo this: rewrite it as a CTL formula such as `(possibly (in-state Server done))`.\n\n```text\n" + err.Error() + "\n```", true, nil
 		}
 		holds := explored.HoldsAtInitial(formula)
 		fmt.Fprintf(&b, "I evaluated the CTL formula against %s.\n\n", modelLabel)

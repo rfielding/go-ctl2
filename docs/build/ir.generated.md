@@ -4,7 +4,7 @@
 
 # Goal
 
-This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, the metric/event pipeline, and the documentation build. The target user is someone who can inspect diagrams and predicates, but does not want to learn a large formal language before getting value.
+This document records the current design intent for the actor IR, the declared control graph, the CTL checking model, the metric/event pipeline, and the documentation build. The target user is someone who can inspect diagrams and checks, but does not want to learn a large formal language before getting value.
 
 The central idea is:
 
@@ -27,10 +27,10 @@ The intended workflow is:
 
 1. describe a requirement in actor/message terms
 2. let an LLM draft the Lisp model
-3. inspect the generated control states, transitions, predicates, and diagrams
+3. inspect the generated control states, transitions, checks, and diagrams
 4. run execution, exploration, and CTL checks on the same artifact
 
-The important constraint is inspectability. The user should be able to reject a bad model by reading the states, guards, transitions, predicates, and generated diagrams.
+The important constraint is inspectability. The user should be able to reject a bad model by reading the states, guards, transitions, assertions, and generated diagrams.
 
 # Design Principles
 
@@ -53,9 +53,9 @@ Declare reusable behavior with (actor RoleName ...).
 Declare concrete runtime actors with (instance Name Role (queue n) (PeerRole Target...)...).
 Every instance must declare its mailbox length with `(queue n)`. Use `0` for rendezvous and a positive integer for buffered mailboxes.
 There is no implicit actor creation, implicit topology, or implicit next state.
-Model the situation as a state machine, not as loose propositions.
+Model the situation as a state machine, not as loose claims.
 For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.
-Only assert propositions that are grounded in named states and mailbox contents.
+Only write assertions that are grounded in named states and mailbox contents.
 Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.
 Use (send Role msg) only when that role resolves to exactly one concrete actor.
 Use (send-any Role msg) when a role may resolve to several concrete actors.
@@ -138,11 +138,11 @@ Documentation metavariables start with `$` and include a type tag, for example `
 
 | Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
-| `(in-state $actor:symbol $state:symbol)` | atomic state predicate | Asserts `$actor.state = $state` in the visible control graph. |
-| `(mailbox-has $actor:symbol $msg:value)` | atomic mailbox predicate | Asserts the mailbox currently contains `$msg`. |
-| `(ex $p:ctl)`, `(ax $p:ctl)` | next-step modalities | `EX` and `AX`. |
-| `(ef $p:ctl)`, `(af $p:ctl)` | eventual modalities | `EF` and `AF`. |
-| `(eg $p:ctl)`, `(ag $p:ctl)` | global modalities | `EG` and `AG`. |
+| `(in-state $actor:symbol $state:symbol)` | atomic state observation | Checks whether `$actor.state = $state` in the visible control graph. |
+| `(mailbox-has $actor:symbol $msg:value)` | atomic mailbox observation | Checks whether the mailbox currently contains `$msg`. |
+| `(next-possibly $p:ctl)`, `(ex $p:ctl)`, `(next-always $p:ctl)`, `(ax $p:ctl)` | next-step modalities | Named and abbreviated forms for the next-step operators. |
+| `(possibly $p:ctl)`, `(ef $p:ctl)`, `(eventually $p:ctl)`, `(af $p:ctl)` | reachability modalities | Named and abbreviated forms for possible and guaranteed eventual reachability. |
+| `(can-keep $p:ctl)`, `(eg $p:ctl)`, `(always $p:ctl)`, `(ag $p:ctl)` | persistence modalities | Named and abbreviated forms for persistence and invariance. |
 | `(eu $p:ctl $q:ctl)`, `(au $p:ctl $q:ctl)` | until modalities | `E[p U q]` and `A[p U q]`. |
 | `(not $p:ctl)`, `(and $p:ctl $q:ctl)`, `(or $p:ctl $q:ctl)`, `(implies $p:ctl $q:ctl)` | Boolean CTL structure | Boolean composition over CTL formulas. |
 
@@ -154,7 +154,7 @@ Documentation metavariables start with `$` and include a type tag, for example `
 | `(diamond $p:mu)`, `(box $p:mu)` | next-step modalities | Existential and universal modal operators. |
 | `(mu $X:symbol $body:mu)`, `(nu $X:symbol $body:mu)` | fixpoint variable plus body | Least and greatest fixpoints. |
 | `(not $p:mu)`, `(and $p:mu $q:mu)`, `(or $p:mu $q:mu)` | Boolean mu structure | Boolean composition over formulas. |
-| `(in-state $actor:symbol $state:symbol)`, `(mailbox-has $actor:symbol $msg:value)` | same atoms as CTL | Visible-behavior predicates shared with the CTL surface syntax. |
+| `(in-state $actor:symbol $state:symbol)`, `(mailbox-has $actor:symbol $msg:value)` | same atoms as CTL | Visible-behavior checks shared with the CTL surface syntax. |
 
 
 
@@ -195,7 +195,7 @@ An actor role has:
 Each runtime actor is created explicitly with `(instance ActorName RoleName (queue N) (PeerRole InstanceName...)...)`.
 `N` is the mailbox length for that concrete actor.
 Each actor owns its own state. Messages do not mutate the actor directly; they accumulate in the mailbox until the actor reaches a receive-ready transition.
-The current control location is explicit in actor-local data and changes through `become`; it is not inferred from overlapping state predicates.
+The current control location is explicit in actor-local data and changes through `become`; it is not inferred from overlapping state-selection rules.
 
 ## State
 
@@ -370,7 +370,7 @@ This is not a continuous-time simulator. It is a small executable control model 
 
 That is usually enough for inspectable CTL properties over visible behavior, such as whether the queue actor reaches particular control states or whether particular request messages are still buffered in the mailbox.
 
-The internal counters in this queue model still matter operationally because they drive guards and actions, but they are not part of the CTL proposition language.
+The internal counters in this queue model still matter operationally because they drive guards and actions, but they are not part of the CTL assertion language.
 
 The Mermaid artifacts below are a useful companion view for this example:
 
@@ -538,10 +538,10 @@ That is the practical reading users need:
 
 Examples:
 
-- `(ef (in-state Negotiator ceasefire))`
-- `(af (in-state CivilianSupply stabilized))`
-- `(ag (not (mailbox-has EarlyWarning false-alarm)))`
-- `(eg (in-state Frontline mobilizing))`
+- `(possibly (in-state Negotiator ceasefire))`
+- `(eventually (in-state CivilianSupply stabilized))`
+- `(always (not (mailbox-has EarlyWarning false-alarm)))`
+- `(can-keep (in-state Frontline mobilizing))`
 
 ## CTL And μ-Calculus
 
@@ -713,8 +713,21 @@ The canonical examples are generated as exact input/output pairs: the literal Li
 		(instance Relay RelayRole (queue 1) (ServerRole Server))
 		(instance Server ServerRole (queue 1))
 
-		(assert (ef (in-state Server done)))
-		(assert (af (in-state Server done)))
+		(assert (next-always (in-state Client done)))
+		(assert (next-always (mailbox-has Relay '(message (type ping)))))
+		(assert (next-possibly (and (in-state Client done) (mailbox-has Relay '(message (type ping))))))
+		(assert (possibly (in-state Relay done)))
+		(assert (eventually (in-state Relay done)))
+		(assert (possibly (mailbox-has Server '(message (type ping)))))
+		(assert (eventually (mailbox-has Server '(message (type ping)))))
+		(assert (possibly (in-state Server done)))
+		(assert (eventually (in-state Server done)))
+		(assert (possibly (and (in-state Client done) (in-state Server done))))
+		(assert (eventually (and (in-state Client done) (in-state Server done))))
+		(assert (always (not (mailbox-has Client '(message (type ping))))))
+		(assert (always (implies (in-state Server done) (in-state Client done))))
+		(assert (not (possibly (mailbox-has Relay '(message (type pong))))))
+		(assert (not (possibly (mailbox-has Server '(message (type pong))))))
 
 		(xyplot message_outstanding
 			(title "Message Chain Backlog By Step")
@@ -793,8 +806,21 @@ classDiagram
 
 #### CTL Outcomes
 
-- `PASS` `(ef (in-state Server done))`: Possibly Server is in state done
-- `PASS` `(af (in-state Server done))`: Eventually Server is in state done
+- `PASS` `(next-always (in-state Client done))`: (next-always (in-state Client done))
+- `PASS` `(next-always (mailbox-has Relay (quote (message (type ping)))))`: (next-always (mailbox-has Relay (quote (message (type ping)))))
+- `PASS` `(next-possibly (and (in-state Client done) (mailbox-has Relay (quote (message (type ping))))))`: (next-possibly (and (in-state Client done) (mailbox-has Relay (quote (message (type ping))))))
+- `PASS` `(possibly (in-state Relay done))`: (possibly (in-state Relay done))
+- `PASS` `(eventually (in-state Relay done))`: (eventually (in-state Relay done))
+- `PASS` `(possibly (mailbox-has Server (quote (message (type ping)))))`: (possibly (mailbox-has Server (quote (message (type ping)))))
+- `PASS` `(eventually (mailbox-has Server (quote (message (type ping)))))`: (eventually (mailbox-has Server (quote (message (type ping)))))
+- `PASS` `(possibly (in-state Server done))`: (possibly (in-state Server done))
+- `PASS` `(eventually (in-state Server done))`: (eventually (in-state Server done))
+- `PASS` `(possibly (and (in-state Client done) (in-state Server done)))`: (possibly (and (in-state Client done) (in-state Server done)))
+- `PASS` `(eventually (and (in-state Client done) (in-state Server done)))`: (eventually (and (in-state Client done) (in-state Server done)))
+- `PASS` `(always (not (mailbox-has Client (quote (message (type ping))))))`: (always (not (mailbox-has Client (quote (message (type ping))))))
+- `PASS` `(always (implies (in-state Server done) (in-state Client done)))`: (always (implies (in-state Server done) (in-state Client done)))
+- `PASS` `(not (possibly (mailbox-has Relay (quote (message (type pong))))))`: Not (possibly (mailbox-has Relay (quote (message (type pong)))))
+- `PASS` `(not (possibly (mailbox-has Server (quote (message (type pong))))))`: Not (possibly (mailbox-has Server (quote (message (type pong)))))
 
 #### Line Graphs
 
@@ -1147,40 +1173,40 @@ xychart-beta
 		(instance CustomerB CustomerRole (queue 1))
 		(instance CustomerC CustomerRole (queue 1))
 
-		(assert (ax (in-state Production dispatched_north)))
-		(assert (ef (in-state Production dispatched_north)))
-		(assert (ef (in-state Production dispatched_south)))
-		(assert (af (in-state Production done)))
-		(assert (ef (mailbox-has TruckNorth
+		(assert (next-always (in-state Production dispatched_north)))
+		(assert (possibly (in-state Production dispatched_north)))
+		(assert (possibly (in-state Production dispatched_south)))
+		(assert (eventually (in-state Production done)))
+		(assert (possibly (mailbox-has TruckNorth
 			'(event
 				(type shipment)
 				(from Production)
 				(to TruckNorth)
 				(tstamp 1)
 				(values (kind rye) (batch morning))))))
-		(assert (ef (mailbox-has TruckSouth
+		(assert (possibly (mailbox-has TruckSouth
 			'(event
 				(type shipment)
 				(from Production)
 				(to TruckSouth)
 				(tstamp 2)
 				(values (kind wheat) (batch afternoon))))))
-		(assert (not (ef (mailbox-has TruckSouth
+		(assert (not (possibly (mailbox-has TruckSouth
 			'(event
 				(type shipment)
 				(from Production)
 				(to TruckSouth)
 				(tstamp 1)
 				(values (kind rye) (batch morning)))))))
-		(assert (ef (in-state TruckNorth delivered_a)))
-		(assert (ef (in-state TruckSouth delivered_b)))
-		(assert (af (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
-		(assert (not (ef (in-state TruckNorth delivered_b))))
-		(assert (ef (in-state StoreA stocked_rye)))
-		(assert (ef (in-state StoreB stocked_wheat)))
-		(assert (ag (in-state StoreC waiting)))
-		(assert (ag (in-state CustomerC browsing)))
-		(assert (ag (not (or
+		(assert (possibly (in-state TruckNorth delivered_a)))
+		(assert (possibly (in-state TruckSouth delivered_b)))
+		(assert (eventually (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+		(assert (not (possibly (in-state TruckNorth delivered_b))))
+		(assert (possibly (in-state StoreA stocked_rye)))
+		(assert (possibly (in-state StoreB stocked_wheat)))
+		(assert (always (in-state StoreC waiting)))
+		(assert (always (in-state CustomerC browsing)))
+		(assert (always (not (or
 			(mailbox-has StoreC
 				'(event
 					(type delivery)
@@ -1195,28 +1221,28 @@ xychart-beta
 					(to Store)
 					(tstamp 4)
 					(values (kind wheat) (batch afternoon))))))))
-		(assert (ef (mailbox-has CustomerA
+		(assert (possibly (mailbox-has CustomerA
 			'(event
 				(type offer)
 				(from Store)
 				(to Customer)
 				(tstamp 5)
 				(values (kind rye) (batch morning))))))
-		(assert (ef (mailbox-has CustomerB
+		(assert (possibly (mailbox-has CustomerB
 			'(event
 				(type offer)
 				(from Store)
 				(to Customer)
 				(tstamp 6)
 				(values (kind wheat) (batch afternoon))))))
-		(assert (ef (in-state CustomerA bought_rye)))
-		(assert (ef (in-state CustomerB bought_wheat)))
-		(assert (af (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
-		(assert (af (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat))))
-		(assert (ef (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
-		(assert (not (ef (in-state StoreC stocked_rye))))
-		(assert (not (ef (in-state CustomerC bought_rye))))
-		(assert (ef (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+		(assert (possibly (in-state CustomerA bought_rye)))
+		(assert (possibly (in-state CustomerB bought_wheat)))
+		(assert (eventually (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (eventually (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat))))
+		(assert (possibly (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (not (possibly (in-state StoreC stocked_rye))))
+		(assert (not (possibly (in-state CustomerC bought_rye))))
+		(assert (possibly (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
 
 		(xyplot bakery_outstanding
 			(title "Bakery Outstanding Messages By Step")
@@ -1411,32 +1437,32 @@ classDiagram
 
 #### CTL Outcomes
 
-- `PASS` `(ax (in-state Production dispatched_north))`: Next always Production is in state dispatched_north
-- `PASS` `(ef (in-state Production dispatched_north))`: Possibly Production is in state dispatched_north
-- `PASS` `(ef (in-state Production dispatched_south))`: Possibly Production is in state dispatched_south
-- `PASS` `(af (in-state Production done))`: Eventually Production is in state done
-- `PASS` `(ef (mailbox-has TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))))`: Possibly TruckNorth mailbox has (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))
-- `PASS` `(ef (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))))`: Possibly TruckSouth mailbox has (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))
-- `PASS` `(not (ef (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning)))))))`: Not Possibly TruckSouth mailbox has (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning))))
-- `PASS` `(ef (in-state TruckNorth delivered_a))`: Possibly TruckNorth is in state delivered_a
-- `PASS` `(ef (in-state TruckSouth delivered_b))`: Possibly TruckSouth is in state delivered_b
-- `PASS` `(af (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: Eventually (TruckNorth is in state delivered_a) and (TruckSouth is in state delivered_b)
-- `PASS` `(not (ef (in-state TruckNorth delivered_b)))`: Not Possibly TruckNorth is in state delivered_b
-- `PASS` `(ef (in-state StoreA stocked_rye))`: Possibly StoreA is in state stocked_rye
-- `PASS` `(ef (in-state StoreB stocked_wheat))`: Possibly StoreB is in state stocked_wheat
-- `PASS` `(ag (in-state StoreC waiting))`: Always StoreC is in state waiting
-- `PASS` `(ag (in-state CustomerC browsing))`: Always CustomerC is in state browsing
-- `PASS` `(ag (not (or (mailbox-has StoreC (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (mailbox-has StoreC (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))))))`: Always Not (StoreC mailbox has (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) or (StoreC mailbox has (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon)))))
-- `PASS` `(ef (mailbox-has CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))))`: Possibly CustomerA mailbox has (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))
-- `PASS` `(ef (mailbox-has CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))))`: Possibly CustomerB mailbox has (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))
-- `PASS` `(ef (in-state CustomerA bought_rye))`: Possibly CustomerA is in state bought_rye
-- `PASS` `(ef (in-state CustomerB bought_wheat))`: Possibly CustomerB is in state bought_wheat
-- `PASS` `(af (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: Eventually (CustomerA is in state bought_rye) and (CustomerB is in state bought_wheat)
-- `PASS` `(af (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat)))`: Eventually (StoreA is in state sold_rye) and (StoreB is in state sold_wheat)
-- `PASS` `(ef (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: Possibly (CustomerA is in state bought_rye) and (CustomerB is in state bought_wheat)
-- `PASS` `(not (ef (in-state StoreC stocked_rye)))`: Not Possibly StoreC is in state stocked_rye
-- `PASS` `(not (ef (in-state CustomerC bought_rye)))`: Not Possibly CustomerC is in state bought_rye
-- `PASS` `(ef (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: Possibly (TruckNorth is in state delivered_a) and (TruckSouth is in state delivered_b)
+- `PASS` `(next-always (in-state Production dispatched_north))`: (next-always (in-state Production dispatched_north))
+- `PASS` `(possibly (in-state Production dispatched_north))`: (possibly (in-state Production dispatched_north))
+- `PASS` `(possibly (in-state Production dispatched_south))`: (possibly (in-state Production dispatched_south))
+- `PASS` `(eventually (in-state Production done))`: (eventually (in-state Production done))
+- `PASS` `(possibly (mailbox-has TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))))`: (possibly (mailbox-has TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))))
+- `PASS` `(possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))))`: (possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))))
+- `PASS` `(not (possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning)))))))`: Not (possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning))))))
+- `PASS` `(possibly (in-state TruckNorth delivered_a))`: (possibly (in-state TruckNorth delivered_a))
+- `PASS` `(possibly (in-state TruckSouth delivered_b))`: (possibly (in-state TruckSouth delivered_b))
+- `PASS` `(eventually (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: (eventually (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))
+- `PASS` `(not (possibly (in-state TruckNorth delivered_b)))`: Not (possibly (in-state TruckNorth delivered_b))
+- `PASS` `(possibly (in-state StoreA stocked_rye))`: (possibly (in-state StoreA stocked_rye))
+- `PASS` `(possibly (in-state StoreB stocked_wheat))`: (possibly (in-state StoreB stocked_wheat))
+- `PASS` `(always (in-state StoreC waiting))`: (always (in-state StoreC waiting))
+- `PASS` `(always (in-state CustomerC browsing))`: (always (in-state CustomerC browsing))
+- `PASS` `(always (not (or (mailbox-has StoreC (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (mailbox-has StoreC (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))))))`: (always (not (or (mailbox-has StoreC (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (mailbox-has StoreC (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))))))
+- `PASS` `(possibly (mailbox-has CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))))`: (possibly (mailbox-has CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))))
+- `PASS` `(possibly (mailbox-has CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))))`: (possibly (mailbox-has CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))))
+- `PASS` `(possibly (in-state CustomerA bought_rye))`: (possibly (in-state CustomerA bought_rye))
+- `PASS` `(possibly (in-state CustomerB bought_wheat))`: (possibly (in-state CustomerB bought_wheat))
+- `PASS` `(eventually (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: (eventually (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))
+- `PASS` `(eventually (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat)))`: (eventually (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat)))
+- `PASS` `(possibly (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: (possibly (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))
+- `PASS` `(not (possibly (in-state StoreC stocked_rye)))`: Not (possibly (in-state StoreC stocked_rye))
+- `PASS` `(not (possibly (in-state CustomerC bought_rye)))`: Not (possibly (in-state CustomerC bought_rye))
+- `PASS` `(possibly (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: (possibly (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))
 
 #### Line Graphs
 

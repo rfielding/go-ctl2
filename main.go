@@ -914,7 +914,7 @@ func visibleMuOnlyError(op string) error {
 
 func buildCTL(form Value) (CTLFormula, error) {
 	if !isList(form) || len(form.Items) == 0 {
-		return CTLFormula{}, adviceError("CTL formulas must be non-empty lists", "wrap the operator and its operands in parentheses, for example `(ef (in-state Server done))`")
+		return CTLFormula{}, adviceError("CTL formulas must be non-empty lists", "wrap the operator and its operands in parentheses, for example `(possibly (in-state Server done))`")
 	}
 
 	head, err := expectSymbol(form.Items[0], "ctl operator")
@@ -974,60 +974,60 @@ func buildCTL(form Value) (CTLFormula, error) {
 			return CTLFormula{}, err
 		}
 		return Implies(left, right), nil
-	case "ex":
+	case "ex", "next-possibly":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, operandError("ex", 1, "(ex p)")
+			return CTLFormula{}, operandError(head, 1, "(next-possibly p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return EX(inner), nil
-	case "ax":
+	case "ax", "next-always":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, operandError("ax", 1, "(ax p)")
+			return CTLFormula{}, operandError(head, 1, "(next-always p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return AX(inner), nil
-	case "ef":
+	case "ef", "possibly":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, operandError("ef", 1, "(ef p)")
+			return CTLFormula{}, operandError(head, 1, "(possibly p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return EF(inner), nil
-	case "af":
+	case "af", "eventually":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, operandError("af", 1, "(af p)")
+			return CTLFormula{}, operandError(head, 1, "(eventually p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return AF(inner), nil
-	case "eg":
+	case "eg", "can-keep":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, operandError("eg", 1, "(eg p)")
+			return CTLFormula{}, operandError(head, 1, "(can-keep p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
 			return CTLFormula{}, err
 		}
 		return EG(inner), nil
-	case "ag":
+	case "ag", "always":
 		items := stripOptionalDescription(form.Items, 2)
 		if len(items) != 2 {
-			return CTLFormula{}, operandError("ag", 1, "(ag p)")
+			return CTLFormula{}, operandError(head, 1, "(always p)")
 		}
 		inner, err := buildCTL(items[1])
 		if err != nil {
@@ -1097,7 +1097,7 @@ func buildCTL(form Value) (CTLFormula, error) {
 		}
 		return Atom(MailboxHas(actor, normalizePredicateLiteral(items[2]))), nil
 	default:
-		return CTLFormula{}, unsupportedFormError("CTL operator", head, []string{"`not`", "`and`", "`or`", "`implies`", "`ex`", "`ax`", "`ef`", "`af`", "`eg`", "`ag`", "`eu`", "`au`", "`in-state`", "`mailbox-has`"})
+		return CTLFormula{}, unsupportedFormError("CTL operator", head, []string{"`not`", "`and`", "`or`", "`implies`", "`ex`/`next-possibly`", "`ax`/`next-always`", "`ef`/`possibly`", "`af`/`eventually`", "`eg`/`can-keep`", "`ag`/`always`", "`eu`", "`au`", "`in-state`", "`mailbox-has`"})
 	}
 }
 
@@ -4271,8 +4271,21 @@ const docMessageModelSource = `
 		(instance Relay RelayRole (queue 1) (ServerRole Server))
 		(instance Server ServerRole (queue 1))
 
-		(assert (ef (in-state Server done)))
-		(assert (af (in-state Server done)))
+		(assert (next-always (in-state Client done)))
+		(assert (next-always (mailbox-has Relay '(message (type ping)))))
+		(assert (next-possibly (and (in-state Client done) (mailbox-has Relay '(message (type ping))))))
+		(assert (possibly (in-state Relay done)))
+		(assert (eventually (in-state Relay done)))
+		(assert (possibly (mailbox-has Server '(message (type ping)))))
+		(assert (eventually (mailbox-has Server '(message (type ping)))))
+		(assert (possibly (in-state Server done)))
+		(assert (eventually (in-state Server done)))
+		(assert (possibly (and (in-state Client done) (in-state Server done))))
+		(assert (eventually (and (in-state Client done) (in-state Server done))))
+		(assert (always (not (mailbox-has Client '(message (type ping))))))
+		(assert (always (implies (in-state Server done) (in-state Client done))))
+		(assert (not (possibly (mailbox-has Relay '(message (type pong))))))
+		(assert (not (possibly (mailbox-has Server '(message (type pong))))))
 
 		(xyplot message_outstanding
 			(title "Message Chain Backlog By Step")
@@ -4419,40 +4432,40 @@ const docBakeryModelSource = `
 		(instance CustomerB CustomerRole (queue 1))
 		(instance CustomerC CustomerRole (queue 1))
 
-		(assert (ax (in-state Production dispatched_north)))
-		(assert (ef (in-state Production dispatched_north)))
-		(assert (ef (in-state Production dispatched_south)))
-		(assert (af (in-state Production done)))
-		(assert (ef (mailbox-has TruckNorth
+		(assert (next-always (in-state Production dispatched_north)))
+		(assert (possibly (in-state Production dispatched_north)))
+		(assert (possibly (in-state Production dispatched_south)))
+		(assert (eventually (in-state Production done)))
+		(assert (possibly (mailbox-has TruckNorth
 			'(event
 				(type shipment)
 				(from Production)
 				(to TruckNorth)
 				(tstamp 1)
 				(values (kind rye) (batch morning))))))
-		(assert (ef (mailbox-has TruckSouth
+		(assert (possibly (mailbox-has TruckSouth
 			'(event
 				(type shipment)
 				(from Production)
 				(to TruckSouth)
 				(tstamp 2)
 				(values (kind wheat) (batch afternoon))))))
-		(assert (not (ef (mailbox-has TruckSouth
+		(assert (not (possibly (mailbox-has TruckSouth
 			'(event
 				(type shipment)
 				(from Production)
 				(to TruckSouth)
 				(tstamp 1)
 				(values (kind rye) (batch morning)))))))
-		(assert (ef (in-state TruckNorth delivered_a)))
-		(assert (ef (in-state TruckSouth delivered_b)))
-		(assert (af (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
-		(assert (not (ef (in-state TruckNorth delivered_b))))
-		(assert (ef (in-state StoreA stocked_rye)))
-		(assert (ef (in-state StoreB stocked_wheat)))
-		(assert (ag (in-state StoreC waiting)))
-		(assert (ag (in-state CustomerC browsing)))
-		(assert (ag (not (or
+		(assert (possibly (in-state TruckNorth delivered_a)))
+		(assert (possibly (in-state TruckSouth delivered_b)))
+		(assert (eventually (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+		(assert (not (possibly (in-state TruckNorth delivered_b))))
+		(assert (possibly (in-state StoreA stocked_rye)))
+		(assert (possibly (in-state StoreB stocked_wheat)))
+		(assert (always (in-state StoreC waiting)))
+		(assert (always (in-state CustomerC browsing)))
+		(assert (always (not (or
 			(mailbox-has StoreC
 				'(event
 					(type delivery)
@@ -4467,28 +4480,28 @@ const docBakeryModelSource = `
 					(to Store)
 					(tstamp 4)
 					(values (kind wheat) (batch afternoon))))))))
-		(assert (ef (mailbox-has CustomerA
+		(assert (possibly (mailbox-has CustomerA
 			'(event
 				(type offer)
 				(from Store)
 				(to Customer)
 				(tstamp 5)
 				(values (kind rye) (batch morning))))))
-		(assert (ef (mailbox-has CustomerB
+		(assert (possibly (mailbox-has CustomerB
 			'(event
 				(type offer)
 				(from Store)
 				(to Customer)
 				(tstamp 6)
 				(values (kind wheat) (batch afternoon))))))
-		(assert (ef (in-state CustomerA bought_rye)))
-		(assert (ef (in-state CustomerB bought_wheat)))
-		(assert (af (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
-		(assert (af (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat))))
-		(assert (ef (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
-		(assert (not (ef (in-state StoreC stocked_rye))))
-		(assert (not (ef (in-state CustomerC bought_rye))))
-		(assert (ef (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
+		(assert (possibly (in-state CustomerA bought_rye)))
+		(assert (possibly (in-state CustomerB bought_wheat)))
+		(assert (eventually (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (eventually (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat))))
+		(assert (possibly (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat))))
+		(assert (not (possibly (in-state StoreC stocked_rye))))
+		(assert (not (possibly (in-state CustomerC bought_rye))))
+		(assert (possibly (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b))))
 
 		(xyplot bakery_outstanding
 			(title "Bakery Outstanding Messages By Step")
@@ -4643,11 +4656,11 @@ func renderDocLanguageSections() (string, error) {
 		{Form: "`(cdr $xs:value)`", Params: "`$xs` list value", Semantics: "Returns the tail of a list."},
 	}
 	ctlForms := []languageFormDoc{
-		{Form: "`(in-state $actor:symbol $state:symbol)`", Params: "atomic state predicate", Semantics: "Asserts `$actor.state = $state` in the visible control graph."},
-		{Form: "`(mailbox-has $actor:symbol $msg:value)`", Params: "atomic mailbox predicate", Semantics: "Asserts the mailbox currently contains `$msg`."},
-		{Form: "`(ex $p:ctl)`, `(ax $p:ctl)`", Params: "next-step modalities", Semantics: "`EX` and `AX`."},
-		{Form: "`(ef $p:ctl)`, `(af $p:ctl)`", Params: "eventual modalities", Semantics: "`EF` and `AF`."},
-		{Form: "`(eg $p:ctl)`, `(ag $p:ctl)`", Params: "global modalities", Semantics: "`EG` and `AG`."},
+		{Form: "`(in-state $actor:symbol $state:symbol)`", Params: "atomic state observation", Semantics: "Checks whether `$actor.state = $state` in the visible control graph."},
+		{Form: "`(mailbox-has $actor:symbol $msg:value)`", Params: "atomic mailbox observation", Semantics: "Checks whether the mailbox currently contains `$msg`."},
+		{Form: "`(next-possibly $p:ctl)`, `(ex $p:ctl)`, `(next-always $p:ctl)`, `(ax $p:ctl)`", Params: "next-step modalities", Semantics: "Named and abbreviated forms for the next-step operators."},
+		{Form: "`(possibly $p:ctl)`, `(ef $p:ctl)`, `(eventually $p:ctl)`, `(af $p:ctl)`", Params: "reachability modalities", Semantics: "Named and abbreviated forms for possible and guaranteed eventual reachability."},
+		{Form: "`(can-keep $p:ctl)`, `(eg $p:ctl)`, `(always $p:ctl)`, `(ag $p:ctl)`", Params: "persistence modalities", Semantics: "Named and abbreviated forms for persistence and invariance."},
 		{Form: "`(eu $p:ctl $q:ctl)`, `(au $p:ctl $q:ctl)`", Params: "until modalities", Semantics: "`E[p U q]` and `A[p U q]`."},
 		{Form: "`(not $p:ctl)`, `(and $p:ctl $q:ctl)`, `(or $p:ctl $q:ctl)`, `(implies $p:ctl $q:ctl)`", Params: "Boolean CTL structure", Semantics: "Boolean composition over CTL formulas."},
 	}
@@ -4656,7 +4669,7 @@ func renderDocLanguageSections() (string, error) {
 		{Form: "`(diamond $p:mu)`, `(box $p:mu)`", Params: "next-step modalities", Semantics: "Existential and universal modal operators."},
 		{Form: "`(mu $X:symbol $body:mu)`, `(nu $X:symbol $body:mu)`", Params: "fixpoint variable plus body", Semantics: "Least and greatest fixpoints."},
 		{Form: "`(not $p:mu)`, `(and $p:mu $q:mu)`, `(or $p:mu $q:mu)`", Params: "Boolean mu structure", Semantics: "Boolean composition over formulas."},
-		{Form: "`(in-state $actor:symbol $state:symbol)`, `(mailbox-has $actor:symbol $msg:value)`", Params: "same atoms as CTL", Semantics: "Visible-behavior predicates shared with the CTL surface syntax."},
+		{Form: "`(in-state $actor:symbol $state:symbol)`, `(mailbox-has $actor:symbol $msg:value)`", Params: "same atoms as CTL", Semantics: "Visible-behavior checks shared with the CTL surface syntax."},
 	}
 
 	var b strings.Builder
@@ -4668,9 +4681,9 @@ func renderDocLanguageSections() (string, error) {
 	b.WriteString("Declare concrete runtime actors with (instance Name Role (queue n) (PeerRole Target...)...).\n")
 	b.WriteString("Every instance must declare its mailbox length with `(queue n)`. Use `0` for rendezvous and a positive integer for buffered mailboxes.\n")
 	b.WriteString("There is no implicit actor creation, implicit topology, or implicit next state.\n")
-	b.WriteString("Model the situation as a state machine, not as loose propositions.\n")
+	b.WriteString("Model the situation as a state machine, not as loose claims.\n")
 	b.WriteString("For real-world scenarios such as wars, elections, outages, or negotiations: define actors for the participants, explicit states for phases, and messages or random branches for external events.\n")
-	b.WriteString("Only assert propositions that are grounded in named states and mailbox contents.\n")
+	b.WriteString("Only write assertions that are grounded in named states and mailbox contents.\n")
 	b.WriteString("Every send target is written as a peer role in the actor definition and must resolve through the instance bindings.\n")
 	b.WriteString("Use (send Role msg) only when that role resolves to exactly one concrete actor.\n")
 	b.WriteString("Use (send-any Role msg) when a role may resolve to several concrete actors.\n")

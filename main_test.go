@@ -648,12 +648,44 @@ func TestDocBakeryModelAssertionsPassAsVisibleBehaviorCatalog(t *testing.T) {
 		t.Fatalf("renderRequirementsMarkdown returned error: %v", err)
 	}
 	for _, want := range []string{
-		"(assert (ef (in-state CustomerA bought_rye)))",
-		"`PASS` `(ef (in-state CustomerA bought_rye))`",
-		"`PASS` `(not (ef (in-state CustomerC bought_rye)))`",
+		"(assert (possibly (in-state CustomerA bought_rye)))",
+		"`PASS` `(possibly (in-state CustomerA bought_rye))`",
+		"`PASS` `(not (possibly (in-state CustomerC bought_rye)))`",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered bakery markdown to contain %q", want)
+		}
+	}
+}
+
+func TestDocMessageModelContainsManyPassingAssertions(t *testing.T) {
+	spec, err := docMessageModel()
+	if err != nil {
+		t.Fatalf("docMessageModel returned error: %v", err)
+	}
+	if len(spec.Assertions) < 10 {
+		t.Fatalf("expected many message-model assertions, got %d", len(spec.Assertions))
+	}
+	results, err := spec.CheckAssertions()
+	if err != nil {
+		t.Fatalf("CheckAssertions returned error: %v", err)
+	}
+	for _, result := range results {
+		if !result.Holds {
+			t.Fatalf("expected message-model assertion to hold: %s", result.Assertion.Spec.Items[1].String())
+		}
+	}
+	rendered, err := renderRequirementsMarkdown(spec)
+	if err != nil {
+		t.Fatalf("renderRequirementsMarkdown returned error: %v", err)
+	}
+	for _, want := range []string{
+		"`PASS` `(next-always (in-state Client done))`",
+		"`PASS` `(eventually (mailbox-has Server (quote (message (type ping)))))`",
+		"`PASS` `(not (possibly (mailbox-has Server (quote (message (type pong))))))`",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered message markdown to contain %q", want)
 		}
 	}
 }
@@ -1637,7 +1669,7 @@ func TestCTLDeadlockSelfLoopSupportsAX(t *testing.T) {
 }
 
 func TestCompileCTLRejectsUnknownOperator(t *testing.T) {
-	_, err := CompileCTL("(eventually (in-state A done))")
+	_, err := CompileCTL("(someday (in-state A done))")
 	if err == nil {
 		t.Fatal("expected compile error, got nil")
 	}
