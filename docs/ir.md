@@ -225,10 +225,10 @@ Full M/M/1/5-style example:
 
   (instance Client ClientRole (queue 1) (QueueRole Queue))
   (instance Queue QueueRole (queue 5))
+  (steps 100)
 
   (xyplot outstanding
     (title "Outstanding Messages By Step")
-    (steps 100)
     (metric sent-minus-received)))
 ```
 
@@ -578,9 +578,10 @@ Because transitions, sends, and receives are now logged as structured events, th
 One such plot is declared in the model itself with:
 
 ```lisp
+(steps 100)
+
 (xyplot queue_outstanding
   (title "Queue Backlog By Step")
-  (steps 100)
   (metric sent-minus-received))
 ```
 

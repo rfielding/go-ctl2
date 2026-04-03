@@ -80,14 +80,15 @@ Documentation metavariables start with `$` and include a type tag, for example `
 
 | Form | Metavariables | Operational Semantics |
 | --- | --- | --- |
-| `(model $item:form...)` | `$item := actor | instance | assert | xyplot` | Top-level container. Nothing is created implicitly. |
+| `(model $item:form...)` | `$item := actor | instance | assert | steps | xyplot` | Top-level container. Nothing is created implicitly. |
 | `(actor $role:symbol $item:form...)` | `$item := data | state` | Declares a reusable actor-role template. |
 | `(data $key:symbol $value:value)` | `$key` actor-local name | Initializes actor-local data before execution starts. |
 | `(state $name:symbol $edge:form...)` | `$name` control-state name | Declares one named control location. The first state is initial. |
 | `(edge $guard:guard $action:action...)` | `$guard` readiness condition | One atomic transition. Every branch must reach a `become`. |
 | `(instance $name:symbol $role:symbol (queue $n:int) ($peerRole:symbol $target:symbol...)...)` | `$n` mailbox capacity; `0` means rendezvous | Creates one runtime actor, sets its mailbox length, and fills its peer-role bindings. |
 | `(assert $p:ctl)` | `$p` CTL formula | Checks a branching-time requirement over the explored model. |
-| `(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))` | `$m := sent-minus-received | send-rate | receive-rate` | Requests a runtime-derived line chart. Use rate-style metrics for monotone event counts. |
+| `(steps $n:int)` |  | Sets the number of model steps used for simulation-derived plots and traces. |
+| `(xyplot $name:symbol (title $title:string) (metric $m:symbol))` | `$m := sent-minus-received | send-rate | receive-rate` | Requests a runtime-derived line chart over the model's configured step count. Use rate-style metrics for monotone event counts. |
 
 ## Guard Forms
 
@@ -337,10 +338,10 @@ Full M/M/1/5-style example:
 
   (instance Client ClientRole (queue 1) (QueueRole Queue))
   (instance Queue QueueRole (queue 5))
+  (steps 100)
 
   (xyplot outstanding
     (title "Outstanding Messages By Step")
-    (steps 100)
     (metric sent-minus-received)))
 ```
 
@@ -712,6 +713,7 @@ The canonical examples are generated as exact input/output pairs: the literal Li
 		(instance Client ClientRole (queue 1) (RelayRole Relay))
 		(instance Relay RelayRole (queue 1) (ServerRole Server))
 		(instance Server ServerRole (queue 1))
+		(steps 100)
 
 		(assert (next-always (in-state Client done)))
 		(assert (next-always (mailbox-has Relay '(message (type ping)))))
@@ -731,15 +733,12 @@ The canonical examples are generated as exact input/output pairs: the literal Li
 
 		(xyplot message_outstanding
 			(title "Message Chain Backlog By Step")
-			(steps 4)
 			(metric sent-minus-received))
 		(xyplot message_sends
 			(title "Message Chain Send Rate")
-			(steps 4)
 			(metric send-rate))
 		(xyplot message_receives
 			(title "Message Chain Receive Rate")
-			(steps 4)
 			(metric receive-rate)))
 ```
 
@@ -806,64 +805,64 @@ classDiagram
 
 #### CTL Outcomes
 
-- `PASS` `(next-always (in-state Client done))`: (next-always (in-state Client done))
-- `PASS` `(next-always (mailbox-has Relay (quote (message (type ping)))))`: (next-always (mailbox-has Relay (quote (message (type ping)))))
-- `PASS` `(next-possibly (and (in-state Client done) (mailbox-has Relay (quote (message (type ping))))))`: (next-possibly (and (in-state Client done) (mailbox-has Relay (quote (message (type ping))))))
-- `PASS` `(possibly (in-state Relay done))`: (possibly (in-state Relay done))
-- `PASS` `(eventually (in-state Relay done))`: (eventually (in-state Relay done))
-- `PASS` `(possibly (mailbox-has Server (quote (message (type ping)))))`: (possibly (mailbox-has Server (quote (message (type ping)))))
-- `PASS` `(eventually (mailbox-has Server (quote (message (type ping)))))`: (eventually (mailbox-has Server (quote (message (type ping)))))
-- `PASS` `(possibly (in-state Server done))`: (possibly (in-state Server done))
-- `PASS` `(eventually (in-state Server done))`: (eventually (in-state Server done))
-- `PASS` `(possibly (and (in-state Client done) (in-state Server done)))`: (possibly (and (in-state Client done) (in-state Server done)))
-- `PASS` `(eventually (and (in-state Client done) (in-state Server done)))`: (eventually (and (in-state Client done) (in-state Server done)))
-- `PASS` `(always (not (mailbox-has Client (quote (message (type ping))))))`: (always (not (mailbox-has Client (quote (message (type ping))))))
-- `PASS` `(always (implies (in-state Server done) (in-state Client done)))`: (always (implies (in-state Server done) (in-state Client done)))
-- `PASS` `(not (possibly (mailbox-has Relay (quote (message (type pong))))))`: Not (possibly (mailbox-has Relay (quote (message (type pong)))))
-- `PASS` `(not (possibly (mailbox-has Server (quote (message (type pong))))))`: Not (possibly (mailbox-has Server (quote (message (type pong)))))
+- `PASS` `(next-always (in-state Client done))`: Next always Client is in state done
+- `PASS` `(next-always (mailbox-has Relay (quote (message (type ping)))))`: Next always Relay mailbox has (quote (message (type ping)))
+- `PASS` `(next-possibly (and (in-state Client done) (mailbox-has Relay (quote (message (type ping))))))`: Next possibly (Client is in state done) and (Relay mailbox has (quote (message (type ping))))
+- `PASS` `(possibly (in-state Relay done))`: Possibly Relay is in state done
+- `PASS` `(eventually (in-state Relay done))`: Eventually Relay is in state done
+- `PASS` `(possibly (mailbox-has Server (quote (message (type ping)))))`: Possibly Server mailbox has (quote (message (type ping)))
+- `PASS` `(eventually (mailbox-has Server (quote (message (type ping)))))`: Eventually Server mailbox has (quote (message (type ping)))
+- `PASS` `(possibly (in-state Server done))`: Possibly Server is in state done
+- `PASS` `(eventually (in-state Server done))`: Eventually Server is in state done
+- `PASS` `(possibly (and (in-state Client done) (in-state Server done)))`: Possibly (Client is in state done) and (Server is in state done)
+- `PASS` `(eventually (and (in-state Client done) (in-state Server done)))`: Eventually (Client is in state done) and (Server is in state done)
+- `PASS` `(always (not (mailbox-has Client (quote (message (type ping))))))`: Always Not Client mailbox has (quote (message (type ping)))
+- `PASS` `(always (implies (in-state Server done) (in-state Client done)))`: Always If Server is in state done, then Client is in state done
+- `PASS` `(not (possibly (mailbox-has Relay (quote (message (type pong))))))`: Not Possibly Relay mailbox has (quote (message (type pong)))
+- `PASS` `(not (possibly (mailbox-has Server (quote (message (type pong))))))`: Not Possibly Server mailbox has (quote (message (type pong)))
 
 #### Line Graphs
 
 ##### Message Chain Backlog By Step
 
 ```lisp
-(xyplot message_outstanding (title "Message Chain Backlog By Step") (steps 4) (metric sent-minus-received))
+(xyplot message_outstanding (title "Message Chain Backlog By Step") (metric sent-minus-received))
 ```
 
 ```mermaid
 xychart-beta
     title "Message Chain Backlog By Step"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "sent - received" 0 --> 1
-    line [0, 1, 0, 1, 0]
+    line [0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### Message Chain Send Rate
 
 ```lisp
-(xyplot message_sends (title "Message Chain Send Rate") (steps 4) (metric send-rate))
+(xyplot message_sends (title "Message Chain Send Rate") (metric send-rate))
 ```
 
 ```mermaid
 xychart-beta
     title "Message Chain Send Rate"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
-    y-axis "sends per step" 0 --> 1
-    line [0, 1, 0, 1, 0]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "sends per model step" 0 --> 1
+    line [0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### Message Chain Receive Rate
 
 ```lisp
-(xyplot message_receives (title "Message Chain Receive Rate") (steps 4) (metric receive-rate))
+(xyplot message_receives (title "Message Chain Receive Rate") (metric receive-rate))
 ```
 
 ```mermaid
 xychart-beta
     title "Message Chain Receive Rate"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
-    y-axis "receives per step" 0 --> 1
-    line [0, 0, 1, 0, 1]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "receives per model step" 0 --> 1
+    line [0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ```
 
 #### Channel Sizes
@@ -873,9 +872,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Client Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### Relay Channel Size
@@ -883,9 +882,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Relay Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 1, 0, 0, 0]
+    line [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### Server Channel Size
@@ -893,9 +892,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Server Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 1, 0]
+    line [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ## Queue Example
@@ -939,10 +938,10 @@ xychart-beta
 
 		(instance Client ClientRole (queue 1) (QueueRole Queue))
 		(instance Queue QueueRole (queue 5))
+		(steps 100)
 
 		(xyplot queue_outstanding
 			(title "Queue Backlog By Step")
-			(steps 100)
 			(metric sent-minus-received)))
 ```
 
@@ -1005,13 +1004,13 @@ classDiagram
 ##### Queue Backlog By Step
 
 ```lisp
-(xyplot queue_outstanding (title "Queue Backlog By Step") (steps 100) (metric sent-minus-received))
+(xyplot queue_outstanding (title "Queue Backlog By Step") (metric sent-minus-received))
 ```
 
 ```mermaid
 xychart-beta
     title "Queue Backlog By Step"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "sent - received" 0 --> 5
     line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
 ```
@@ -1023,9 +1022,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Client Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### Queue Channel Size
@@ -1033,9 +1032,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Queue Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 5
-    line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5]
+    line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
 ```
 
 ## Bakery Visible-Behavior Example
@@ -1172,6 +1171,7 @@ xychart-beta
 		(instance CustomerA CustomerRole (queue 1))
 		(instance CustomerB CustomerRole (queue 1))
 		(instance CustomerC CustomerRole (queue 1))
+		(steps 100)
 
 		(assert (next-always (in-state Production dispatched_north)))
 		(assert (possibly (in-state Production dispatched_north)))
@@ -1246,15 +1246,12 @@ xychart-beta
 
 		(xyplot bakery_outstanding
 			(title "Bakery Outstanding Messages By Step")
-			(steps 11)
 			(metric sent-minus-received))
 		(xyplot bakery_sends
 			(title "Bakery Send Rate")
-			(steps 11)
 			(metric send-rate))
 		(xyplot bakery_receives
 			(title "Bakery Receive Rate")
-			(steps 11)
 			(metric receive-rate)))
 ```
 
@@ -1437,75 +1434,75 @@ classDiagram
 
 #### CTL Outcomes
 
-- `PASS` `(next-always (in-state Production dispatched_north))`: (next-always (in-state Production dispatched_north))
-- `PASS` `(possibly (in-state Production dispatched_north))`: (possibly (in-state Production dispatched_north))
-- `PASS` `(possibly (in-state Production dispatched_south))`: (possibly (in-state Production dispatched_south))
-- `PASS` `(eventually (in-state Production done))`: (eventually (in-state Production done))
-- `PASS` `(possibly (mailbox-has TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))))`: (possibly (mailbox-has TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))))
-- `PASS` `(possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))))`: (possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))))
-- `PASS` `(not (possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning)))))))`: Not (possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning))))))
-- `PASS` `(possibly (in-state TruckNorth delivered_a))`: (possibly (in-state TruckNorth delivered_a))
-- `PASS` `(possibly (in-state TruckSouth delivered_b))`: (possibly (in-state TruckSouth delivered_b))
-- `PASS` `(eventually (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: (eventually (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))
-- `PASS` `(not (possibly (in-state TruckNorth delivered_b)))`: Not (possibly (in-state TruckNorth delivered_b))
-- `PASS` `(possibly (in-state StoreA stocked_rye))`: (possibly (in-state StoreA stocked_rye))
-- `PASS` `(possibly (in-state StoreB stocked_wheat))`: (possibly (in-state StoreB stocked_wheat))
-- `PASS` `(always (in-state StoreC waiting))`: (always (in-state StoreC waiting))
-- `PASS` `(always (in-state CustomerC browsing))`: (always (in-state CustomerC browsing))
-- `PASS` `(always (not (or (mailbox-has StoreC (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (mailbox-has StoreC (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))))))`: (always (not (or (mailbox-has StoreC (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (mailbox-has StoreC (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))))))
-- `PASS` `(possibly (mailbox-has CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))))`: (possibly (mailbox-has CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))))
-- `PASS` `(possibly (mailbox-has CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))))`: (possibly (mailbox-has CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))))
-- `PASS` `(possibly (in-state CustomerA bought_rye))`: (possibly (in-state CustomerA bought_rye))
-- `PASS` `(possibly (in-state CustomerB bought_wheat))`: (possibly (in-state CustomerB bought_wheat))
-- `PASS` `(eventually (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: (eventually (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))
-- `PASS` `(eventually (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat)))`: (eventually (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat)))
-- `PASS` `(possibly (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: (possibly (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))
-- `PASS` `(not (possibly (in-state StoreC stocked_rye)))`: Not (possibly (in-state StoreC stocked_rye))
-- `PASS` `(not (possibly (in-state CustomerC bought_rye)))`: Not (possibly (in-state CustomerC bought_rye))
-- `PASS` `(possibly (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: (possibly (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))
+- `PASS` `(next-always (in-state Production dispatched_north))`: Next always Production is in state dispatched_north
+- `PASS` `(possibly (in-state Production dispatched_north))`: Possibly Production is in state dispatched_north
+- `PASS` `(possibly (in-state Production dispatched_south))`: Possibly Production is in state dispatched_south
+- `PASS` `(eventually (in-state Production done))`: Eventually Production is in state done
+- `PASS` `(possibly (mailbox-has TruckNorth (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))))`: Possibly TruckNorth mailbox has (quote (event (type shipment) (from Production) (to TruckNorth) (tstamp 1) (values (kind rye) (batch morning))))
+- `PASS` `(possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))))`: Possibly TruckSouth mailbox has (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 2) (values (kind wheat) (batch afternoon))))
+- `PASS` `(not (possibly (mailbox-has TruckSouth (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning)))))))`: Not Possibly TruckSouth mailbox has (quote (event (type shipment) (from Production) (to TruckSouth) (tstamp 1) (values (kind rye) (batch morning))))
+- `PASS` `(possibly (in-state TruckNorth delivered_a))`: Possibly TruckNorth is in state delivered_a
+- `PASS` `(possibly (in-state TruckSouth delivered_b))`: Possibly TruckSouth is in state delivered_b
+- `PASS` `(eventually (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: Eventually (TruckNorth is in state delivered_a) and (TruckSouth is in state delivered_b)
+- `PASS` `(not (possibly (in-state TruckNorth delivered_b)))`: Not Possibly TruckNorth is in state delivered_b
+- `PASS` `(possibly (in-state StoreA stocked_rye))`: Possibly StoreA is in state stocked_rye
+- `PASS` `(possibly (in-state StoreB stocked_wheat))`: Possibly StoreB is in state stocked_wheat
+- `PASS` `(always (in-state StoreC waiting))`: Always StoreC is in state waiting
+- `PASS` `(always (in-state CustomerC browsing))`: Always CustomerC is in state browsing
+- `PASS` `(always (not (or (mailbox-has StoreC (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) (mailbox-has StoreC (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon))))))))`: Always Not (StoreC mailbox has (quote (event (type delivery) (from TruckNorth) (to Store) (tstamp 3) (values (kind rye) (batch morning))))) or (StoreC mailbox has (quote (event (type delivery) (from TruckSouth) (to Store) (tstamp 4) (values (kind wheat) (batch afternoon)))))
+- `PASS` `(possibly (mailbox-has CustomerA (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))))`: Possibly CustomerA mailbox has (quote (event (type offer) (from Store) (to Customer) (tstamp 5) (values (kind rye) (batch morning))))
+- `PASS` `(possibly (mailbox-has CustomerB (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))))`: Possibly CustomerB mailbox has (quote (event (type offer) (from Store) (to Customer) (tstamp 6) (values (kind wheat) (batch afternoon))))
+- `PASS` `(possibly (in-state CustomerA bought_rye))`: Possibly CustomerA is in state bought_rye
+- `PASS` `(possibly (in-state CustomerB bought_wheat))`: Possibly CustomerB is in state bought_wheat
+- `PASS` `(eventually (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: Eventually (CustomerA is in state bought_rye) and (CustomerB is in state bought_wheat)
+- `PASS` `(eventually (and (in-state StoreA sold_rye) (in-state StoreB sold_wheat)))`: Eventually (StoreA is in state sold_rye) and (StoreB is in state sold_wheat)
+- `PASS` `(possibly (and (in-state CustomerA bought_rye) (in-state CustomerB bought_wheat)))`: Possibly (CustomerA is in state bought_rye) and (CustomerB is in state bought_wheat)
+- `PASS` `(not (possibly (in-state StoreC stocked_rye)))`: Not Possibly StoreC is in state stocked_rye
+- `PASS` `(not (possibly (in-state CustomerC bought_rye)))`: Not Possibly CustomerC is in state bought_rye
+- `PASS` `(possibly (and (in-state TruckNorth delivered_a) (in-state TruckSouth delivered_b)))`: Possibly (TruckNorth is in state delivered_a) and (TruckSouth is in state delivered_b)
 
 #### Line Graphs
 
 ##### Bakery Outstanding Messages By Step
 
 ```lisp
-(xyplot bakery_outstanding (title "Bakery Outstanding Messages By Step") (steps 11) (metric sent-minus-received))
+(xyplot bakery_outstanding (title "Bakery Outstanding Messages By Step") (metric sent-minus-received))
 ```
 
 ```mermaid
 xychart-beta
     title "Bakery Outstanding Messages By Step"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "sent - received" 0 --> 2
-    line [0, 1, 0, 1, 2, 1, 0, 0, 1, 2, 1, 0]
+    line [0, 1, 0, 1, 2, 1, 0, 0, 1, 2, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### Bakery Send Rate
 
 ```lisp
-(xyplot bakery_sends (title "Bakery Send Rate") (steps 11) (metric send-rate))
+(xyplot bakery_sends (title "Bakery Send Rate") (metric send-rate))
 ```
 
 ```mermaid
 xychart-beta
     title "Bakery Send Rate"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-    y-axis "sends per step" 0 --> 1
-    line [0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "sends per model step" 0 --> 1
+    line [0, 1, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### Bakery Receive Rate
 
 ```lisp
-(xyplot bakery_receives (title "Bakery Receive Rate") (steps 11) (metric receive-rate))
+(xyplot bakery_receives (title "Bakery Receive Rate") (metric receive-rate))
 ```
 
 ```mermaid
 xychart-beta
     title "Bakery Receive Rate"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-    y-axis "receives per step" 0 --> 1
-    line [0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "receives per model step" 0 --> 1
+    line [0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ```
 
 #### Channel Sizes
@@ -1515,9 +1512,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Production Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### TruckNorth Channel Size
@@ -1525,9 +1522,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "TruckNorth Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### TruckSouth Channel Size
@@ -1535,9 +1532,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "TruckSouth Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### StoreA Channel Size
@@ -1545,9 +1542,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "StoreA Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### StoreB Channel Size
@@ -1555,9 +1552,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "StoreB Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### StoreC Channel Size
@@ -1565,9 +1562,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "StoreC Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### CustomerA Channel Size
@@ -1575,9 +1572,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "CustomerA Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### CustomerB Channel Size
@@ -1585,9 +1582,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "CustomerB Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 ##### CustomerC Channel Size
@@ -1595,9 +1592,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "CustomerC Channel Size"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    x-axis "applied model step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "queued messages" 0 --> 1
-    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    line [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 
@@ -1608,9 +1605,10 @@ Because transitions, sends, and receives are now logged as structured events, th
 One such plot is declared in the model itself with:
 
 ```lisp
+(steps 100)
+
 (xyplot queue_outstanding
   (title "Queue Backlog By Step")
-  (steps 100)
   (metric sent-minus-received))
 ```
 
@@ -1621,9 +1619,9 @@ The line charts below are rendered from every `xyplot` declaration in the exampl
 ```mermaid
 xychart-beta
     title "Message Chain Backlog By Step"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
     y-axis "sent - received" 0 --> 1
-    line [0, 1, 0, 1, 0]
+    line [0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 <details>
@@ -1631,7 +1629,7 @@ xychart-beta
 <pre><code class="language-lisp">
 (xyplot message_outstanding
   (title "Message Chain Backlog By Step")
-  (steps 4)
+  (steps 100)
   (metric sent-minus-received))
 </code></pre>
 </details>
@@ -1641,9 +1639,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Message Chain Receive Rate"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
-    y-axis "receives per step" 0 --> 1
-    line [0, 0, 1, 0, 1]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "receives per model step" 0 --> 1
+    line [0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
 ```
 
 <details>
@@ -1651,7 +1649,7 @@ xychart-beta
 <pre><code class="language-lisp">
 (xyplot message_receives
   (title "Message Chain Receive Rate")
-  (steps 4)
+  (steps 100)
   (metric receive-rate))
 </code></pre>
 </details>
@@ -1661,9 +1659,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Message Chain Send Rate"
-    x-axis "applied runtime step" [0, 1, 2, 3, 4]
-    y-axis "sends per step" 0 --> 1
-    line [0, 1, 0, 1, 0]
+    x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
+    y-axis "sends per model step" 0 --> 1
+    line [0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 ```
 
 <details>
@@ -1671,7 +1669,7 @@ xychart-beta
 <pre><code class="language-lisp">
 (xyplot message_sends
   (title "Message Chain Send Rate")
-  (steps 4)
+  (steps 100)
   (metric send-rate))
 </code></pre>
 </details>
@@ -1682,8 +1680,8 @@ xychart-beta
 xychart-beta
     title "Queue Backlog By Step"
     x-axis "applied runtime step" [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
-    y-axis "sent - received" 0 --> 1
-    line [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0]
+    y-axis "sent - received" 0 --> 5
+    line [0, 1, 1, 2, 2, 2, 2, 2, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
 ```
 
 <details>

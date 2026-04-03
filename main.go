@@ -93,18 +93,21 @@ type Actor struct {
 }
 
 type Runtime struct {
-	Actors         []*Actor
-	Mailboxes      map[string][]Value
-	MailboxSenders map[string][]string
-	MailboxCaps    map[string]int
-	SyncInbox      map[string]Value
-	SyncSender     map[string]string
-	Trace          []string
-	Events         []Event
-	Step           int
-	DiceValue      float64
-	ChooseActorFn  func(*Runtime) int
-	Dice           func() float64
+	Actors              []*Actor
+	Mailboxes           map[string][]Value
+	MailboxSenders      map[string][]string
+	MailboxCaps         map[string]int
+	SyncInbox           map[string]Value
+	SyncSender          map[string]string
+	Trace               []string
+	Events              []Event
+	Step                int
+	DiceValue           float64
+	ChooseActorFn       func(*Runtime) int
+	Dice                func() float64
+	MailboxHistogram    map[string][]int // actorName → bucket[depth] = step-count
+	StateDwellHistogram map[string][]int // "actorName:stateName" → bucket[dwellSteps] = visit-count
+	actorStateEntryStep map[string]int   // actorName → step when actor entered its current state
 }
 
 type StepResult struct {
@@ -135,6 +138,17 @@ type Event struct {
 type MetricPoint struct {
 	Step  int
 	Value float64
+}
+
+type HistogramStats struct {
+	TotalSamples int
+	Mean         float64
+	StdDev       float64
+	Min          int
+	P50          int
+	P90          int
+	P99          int
+	Max          int
 }
 
 type StatePredicate func(*Runtime) bool
@@ -211,6 +225,7 @@ type RequirementsModel struct {
 	Declarations []ActorDeclaration
 	Assertions   []Assertion
 	Plots        []XYPlot
+	Steps        int
 	Spec         Value
 }
 
@@ -225,7 +240,6 @@ type ActorDeclaration struct {
 type XYPlot struct {
 	Name   string
 	Title  string
-	Steps  int
 	Metric string
 	Spec   Value
 }
@@ -245,12 +259,15 @@ type ExploredEdge struct {
 
 func NewRuntime(actors ...*Actor) *Runtime {
 	rt := &Runtime{
-		Actors:         actors,
-		Mailboxes:      make(map[string][]Value, len(actors)),
-		MailboxSenders: make(map[string][]string, len(actors)),
-		MailboxCaps:    make(map[string]int, len(actors)),
-		SyncInbox:      make(map[string]Value, len(actors)),
-		SyncSender:     make(map[string]string, len(actors)),
+		Actors:              actors,
+		Mailboxes:           make(map[string][]Value, len(actors)),
+		MailboxSenders:      make(map[string][]string, len(actors)),
+		MailboxCaps:         make(map[string]int, len(actors)),
+		SyncInbox:           make(map[string]Value, len(actors)),
+		SyncSender:          make(map[string]string, len(actors)),
+		MailboxHistogram:    make(map[string][]int, len(actors)),
+		StateDwellHistogram: make(map[string][]int),
+		actorStateEntryStep: make(map[string]int, len(actors)),
 		Dice: func() float64 {
 			return rand.Float64()
 		},
@@ -259,6 +276,8 @@ func NewRuntime(actors ...*Actor) *Runtime {
 		rt.Mailboxes[actor.Name] = nil
 		rt.MailboxSenders[actor.Name] = nil
 		rt.MailboxCaps[actor.Name] = -1
+		rt.MailboxHistogram[actor.Name] = nil
+		rt.actorStateEntryStep[actor.Name] = 0
 		if actor.Data == nil {
 			actor.Data = map[string]Value{}
 		}
@@ -327,6 +346,7 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 			StateName:      state.Name,
 			TransitionName: transition.Name,
 		})
+		rt.sampleStep(actor, state.Name)
 		if transition.Action == nil {
 			rt.Tracef("step: actor=%s state=%s transition=%s", actor.Name, state.Name, transition.Name)
 			if err := rt.validateTransitionNext(transition, actor); err != nil {
@@ -338,6 +358,7 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 					TransitionName: transition.Name,
 				}, err
 			}
+			rt.actorStateEntryStep[actor.Name] = rt.Step
 			return StepResult{
 				Applied:        true,
 				ActorName:      actor.Name,
@@ -364,6 +385,7 @@ func (rt *Runtime) StepActorDetailed(actor *Actor) (StepResult, error) {
 				TransitionName: transition.Name,
 			}, err
 		}
+		rt.actorStateEntryStep[actor.Name] = rt.Step
 		return StepResult{
 			Applied:        true,
 			ActorName:      actor.Name,
@@ -492,6 +514,45 @@ func (rt *Runtime) Tracef(format string, args ...interface{}) {
 	rt.Trace = append(rt.Trace, fmt.Sprintf(format, args...))
 }
 
+// histRecord increments bucket k in the histogram slice, growing it as needed.
+func histRecord(h *[]int, k int) {
+	if k < 0 {
+		k = 0
+	}
+	for len(*h) <= k {
+		*h = append(*h, 0)
+	}
+	(*h)[k]++
+}
+
+// sampleStep is called once per applied step: samples all mailbox depths and
+// records the dwell time (in steps) spent by actor in fromState before leaving.
+func (rt *Runtime) sampleStep(actor *Actor, fromState string) {
+	for _, a := range rt.Actors {
+		h := rt.MailboxHistogram[a.Name]
+		histRecord(&h, len(rt.Mailboxes[a.Name]))
+		rt.MailboxHistogram[a.Name] = h
+	}
+	entry := rt.actorStateEntryStep[actor.Name]
+	dwell := rt.Step - entry
+	key := actor.Name + ":" + fromState
+	h := rt.StateDwellHistogram[key]
+	histRecord(&h, dwell)
+	rt.StateDwellHistogram[key] = h
+}
+
+// recordRendezvousDwell records the dwell time for a rendezvous target actor
+// leaving fromState during a synchronous handoff, and resets its entry step.
+func (rt *Runtime) recordRendezvousDwell(actor *Actor, fromState string) {
+	entry := rt.actorStateEntryStep[actor.Name]
+	dwell := rt.Step - entry
+	key := actor.Name + ":" + fromState
+	h := rt.StateDwellHistogram[key]
+	histRecord(&h, dwell)
+	rt.StateDwellHistogram[key] = h
+	rt.actorStateEntryStep[actor.Name] = rt.Step
+}
+
 func (rt *Runtime) rollDice() {
 	if rt.Dice == nil {
 		rt.DiceValue = 0
@@ -582,19 +643,93 @@ func (rt *Runtime) MailboxSizeSeries(actorName string) []MetricPoint {
 	return out
 }
 
+// histPercentile returns the value at rank p (0‥1) in a count histogram.
+func histPercentile(hist []int, total int, p float64) int {
+	target := int(math.Ceil(p * float64(total)))
+	if target < 1 {
+		target = 1
+	}
+	cumulative := 0
+	for k, c := range hist {
+		cumulative += c
+		if cumulative >= target {
+			return k
+		}
+	}
+	return len(hist) - 1
+}
+
+// ComputeHistogramStats derives summary statistics from a count histogram.
+// hist[k] is the number of observations with value k.
+func ComputeHistogramStats(hist []int) HistogramStats {
+	total := 0
+	for _, c := range hist {
+		total += c
+	}
+	if total == 0 {
+		return HistogramStats{}
+	}
+	minVal := -1
+	maxVal := 0
+	sum := 0.0
+	for k, c := range hist {
+		if c == 0 {
+			continue
+		}
+		sum += float64(k) * float64(c)
+		maxVal = k
+		if minVal == -1 {
+			minVal = k
+		}
+	}
+	if minVal == -1 {
+		minVal = 0
+	}
+	mean := sum / float64(total)
+	variance := 0.0
+	for k, c := range hist {
+		diff := float64(k) - mean
+		variance += diff * diff * float64(c)
+	}
+	stddev := math.Sqrt(variance / float64(total))
+	return HistogramStats{
+		TotalSamples: total,
+		Mean:         mean,
+		StdDev:       stddev,
+		Min:          minVal,
+		P50:          histPercentile(hist, total, 0.50),
+		P90:          histPercentile(hist, total, 0.90),
+		P99:          histPercentile(hist, total, 0.99),
+		Max:          maxVal,
+	}
+}
+
+// MailboxHistogramStats returns depth-distribution statistics for an actor's mailbox.
+func (rt *Runtime) MailboxHistogramStats(actorName string) HistogramStats {
+	return ComputeHistogramStats(rt.MailboxHistogram[actorName])
+}
+
+// StateDwellStats returns dwell-time statistics for an actor in a named state.
+func (rt *Runtime) StateDwellStats(actorName, stateName string) HistogramStats {
+	return ComputeHistogramStats(rt.StateDwellHistogram[actorName+":"+stateName])
+}
+
 func (rt *Runtime) Clone() *Runtime {
 	clone := &Runtime{
-		Actors:         make([]*Actor, len(rt.Actors)),
-		Mailboxes:      make(map[string][]Value, len(rt.Mailboxes)),
-		MailboxSenders: cloneStringSliceMap(rt.MailboxSenders),
-		MailboxCaps:    make(map[string]int, len(rt.MailboxCaps)),
-		SyncInbox:      cloneValueMap(rt.SyncInbox),
-		SyncSender:     cloneStringMap(rt.SyncSender),
-		Trace:          append([]string(nil), rt.Trace...),
-		Events:         append([]Event(nil), rt.Events...),
-		Step:           rt.Step,
-		DiceValue:      rt.DiceValue,
-		Dice:           rt.Dice,
+		Actors:              make([]*Actor, len(rt.Actors)),
+		Mailboxes:           make(map[string][]Value, len(rt.Mailboxes)),
+		MailboxSenders:      cloneStringSliceMap(rt.MailboxSenders),
+		MailboxCaps:         make(map[string]int, len(rt.MailboxCaps)),
+		SyncInbox:           cloneValueMap(rt.SyncInbox),
+		SyncSender:          cloneStringMap(rt.SyncSender),
+		Trace:               append([]string(nil), rt.Trace...),
+		Events:              append([]Event(nil), rt.Events...),
+		Step:                rt.Step,
+		DiceValue:           rt.DiceValue,
+		Dice:                rt.Dice,
+		MailboxHistogram:    cloneIntSliceMap(rt.MailboxHistogram),
+		StateDwellHistogram: cloneIntSliceMap(rt.StateDwellHistogram),
+		actorStateEntryStep: cloneIntMap(rt.actorStateEntryStep),
 	}
 	for i, actor := range rt.Actors {
 		cloneActor := &Actor{
@@ -1742,6 +1877,7 @@ func (rt *Runtime) rendezvous(from, target string, message Value) error {
 			delete(rt.SyncSender, target)
 			return err
 		}
+		rt.recordRendezvousDwell(targetActor, state.Name)
 		return nil
 	}
 	return fmt.Errorf("no rendezvous receiver ready on %s for %s", target, message.String())
@@ -2017,7 +2153,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 	if !isListHead(form, "model") || len(form.Items) < 2 {
 		return nil, syntaxError("model", "(model item...)")
 	}
-	model := &RequirementsModel{Spec: form}
+	model := &RequirementsModel{Spec: form, Steps: 32}
 	actorTypes := map[string]*Actor{}
 	for _, item := range form.Items[1:] {
 		switch {
@@ -2043,6 +2179,15 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 				return nil, err
 			}
 			model.Assertions = append(model.Assertions, assertion)
+		case isListHead(item, "steps"):
+			if len(item.Items) != 2 {
+				return nil, syntaxError("steps", "(steps n)")
+			}
+			steps, err := valueInt(item.Items[1])
+			if err != nil {
+				return nil, err
+			}
+			model.Steps = steps
 		case isListHead(item, "xyplot"):
 			plot, err := buildXYPlot(item)
 			if err != nil {
@@ -2050,7 +2195,7 @@ func buildRequirementsModel(form Value) (*RequirementsModel, error) {
 			}
 			model.Plots = append(model.Plots, plot)
 		default:
-			return nil, adviceError("model items must be `actor`, `instance`, `assert`, or `xyplot` forms", "move any other forms inside an actor state or inside a supported top-level form")
+			return nil, adviceError("model items must be `actor`, `instance`, `assert`, `steps`, or `xyplot` forms", "move any other forms inside an actor state or inside a supported top-level form")
 		}
 	}
 	if len(model.Declarations) == 0 {
@@ -2337,13 +2482,12 @@ func buildXYPlot(form Value) (XYPlot, error) {
 	plot := XYPlot{
 		Name:   name,
 		Title:  name,
-		Steps:  100,
 		Metric: "sent-minus-received",
 		Spec:   form,
 	}
 	for _, item := range form.Items[2:] {
 		if !isList(item) || len(item.Items) == 0 {
-			return XYPlot{}, adviceError("xyplot options must be non-empty lists", "rewrite each option as a list such as `(title \"Queue backlog\")` or `(steps 100)`")
+			return XYPlot{}, adviceError("xyplot options must be non-empty lists", "rewrite each option as a list such as `(title \"Queue backlog\")` or `(metric send-rate)`")
 		}
 		head, err := expectSymbol(item.Items[0], "xyplot option")
 		if err != nil {
@@ -2355,15 +2499,6 @@ func buildXYPlot(form Value) (XYPlot, error) {
 				return XYPlot{}, syntaxError("xyplot title", "(title \"...\")")
 			}
 			plot.Title = item.Items[1].Text
-		case "steps":
-			if len(item.Items) != 2 {
-				return XYPlot{}, syntaxError("xyplot steps", "(steps n)")
-			}
-			steps, err := valueInt(item.Items[1])
-			if err != nil {
-				return XYPlot{}, err
-			}
-			plot.Steps = steps
 		case "metric":
 			if len(item.Items) != 2 {
 				return XYPlot{}, syntaxError("xyplot metric", "(metric name)")
@@ -2379,7 +2514,7 @@ func buildXYPlot(form Value) (XYPlot, error) {
 			}
 			plot.Metric = metric
 		default:
-			return XYPlot{}, unsupportedFormError("xyplot option", head, []string{"`title`", "`steps`", "`metric`"})
+			return XYPlot{}, unsupportedFormError("xyplot option", head, []string{"`title`", "`metric`"})
 		}
 	}
 	return plot, nil
@@ -3370,6 +3505,25 @@ func cloneStringSliceMap(in map[string][]string) map[string][]string {
 	return out
 }
 
+func cloneIntSliceMap(in map[string][]int) map[string][]int {
+	if len(in) == 0 {
+		return make(map[string][]int)
+	}
+	out := make(map[string][]int, len(in))
+	for key, value := range in {
+		out[key] = append([]int(nil), value...)
+	}
+	return out
+}
+
+func cloneIntMap(in map[string]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 func cloneStates(in []State) []State {
 	if len(in) == 0 {
 		return nil
@@ -3848,7 +4002,6 @@ func (p XYPlot) Lisp() Value {
 		Symbol("xyplot"),
 		Symbol(p.Name),
 		List(Symbol("title"), String(p.Title)),
-		List(Symbol("steps"), Number(strconv.Itoa(p.Steps))),
 		List(Symbol("metric"), Symbol(p.Metric)),
 	)
 }
@@ -3864,6 +4017,7 @@ func (m RequirementsModel) Lisp() Value {
 	for _, decl := range m.Declarations {
 		items = append(items, decl.Lisp())
 	}
+	items = append(items, List(Symbol("steps"), Number(strconv.Itoa(m.Steps))))
 	for _, assertion := range m.Assertions {
 		items = append(items, assertion.Lisp())
 	}
@@ -4183,6 +4337,7 @@ type docPlotData struct {
 
 type docPlotBinding struct {
 	Plot     XYPlot
+	Model    *RequirementsModel
 	Subtitle string
 	Runtime  func(int) (*Runtime, error)
 }
@@ -4236,10 +4391,10 @@ const docQueueModelSource = `
 
 		(instance Client ClientRole (queue 1) (QueueRole Queue))
 		(instance Queue QueueRole (queue 5))
+		(steps 100)
 
 		(xyplot queue_outstanding
 			(title "Queue Backlog By Step")
-			(steps 100)
 			(metric sent-minus-received)))
 `
 
@@ -4270,6 +4425,7 @@ const docMessageModelSource = `
 		(instance Client ClientRole (queue 1) (RelayRole Relay))
 		(instance Relay RelayRole (queue 1) (ServerRole Server))
 		(instance Server ServerRole (queue 1))
+		(steps 100)
 
 		(assert (next-always (in-state Client done)))
 		(assert (next-always (mailbox-has Relay '(message (type ping)))))
@@ -4289,15 +4445,12 @@ const docMessageModelSource = `
 
 		(xyplot message_outstanding
 			(title "Message Chain Backlog By Step")
-			(steps 4)
 			(metric sent-minus-received))
 		(xyplot message_sends
 			(title "Message Chain Send Rate")
-			(steps 4)
 			(metric send-rate))
 		(xyplot message_receives
 			(title "Message Chain Receive Rate")
-			(steps 4)
 			(metric receive-rate)))
 `
 
@@ -4431,6 +4584,7 @@ const docBakeryModelSource = `
 		(instance CustomerA CustomerRole (queue 1))
 		(instance CustomerB CustomerRole (queue 1))
 		(instance CustomerC CustomerRole (queue 1))
+		(steps 100)
 
 		(assert (next-always (in-state Production dispatched_north)))
 		(assert (possibly (in-state Production dispatched_north)))
@@ -4505,15 +4659,12 @@ const docBakeryModelSource = `
 
 		(xyplot bakery_outstanding
 			(title "Bakery Outstanding Messages By Step")
-			(steps 11)
 			(metric sent-minus-received))
 		(xyplot bakery_sends
 			(title "Bakery Send Rate")
-			(steps 11)
 			(metric send-rate))
 		(xyplot bakery_receives
 			(title "Bakery Receive Rate")
-			(steps 11)
 			(metric receive-rate)))
 `
 
@@ -4600,26 +4751,28 @@ func docPlotBindings() (map[string]docPlotBinding, error) {
 		for _, plot := range model.Plots {
 			out[plot.Name] = docPlotBinding{
 				Plot:     plot,
+				Model:    model,
 				Subtitle: subtitle,
 				Runtime:  runtime,
 			}
 		}
 	}
-	add(messageModel, "Runtime trace of the message-chain example.", docMessageRuntime)
-	add(queueModel, "Runtime trace of the M/M/1/5-style queue example.", docQueueRuntime)
+	add(messageModel, "Model run of the message-chain example.", docMessageRuntime)
+	add(queueModel, "Model run of the M/M/1/5-style queue example.", docQueueRuntime)
 	return out, nil
 }
 
 func renderDocLanguageSections() (string, error) {
 	modelForms := []languageFormDoc{
-		{Form: "`(model $item:form...)`", Params: "`$item := actor | instance | assert | xyplot`", Semantics: "Top-level container. Nothing is created implicitly."},
+		{Form: "`(model $item:form...)`", Params: "`$item := actor | instance | assert | steps | xyplot`", Semantics: "Top-level container. Nothing is created implicitly."},
 		{Form: "`(actor $role:symbol $item:form...)`", Params: "`$item := data | state`", Semantics: "Declares a reusable actor-role template."},
 		{Form: "`(data $key:symbol $value:value)`", Params: "`$key` actor-local name", Semantics: "Initializes actor-local data before execution starts."},
 		{Form: "`(state $name:symbol $edge:form...)`", Params: "`$name` control-state name", Semantics: "Declares one named control location. The first state is initial."},
 		{Form: "`(edge $guard:guard $action:action...)`", Params: "`$guard` readiness condition", Semantics: "One atomic transition. Every branch must reach a `become`."},
 		{Form: "`(instance $name:symbol $role:symbol (queue $n:int) ($peerRole:symbol $target:symbol...)...)`", Params: "`$n` mailbox capacity; `0` means rendezvous", Semantics: "Creates one runtime actor, sets its mailbox length, and fills its peer-role bindings."},
 		{Form: "`(assert $p:ctl)`", Params: "`$p` CTL formula", Semantics: "Checks a branching-time requirement over the explored model."},
-		{Form: "`(xyplot $name:symbol (title $title:string) (steps $n:int) (metric $m:symbol))`", Params: "`$m := sent-minus-received | send-rate | receive-rate`", Semantics: "Requests a runtime-derived line chart. Use rate-style metrics for monotone event counts."},
+		{Form: "`(steps $n:int)`", Params: "", Semantics: "Sets the number of model steps used for simulation-derived plots and traces."},
+		{Form: "`(xyplot $name:symbol (title $title:string) (metric $m:symbol))`", Params: "`$m := sent-minus-received | send-rate | receive-rate`", Semantics: "Requests a runtime-derived line chart over the model's configured step count. Use rate-style metrics for monotone event counts."},
 	}
 	guardForms := []languageFormDoc{
 		{Form: "`true`", Params: "none", Semantics: "Always enabled."},
@@ -4746,27 +4899,27 @@ func humanizeCTLValue(form Value) string {
 	}
 	head := form.Items[0].Text
 	switch head {
-	case "ef":
+	case "ef", "possibly":
 		if len(form.Items) == 2 {
 			return "Possibly " + humanizeCTLValue(form.Items[1])
 		}
-	case "ag":
+	case "ag", "always":
 		if len(form.Items) == 2 {
 			return "Always " + humanizeCTLValue(form.Items[1])
 		}
-	case "af":
+	case "af", "eventually":
 		if len(form.Items) == 2 {
 			return "Eventually " + humanizeCTLValue(form.Items[1])
 		}
-	case "ex":
+	case "ex", "next-possibly":
 		if len(form.Items) == 2 {
 			return "Next possibly " + humanizeCTLValue(form.Items[1])
 		}
-	case "ax":
+	case "ax", "next-always":
 		if len(form.Items) == 2 {
 			return "Next always " + humanizeCTLValue(form.Items[1])
 		}
-	case "eg":
+	case "eg", "can-keep":
 		if len(form.Items) == 2 {
 			return "Can keep " + humanizeCTLValue(form.Items[1]) + " forever"
 		}
@@ -4847,6 +5000,14 @@ func renderDocExampleMarkdown(item docExample) (string, error) {
 			fmt.Fprintf(&b, "##### %s\n\n```mermaid\n%s```\n\n", data.Title, renderPlotMermaid(data))
 		}
 	}
+	if item.Spec.Steps > 0 {
+		b.WriteString("#### Backpressure Statistics\n\n")
+		statsMarkdown, err := renderBackpressureStats(item.Spec)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(statsMarkdown)
+	}
 	return strings.TrimSpace(b.String()), nil
 }
 
@@ -4879,9 +5040,9 @@ func docPlotSeries(rt *Runtime, metric string) ([]MetricPoint, string, string, e
 		series := append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventCountSeries(EventReceive, nil)...)
 		return series, "cumulative receives", "receives", nil
 	case "send-rate":
-		return append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventRateSeries(EventSend, nil, 1)...), "sends per step", "send rate", nil
+		return append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventRateSeries(EventSend, nil, 1)...), "sends per model step", "send rate", nil
 	case "receive-rate":
-		return append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventRateSeries(EventReceive, nil, 1)...), "receives per step", "receive rate", nil
+		return append([]MetricPoint{{Step: 0, Value: 0}}, rt.EventRateSeries(EventReceive, nil, 1)...), "receives per model step", "receive rate", nil
 	case "sent-minus-received":
 		sendSeries := rt.EventCountSeries(EventSend, nil)
 		receiveSeries := rt.EventCountSeries(EventReceive, nil)
@@ -4911,14 +5072,29 @@ func docPlotSeries(rt *Runtime, metric string) ([]MetricPoint, string, string, e
 	}
 }
 
-func mailboxPlotDataForModel(spec *RequirementsModel) ([]docPlotData, error) {
-	steps := 32
-	for _, plot := range spec.Plots {
-		if plot.Steps > steps {
-			steps = plot.Steps
-		}
+func padMetricSeries(series []MetricPoint, steps int) []MetricPoint {
+	if steps < 0 {
+		steps = 0
 	}
-	rt, err := runModelForPlotUpTo(spec, steps)
+	if len(series) == 0 {
+		series = []MetricPoint{{Step: 0, Value: 0}}
+	}
+	last := series[len(series)-1]
+	for step := last.Step + 1; step <= steps; step++ {
+		series = append(series, MetricPoint{Step: step, Value: last.Value})
+	}
+	return series
+}
+
+func plotSubtitle(requestedSteps, appliedSteps int) string {
+	if appliedSteps >= requestedSteps {
+		return fmt.Sprintf("%d-step model run.", appliedSteps)
+	}
+	return fmt.Sprintf("%d-step model window; model quiesced after %d applied steps.", requestedSteps, appliedSteps)
+}
+
+func mailboxPlotDataForModel(spec *RequirementsModel) ([]docPlotData, error) {
+	rt, err := runModelForPlotUpTo(spec, spec.Steps)
 	if err != nil {
 		return nil, err
 	}
@@ -4927,12 +5103,12 @@ func mailboxPlotDataForModel(spec *RequirementsModel) ([]docPlotData, error) {
 		out = append(out, docPlotData{
 			Name:      diagramID(actor.Name) + "_channel_size",
 			Title:     fmt.Sprintf("%s Channel Size", actor.Name),
-			Subtitle:  fmt.Sprintf("%d-step runtime trace.", rt.Step),
-			Steps:     rt.Step,
+			Subtitle:  plotSubtitle(spec.Steps, rt.Step),
+			Steps:     spec.Steps,
 			Metric:    "mailbox-size",
 			YLabel:    "queued messages",
 			Legend:    actor.Name + " mailbox size",
-			Series:    rt.MailboxSizeSeries(actor.Name),
+			Series:    padMetricSeries(rt.MailboxSizeSeries(actor.Name), spec.Steps),
 			ImageName: diagramID(actor.Name) + "_channel_size.svg",
 		})
 	}
@@ -4964,7 +5140,7 @@ func docPlotManifestData() ([]docPlotData, error) {
 			Name:      binding.Plot.Name,
 			Title:     binding.Plot.Title,
 			Subtitle:  binding.Subtitle,
-			Steps:     binding.Plot.Steps,
+			Steps:     binding.Model.Steps,
 			Metric:    binding.Plot.Metric,
 			ImageName: binding.Plot.Name + ".svg",
 		})
@@ -5024,8 +5200,141 @@ func runModelForPlotUpTo(spec *RequirementsModel, steps int) (*Runtime, error) {
 	return rt, nil
 }
 
+func plotDataForModelWithRT(spec *RequirementsModel, plot XYPlot, rt *Runtime) (docPlotData, error) {
+	if rt == nil {
+		return plotDataForModel(spec, plot)
+	}
+	series, ylabel, legend, err := docPlotSeries(rt, plot.Metric)
+	if err != nil {
+		return docPlotData{}, err
+	}
+	series = padMetricSeries(series, spec.Steps)
+	return docPlotData{
+		Name:      plot.Name,
+		Title:     plot.Title,
+		Subtitle:  plotSubtitle(spec.Steps, rt.Step),
+		Steps:     spec.Steps,
+		Metric:    plot.Metric,
+		YLabel:    ylabel,
+		Legend:    legend,
+		Series:    series,
+		ImageName: plot.Name + ".svg",
+	}, nil
+}
+
+func mailboxPlotDataFromRT(spec *RequirementsModel, rt *Runtime) ([]docPlotData, error) {
+	var out []docPlotData
+	for _, actor := range rt.Actors {
+		out = append(out, docPlotData{
+			Name:      diagramID(actor.Name) + "_channel_size",
+			Title:     fmt.Sprintf("%s Channel Size", actor.Name),
+			Subtitle:  plotSubtitle(spec.Steps, rt.Step),
+			Steps:     spec.Steps,
+			Metric:    "mailbox-size",
+			YLabel:    "queued messages",
+			Legend:    actor.Name + " mailbox size",
+			Series:    padMetricSeries(rt.MailboxSizeSeries(actor.Name), spec.Steps),
+			ImageName: diagramID(actor.Name) + "_channel_size.svg",
+		})
+	}
+	return out, nil
+}
+
+func renderBackpressureStatsFromRT(spec *RequirementsModel, rt *Runtime) string {
+	var b strings.Builder
+
+	b.WriteString("### Queue Depth Distributions\n\n")
+	b.WriteString("Sampled once per applied scheduler step. Depth 0 = empty.\n\n")
+	b.WriteString("| Actor | Cap | Samples | Mean | σ | P50 | P90 | P99 | Max |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	anyQueue := false
+	for _, actor := range spec.Actors {
+		stats := rt.MailboxHistogramStats(actor.Name)
+		if stats.TotalSamples == 0 {
+			continue
+		}
+		cap := rt.MailboxCaps[actor.Name]
+		capStr := fmt.Sprintf("%d", cap)
+		if cap < 0 {
+			capStr = "∞"
+		} else if cap == 0 {
+			capStr = "rendezvous"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %d | %.2f | %.2f | %d | %d | %d | %d |\n",
+			actor.Name, capStr, stats.TotalSamples,
+			stats.Mean, stats.StdDev,
+			stats.P50, stats.P90, stats.P99, stats.Max)
+		anyQueue = true
+	}
+	if !anyQueue {
+		b.WriteString("_No buffered mailboxes in this model._\n")
+	}
+	b.WriteString("\n")
+
+	b.WriteString("### State Occupancy\n\n")
+	b.WriteString("Fraction of total scheduler steps each actor spent in each state.\n\n")
+	b.WriteString("| Actor | State | Steps | % Time |\n")
+	b.WriteString("| --- | --- | --- | --- |\n")
+	anyOccupancy := false
+	for _, actor := range spec.Actors {
+		totalSteps := 0
+		for _, state := range actor.States {
+			hist := rt.StateDwellHistogram[actor.Name+":"+state.Name]
+			for k, c := range hist {
+				totalSteps += k * c
+			}
+		}
+		if totalSteps == 0 {
+			continue
+		}
+		for _, state := range actor.States {
+			hist := rt.StateDwellHistogram[actor.Name+":"+state.Name]
+			stateSteps := 0
+			for k, c := range hist {
+				stateSteps += k * c
+			}
+			if stateSteps == 0 {
+				continue
+			}
+			pct := 100.0 * float64(stateSteps) / float64(totalSteps)
+			fmt.Fprintf(&b, "| %s | %s | %d | %.1f%% |\n",
+				actor.Name, state.Name, stateSteps, pct)
+			anyOccupancy = true
+		}
+	}
+	if !anyOccupancy {
+		b.WriteString("_No occupancy data recorded._\n")
+	}
+	b.WriteString("\n")
+
+	b.WriteString("### State Dwell Times (steps)\n\n")
+	b.WriteString("Number of scheduler steps an actor spent in each state before its next transition.\n\n")
+	b.WriteString("| Actor | State | Visits | Mean | σ | P50 | P90 | P99 | Max |\n")
+	b.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+	anyDwell := false
+	for _, actor := range spec.Actors {
+		for _, state := range actor.States {
+			stats := rt.StateDwellStats(actor.Name, state.Name)
+			if stats.TotalSamples == 0 {
+				continue
+			}
+			fmt.Fprintf(&b, "| %s | %s | %d | %.2f | %.2f | %d | %d | %d | %d |\n",
+				actor.Name, state.Name, stats.TotalSamples,
+				stats.Mean, stats.StdDev,
+				stats.P50, stats.P90, stats.P99, stats.Max)
+			anyDwell = true
+		}
+	}
+	if !anyDwell {
+		b.WriteString("_No dwell observations recorded._\n")
+	}
+	b.WriteString("\n")
+
+	return b.String()
+}
+
 func plotDataForModel(spec *RequirementsModel, plot XYPlot) (docPlotData, error) {
-	rt, err := runModelForPlot(spec, plot.Steps)
+	rt, err := runModelForPlotUpTo(spec, spec.Steps)
 	if err != nil {
 		return docPlotData{}, err
 	}
@@ -5033,11 +5342,12 @@ func plotDataForModel(spec *RequirementsModel, plot XYPlot) (docPlotData, error)
 	if err != nil {
 		return docPlotData{}, err
 	}
+	series = padMetricSeries(series, spec.Steps)
 	return docPlotData{
 		Name:      plot.Name,
 		Title:     plot.Title,
-		Subtitle:  fmt.Sprintf("%d-step runtime trace.", rt.Step),
-		Steps:     rt.Step,
+		Subtitle:  plotSubtitle(spec.Steps, rt.Step),
+		Steps:     spec.Steps,
 		Metric:    plot.Metric,
 		YLabel:    ylabel,
 		Legend:    legend,
@@ -5084,7 +5394,7 @@ func renderPlotSVG(data docPlotData) string {
 		fmt.Fprintf(&b, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#2a3140" stroke-width="1"/>`, px, marginTop, px, marginTop+plotH)
 		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="middle" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">%d</text>`, px, marginTop+plotH+28, tick)
 	}
-	fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="middle" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">applied runtime step</text>`, marginLeft+plotW/2, height-20)
+	fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" text-anchor="middle" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">applied model step</text>`, marginLeft+plotW/2, height-20)
 	fmt.Fprintf(&b, `<text x="26" y="%.1f" transform="rotate(-90 26 %.1f)" text-anchor="middle" fill="#a9b7c8" font-family="Iosevka Web, IBM Plex Sans, Segoe UI, sans-serif" font-size="13">%s</text>`, marginTop+plotH/2, marginTop+plotH/2, html.EscapeString(data.YLabel))
 	fmt.Fprintf(&b, `<polyline fill="none" stroke="#8bc3ff" stroke-width="3" points="%s"/>`, svgPolyline(data.Series, marginLeft, marginTop, plotW, plotH, xmax, ymax))
 	for _, point := range data.Series {
@@ -5505,22 +5815,268 @@ func renderPlotMermaid(data docPlotData) string {
 	var b strings.Builder
 	b.WriteString("xychart-beta\n")
 	fmt.Fprintf(&b, "    title %q\n", data.Title)
-	fmt.Fprintf(&b, "    x-axis %q [%s]\n", "applied runtime step", strings.Join(steps, ", "))
+	fmt.Fprintf(&b, "    x-axis %q [%s]\n", "applied model step", strings.Join(steps, ", "))
 	fmt.Fprintf(&b, "    y-axis %q %s --> %s\n", data.YLabel, formatPlotMermaidNumber(minValue), formatPlotMermaidNumber(maxValue))
 	fmt.Fprintf(&b, "    line [%s]\n", strings.Join(values, ", "))
 	return b.String()
 }
 
+// renderMDPStats renders an MDP-style transition frequency table from
+// simulation events: for each (actor, fromState, transition) it shows
+// the raw fire count and the fraction of all firings from that state.
+func renderMDPStats(spec *RequirementsModel, rt *Runtime) string {
+	type transKey struct{ actor, state, transition string }
+	firings := map[transKey]int{}
+	stateTotal := map[string]int{} // actor+":"+state → total fires from that state
+	for _, ev := range rt.Events {
+		if ev.Kind != EventTransition {
+			continue
+		}
+		k := transKey{ev.ActorName, ev.StateName, ev.TransitionName}
+		firings[k]++
+		stateTotal[ev.ActorName+":"+ev.StateName]++
+	}
+	if len(firings) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("### MDP Transition Frequencies\n\n")
+	b.WriteString("Empirical firing counts from the simulation run. " +
+		"Probability is the fraction of firings *from that state*.\n\n")
+	b.WriteString("| Actor | From State | Transition | Fires | P(fire\\|state) |\n")
+	b.WriteString("| --- | --- | --- | --- | --- |\n")
+
+	for _, actor := range spec.Actors {
+		for _, state := range actor.States {
+			total := stateTotal[actor.Name+":"+state.Name]
+			for _, tr := range state.Transitions {
+				k := transKey{actor.Name, state.Name, tr.Name}
+				count := firings[k]
+				if count == 0 {
+					continue
+				}
+				pct := 0.0
+				if total > 0 {
+					pct = 100.0 * float64(count) / float64(total)
+				}
+				fmt.Fprintf(&b, "| %s | %s | %s | %d | %.1f%% |\n",
+					actor.Name, state.Name, tr.Name, count, pct)
+			}
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// renderStateDiagramAnnotated produces a Mermaid flowchart where each state
+// node is annotated with "name\nXX%" (occupancy from simulation) and each edge
+// is annotated with its empirical firing probability.
+func renderStateDiagramAnnotated(spec *RequirementsModel, rt *Runtime) string {
+	// build occupancy fractions
+	totalByActor := map[string]int{}
+	stepsInState := map[string]int{} // actor+":"+state → total dwell steps
+	for key, hist := range rt.StateDwellHistogram {
+		s := 0
+		for k, c := range hist {
+			s += k * c
+		}
+		stepsInState[key] = s
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) == 2 {
+			totalByActor[parts[0]] += s
+		}
+	}
+
+	// build transition fire counts
+	type transKey struct{ actor, state, transition string }
+	firings := map[transKey]int{}
+	stateTotal := map[string]int{}
+	for _, ev := range rt.Events {
+		if ev.Kind != EventTransition {
+			continue
+		}
+		k := transKey{ev.ActorName, ev.StateName, ev.TransitionName}
+		firings[k]++
+		stateTotal[ev.ActorName+":"+ev.StateName]++
+	}
+
+	var b strings.Builder
+	b.WriteString("flowchart TD\n")
+	for _, actor := range spec.Actors {
+		fmt.Fprintf(&b, "    subgraph %s\n", actor.Name)
+		b.WriteString("        direction TB\n")
+		actorTotal := totalByActor[actor.Name]
+		for _, state := range actor.States {
+			nodeID := diagramID(actor.Name, state.Name)
+			label := state.Name
+			if actorTotal > 0 {
+				s := stepsInState[actor.Name+":"+state.Name]
+				pct := 100.0 * float64(s) / float64(actorTotal)
+				label = fmt.Sprintf("%s\\n%.0f%%", state.Name, pct)
+			}
+			for _, transition := range state.Transitions {
+				for _, next := range transition.NextStates {
+					nextNodeID := diagramID(actor.Name, next)
+					nextLabel := next
+					if actorTotal > 0 {
+						s := stepsInState[actor.Name+":"+next]
+						pct := 100.0 * float64(s) / float64(actorTotal)
+						nextLabel = fmt.Sprintf("%s\\n%.0f%%", next, pct)
+					}
+					edgeLabel := mermaidLabel(transitionLabel(transition))
+					k := transKey{actor.Name, state.Name, transition.Name}
+					count := firings[k]
+					stTotal := stateTotal[actor.Name+":"+state.Name]
+					if stTotal > 0 {
+						pct := 100.0 * float64(count) / float64(stTotal)
+						edgeLabel += fmt.Sprintf("<br/>%.0f%%", pct)
+					}
+					fmt.Fprintf(&b, "        %s([\"%s\"]) -->|\"%s\"| %s([\"%s\"])\n",
+						nodeID, label, edgeLabel, nextNodeID, nextLabel)
+				}
+			}
+		}
+		b.WriteString("    end\n")
+	}
+	return b.String()
+}
+
+// derivedCTLFact holds one auto-checked CTL result over the explored model.
+type derivedCTLFact struct {
+	Formula string
+	Holds   bool
+	Natural string
+}
+
+// renderDerivedCTL explores the full state space and checks a set of
+// automatically derived public-behavior CTL formulas (tractable: atoms only
+// over in-state and mailbox-has). Returns a Markdown section string.
+func renderDerivedCTL(spec *RequirementsModel) (string, error) {
+	model, err := ExploreModel(spec.Runtime())
+	if err != nil {
+		return "", err
+	}
+	stateCount := len(model.States)
+	if stateCount == 0 {
+		return "", nil
+	}
+
+	var facts []derivedCTLFact
+	check := func(formula CTLFormula, lisp, natural string) {
+		holds := model.HoldsAtInitial(formula)
+		facts = append(facts, derivedCTLFact{Formula: lisp, Holds: holds, Natural: natural})
+	}
+
+	for _, actor := range spec.Actors {
+		for _, state := range actor.States {
+			atom := Atom(ActorInState(actor.Name, state.Name))
+			name := actor.Name
+			sname := state.Name
+
+			check(EF(atom),
+				fmt.Sprintf("(possibly (in-state %s %s))", name, sname),
+				fmt.Sprintf("%s can reach state %s", name, sname))
+			check(AF(atom),
+				fmt.Sprintf("(eventually (in-state %s %s))", name, sname),
+				fmt.Sprintf("%s always eventually reaches state %s", name, sname))
+			check(AG(atom),
+				fmt.Sprintf("(always (in-state %s %s))", name, sname),
+				fmt.Sprintf("%s is always in state %s (invariant)", name, sname))
+			check(EG(atom),
+				fmt.Sprintf("(can-keep (in-state %s %s))", name, sname),
+				fmt.Sprintf("%s can stay in state %s forever", name, sname))
+		}
+	}
+
+	// Liveness: for pairs of states, check that being in one doesn't block the other
+	for _, actor := range spec.Actors {
+		for i, stA := range actor.States {
+			for _, stB := range actor.States[i+1:] {
+				atomA := Atom(ActorInState(actor.Name, stA.Name))
+				atomB := Atom(ActorInState(actor.Name, stB.Name))
+				// if in A, can we eventually reach B?
+				check(AG(Implies(atomA, AF(atomB))),
+					fmt.Sprintf("(always (implies (in-state %s %s) (eventually (in-state %s %s))))",
+						actor.Name, stA.Name, actor.Name, stB.Name),
+					fmt.Sprintf("whenever %s is in %s it will eventually reach %s",
+						actor.Name, stA.Name, stB.Name))
+			}
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("### Derived CTL Facts\n\n")
+	fmt.Fprintf(&b, "Auto-checked over %d explored states. "+
+		"Only public atoms (`in-state`, `mailbox-has`) are used.\n\n", stateCount)
+	b.WriteString("| Result | Formula | Meaning |\n")
+	b.WriteString("| --- | --- | --- |\n")
+	for _, f := range facts {
+		mark := "✗ FAIL"
+		if f.Holds {
+			mark = "✓ PASS"
+		}
+		fmt.Fprintf(&b, "| %s | `%s` | %s |\n", mark, f.Formula, f.Natural)
+	}
+	b.WriteString("\n")
+	return b.String(), nil
+}
+
+// renderBackpressureStats runs the model simulation and renders two Markdown
+// tables: queue-depth histograms (backpressure) and state dwell-time stats.
+// Returns an empty string when there are no steps configured.
+func renderBackpressureStats(spec *RequirementsModel) (string, error) {
+	if spec.Steps <= 0 {
+		return "", nil
+	}
+	rt, err := runModelForPlotUpTo(spec, spec.Steps)
+	if err != nil {
+		return "", err
+	}
+	return renderBackpressureStatsFromRT(spec, rt), nil
+}
+
 func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
+	// Run simulation once (if steps configured) and share the runtime.
+	var simRT *Runtime
+	if spec.Steps > 0 {
+		rt, err := runModelForPlotUpTo(spec, spec.Steps)
+		if err != nil {
+			return "", err
+		}
+		simRT = rt
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Requirements Model\n\n```lisp\n%s\n```\n\n", spec.Lisp().String())
-	b.WriteString("## State Diagram\n\n```mermaid\n")
-	b.WriteString(renderStateDiagramMermaid(spec))
-	b.WriteString("```\n\n## Message Diagram\n\n```mermaid\n")
+
+	// Annotated state diagram (with occupancy %) when simulation data is available
+	if simRT != nil {
+		b.WriteString("## State Diagram (annotated)\n\n```mermaid\n")
+		b.WriteString(renderStateDiagramAnnotated(spec, simRT))
+		b.WriteString("```\n\n")
+	} else {
+		b.WriteString("## State Diagram\n\n```mermaid\n")
+		b.WriteString(renderStateDiagramMermaid(spec))
+		b.WriteString("```\n\n")
+	}
+
+	b.WriteString("## Message Diagram\n\n```mermaid\n")
 	b.WriteString(renderSequenceDiagramMermaid(spec))
 	b.WriteString("```\n\n## Class Diagram\n\n```mermaid\n")
 	b.WriteString(renderClassDiagramMermaid(spec))
 	b.WriteString("```\n\n")
+
+	// Derived CTL facts from full state-space exploration
+	ctlSection, err := renderDerivedCTL(spec)
+	if err != nil {
+		return "", err
+	}
+	if ctlSection != "" {
+		b.WriteString("## Derived CTL Facts\n\n")
+		b.WriteString(ctlSection)
+	}
+
 	if len(spec.Assertions) > 0 {
 		results, err := spec.CheckAssertions()
 		if err != nil {
@@ -5538,37 +6094,79 @@ func renderRequirementsMarkdown(spec *RequirementsModel) (string, error) {
 			b.WriteString("\n")
 		}
 	}
+
+	if simRT != nil {
+		mdpSection := renderMDPStats(spec, simRT)
+		if mdpSection != "" {
+			b.WriteString("## MDP Behavior\n\n")
+			b.WriteString(mdpSection)
+		}
+	}
+
 	if len(spec.Plots) > 0 {
 		b.WriteString("## Line Graphs\n\n")
 		for _, plot := range spec.Plots {
-			data, err := plotDataForModel(spec, plot)
+			data, err := plotDataForModelWithRT(spec, plot, simRT)
 			if err != nil {
 				return "", err
 			}
 			fmt.Fprintf(&b, "### %s\n\n```lisp\n%s\n```\n\n```mermaid\n%s```\n\n", plot.Title, plot.Lisp().String(), renderPlotMermaid(data))
 		}
 	}
-	channelPlots, err := mailboxPlotDataForModel(spec)
-	if err != nil {
-		return "", err
-	}
-	if len(channelPlots) > 0 {
-		b.WriteString("## Channel Sizes\n\n")
-		for _, data := range channelPlots {
-			fmt.Fprintf(&b, "### %s\n\n```mermaid\n%s```\n\n", data.Title, renderPlotMermaid(data))
+
+	if simRT != nil {
+		channelPlots, err := mailboxPlotDataFromRT(spec, simRT)
+		if err != nil {
+			return "", err
 		}
+		if len(channelPlots) > 0 {
+			b.WriteString("## Channel Sizes\n\n")
+			for _, data := range channelPlots {
+				fmt.Fprintf(&b, "### %s\n\n```mermaid\n%s```\n\n", data.Title, renderPlotMermaid(data))
+			}
+		}
+
+		b.WriteString("## Backpressure Statistics\n\n")
+		statsMarkdown := renderBackpressureStatsFromRT(spec, simRT)
+		b.WriteString(statsMarkdown)
 	}
+
 	return b.String(), nil
 }
 
 func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
+	var simRT *Runtime
+	if spec.Steps > 0 {
+		rt, err := runModelForPlotUpTo(spec, spec.Steps)
+		if err != nil {
+			return "", err
+		}
+		simRT = rt
+	}
+
 	var b strings.Builder
 	b.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"><title>Requirements Model</title></head><body>")
 	b.WriteString("<h1>Requirements Model</h1>")
 	fmt.Fprintf(&b, "<pre><code>%s</code></pre>", html.EscapeString(spec.Lisp().String()))
-	fmt.Fprintf(&b, "<h2>State Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderStateDiagramMermaid(spec)))
+
+	if simRT != nil {
+		fmt.Fprintf(&b, "<h2>State Diagram (annotated)</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderStateDiagramAnnotated(spec, simRT)))
+	} else {
+		fmt.Fprintf(&b, "<h2>State Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderStateDiagramMermaid(spec)))
+	}
+
 	fmt.Fprintf(&b, "<h2>Message Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderSequenceDiagramMermaid(spec)))
 	fmt.Fprintf(&b, "<h2>Class Diagram</h2><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(renderClassDiagramMermaid(spec)))
+
+	ctlSection, err := renderDerivedCTL(spec)
+	if err != nil {
+		return "", err
+	}
+	if ctlSection != "" {
+		b.WriteString("<h2>Derived CTL Facts</h2>")
+		fmt.Fprintf(&b, "<pre><code>%s</code></pre>", html.EscapeString(ctlSection))
+	}
+
 	if len(spec.Assertions) > 0 {
 		results, err := spec.CheckAssertions()
 		if err != nil {
@@ -5586,26 +6184,42 @@ func renderRequirementsHTML(spec *RequirementsModel) (string, error) {
 			b.WriteString("</ul>")
 		}
 	}
+
+	if simRT != nil {
+		mdpSection := renderMDPStats(spec, simRT)
+		if mdpSection != "" {
+			b.WriteString("<h2>MDP Behavior</h2>")
+			fmt.Fprintf(&b, "<pre><code>%s</code></pre>", html.EscapeString(mdpSection))
+		}
+	}
+
 	if len(spec.Plots) > 0 {
 		b.WriteString("<h2>Line Graphs</h2>")
 		for _, plot := range spec.Plots {
-			data, err := plotDataForModel(spec, plot)
+			data, err := plotDataForModelWithRT(spec, plot, simRT)
 			if err != nil {
 				return "", err
 			}
 			fmt.Fprintf(&b, "<h3>%s</h3><pre><code>%s</code></pre><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(plot.Title), html.EscapeString(plot.Lisp().String()), html.EscapeString(renderPlotMermaid(data)))
 		}
 	}
-	channelPlots, err := mailboxPlotDataForModel(spec)
-	if err != nil {
-		return "", err
-	}
-	if len(channelPlots) > 0 {
-		b.WriteString("<h2>Channel Sizes</h2>")
-		for _, data := range channelPlots {
-			fmt.Fprintf(&b, "<h3>%s</h3><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(data.Title), html.EscapeString(renderPlotMermaid(data)))
+
+	if simRT != nil {
+		channelPlots, err := mailboxPlotDataFromRT(spec, simRT)
+		if err != nil {
+			return "", err
 		}
+		if len(channelPlots) > 0 {
+			b.WriteString("<h2>Channel Sizes</h2>")
+			for _, data := range channelPlots {
+				fmt.Fprintf(&b, "<h3>%s</h3><pre><code class=\"language-mermaid\">%s</code></pre>", html.EscapeString(data.Title), html.EscapeString(renderPlotMermaid(data)))
+			}
+		}
+		b.WriteString("<h2>Backpressure Statistics</h2>")
+		statsMarkdown := renderBackpressureStatsFromRT(spec, simRT)
+		fmt.Fprintf(&b, "<pre><code>%s</code></pre>", html.EscapeString(statsMarkdown))
 	}
+
 	b.WriteString("</body></html>")
 	return b.String(), nil
 }
@@ -5620,10 +6234,11 @@ func docPlotDataByName(name string, steps int) (docPlotData, error) {
 		return docPlotData{}, fmt.Errorf("unknown doc plot %q", name)
 	}
 	plot := binding.Plot
+	spec := binding.Model
 	if steps > 0 {
-		plot.Steps = steps
+		spec.Steps = steps
 	}
-	rt, err := binding.Runtime(plot.Steps)
+	rt, err := runModelForPlotUpTo(spec, spec.Steps)
 	if err != nil {
 		return docPlotData{}, err
 	}
@@ -5631,11 +6246,12 @@ func docPlotDataByName(name string, steps int) (docPlotData, error) {
 	if err != nil {
 		return docPlotData{}, err
 	}
+	series = padMetricSeries(series, spec.Steps)
 	data := docPlotData{
 		Name:      plot.Name,
 		Title:     plot.Title,
-		Subtitle:  fmt.Sprintf("%d-step %s", rt.Step, binding.Subtitle),
-		Steps:     rt.Step,
+		Subtitle:  fmt.Sprintf("%s %s", plotSubtitle(spec.Steps, rt.Step), binding.Subtitle),
+		Steps:     spec.Steps,
 		Metric:    plot.Metric,
 		YLabel:    ylabel,
 		Legend:    legend,

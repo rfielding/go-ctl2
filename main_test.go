@@ -557,9 +557,9 @@ func TestCompileModelCapturesXYPlot(t *testing.T) {
 					(edge true
 						(become loop))))
 			(instance A LoopingWorker (queue 1))
+			(steps 100)
 			(xyplot outstanding
 				(title "Outstanding Messages By Step")
-				(steps 100)
 				(metric sent-minus-received)))
 	`)
 
@@ -573,8 +573,8 @@ func TestCompileModelCapturesXYPlot(t *testing.T) {
 	if plot.Title != "Outstanding Messages By Step" {
 		t.Fatalf("unexpected plot title %q", plot.Title)
 	}
-	if plot.Steps != 100 {
-		t.Fatalf("unexpected plot steps %d", plot.Steps)
+	if spec.Steps != 100 {
+		t.Fatalf("unexpected model steps %d", spec.Steps)
 	}
 	if plot.Metric != "sent-minus-received" {
 		t.Fatalf("unexpected plot metric %q", plot.Metric)
@@ -597,9 +597,9 @@ func TestRenderRequirementsMarkdownFromModel(t *testing.T) {
 						(become sink))))
 			(instance A Sender (queue 1) (Receiver B))
 			(instance B Receiver (queue 1))
+			(steps 1)
 			(xyplot sent
 				(title "Send Rate")
-				(steps 1)
 				(metric send-rate)))
 	`)
 
